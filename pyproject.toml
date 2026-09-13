@@ -23,3 +23,4 @@ where = ["src"]
 # safety mirror so a bare 'pytest' run cannot hit the %TEMP% pytest-of-codexlab
 # ACL block. Keep in sync with pytest.ini addopts.
 addopts = "--basetemp=.pytest-tmp -p no:cacheprovider"
+pythonpath = "src"
