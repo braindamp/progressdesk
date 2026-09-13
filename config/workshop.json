@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "identity": {
+    "name": "progressDesk workshop",
+    "targetRepo": "D:\\Coding\\progressDesk",
+    "builderRepo": "D:\\Coding\\progressDesk4-build\\builder",
+    "gospel": {
+      "tesp": "TESP v1.1",
+      "fusp": "FUSP v1.1",
+      "visp": "VISP v1.0",
+      "folder": "D:\\Coding\\progressDesk4-build\\ProgressDesk project definition"
+    }
+  },
+  "paths": {
+    "config": "config",
+    "events": "events",
+    "artifacts": "artifacts",
+    "projects": "projects",
+    "tools": "tools",
+    "skills": "skills",
+    "domainPacks": "domain-packs"
+  },
+  "placeholders": {
+    "note": "P0 placeholder only. The real workshop schema is defined by TESP v1.1 sections 4-5 and lands with MS1. Do not extend this shape without a checklist slice."
+  }
+}

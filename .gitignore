@@ -1,0 +1,8 @@
+# python
+__pycache__/
+*.py[cod]
+.pytest-tmp/
+
+# uv
+.venv/
+# uv.lock IS committed (pinned reproducibility per TESP 1.1)
