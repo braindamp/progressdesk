@@ -86,6 +86,34 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": False,
         "project_scoped": False,
     },
+    # Planning family (§4.5 "Planning item created/edited/related/formalized;
+    # attachment added") — registered with their implementing slice MS1.2.
+    # Any participant may contribute (§5.2): producers {desk, planning}.
+    "planning.item.created": {
+        "producers": frozenset({"desk", "planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "planning.item.edited": {
+        "producers": frozenset({"desk", "planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "planning.item.related": {
+        "producers": frozenset({"desk", "planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "planning.attachment.added": {
+        "producers": frozenset({"desk", "planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "planning.item.formalized": {
+        "producers": frozenset({"desk", "planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
 }
 
 
