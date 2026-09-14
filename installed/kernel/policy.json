@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "roles": {
+    "owner": [
+      "definition.signoff",
+      "project.create",
+      "project.start"
+    ],
+    "worker": [
+      "task.execute"
+    ],
+    "qa": [
+      "task.execute"
+    ]
+  },
+  "signoffRequired": {
+    "VISP": true,
+    "FUSP": true
+  },
+  "taskPermissions": {
+    "VISP": {
+      "paths": [
+        "projects/*"
+      ],
+      "tools": []
+    },
+    "FUSP": {
+      "paths": [
+        "projects/*",
+        "tools/*"
+      ],
+      "tools": []
+    },
+    "Requirements": {
+      "paths": [
+        "projects/*"
+      ],
+      "tools": []
+    },
+    "TESP": {
+      "paths": [],
+      "tools": []
+    },
+    "Milestone": {
+      "paths": [],
+      "tools": []
+    }
+  },
+  "integrity": {
+    "algorithm": "sha256",
+    "payloadSha256": "ae5b4647219a0d13ed0e4b7d60f1a03fd05793d3c6472f21e3d2d9d789dcc04b"
+  }
+}

@@ -114,6 +114,16 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": False,
     },
+    # Dispatch family (§4.5 "Dispatch rejected") — registered with its
+    # implementing slice MS1.3. The kernel is a control-host component (§1.2),
+    # like "desk": the producer string is a typing check only; real authority
+    # derives from who holds the EventLog. Workshop-level at MS1 (projectId
+    # optional — project identity attaches when projects exist, MS1.4).
+    "dispatch.rejected": {
+        "producers": frozenset({"kernel"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
 }
 
 
