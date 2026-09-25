@@ -185,6 +185,11 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    "recovery.packet-created": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
     "checkpoint.created": {
         "producers": frozenset({"manager"}),
         "payload_required": True,

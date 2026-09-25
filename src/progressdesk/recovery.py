@@ -90,6 +90,7 @@ class StartRecoveryService:
         workspace_rebuilder: WorkspaceRebuilder | None = None,
         run_factory: RunFactory | None = None,
         reconciler: Any | None = None,
+        packet_builder: Any | None = None,
         use_default_termination_authority: bool = True,
         max_attempts: int = 3,
         retry_delay_seconds: float = 0.0,
@@ -115,6 +116,7 @@ class StartRecoveryService:
         self.workspace_rebuilder = workspace_rebuilder
         self.run_factory = run_factory
         self.reconciler = reconciler
+        self.packet_builder = packet_builder
         self.max_attempts = max_attempts
         self.retry_delay_seconds = retry_delay_seconds
         self.sleep = sleep
@@ -308,6 +310,10 @@ class StartRecoveryService:
                         reconciliation_report = self.reconciler.reconcile(project_id)
                         if reconciliation_report.status == "unresolved":
                             raise RecoveryError("stale execution reconciliation is unresolved")
+                    packet_event = None
+                    if self.packet_builder is not None:
+                        packet = self.packet_builder.build(project_id)
+                        packet_event = self.packet_builder.record(packet)
                     recovery_result = self._rebuild_workspace(project_id, new_run_id)
                     if self.run_factory is not None:
                         self.run_factory(project_id, new_run_id)
@@ -330,6 +336,9 @@ class StartRecoveryService:
                             if reconciliation_report is not None else []
                         ),
                         "recoveryResult": recovery_result,
+                        "recoveryPacketRef": (
+                            packet_event.payloadRef if packet_event is not None else None
+                        ),
                     }
                     event = self.log.record(
                         "project.recovered",
