@@ -220,6 +220,16 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": False,
     },
+    "domain-task.created": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "domain-task.evaluated": {
+        "producers": frozenset({"qa", "manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
     "fix.superseded": {
         "producers": frozenset({"sharpener"}),
         "payload_required": True,
