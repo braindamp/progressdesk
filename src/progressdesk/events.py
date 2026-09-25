@@ -200,6 +200,21 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": False,
     },
+    "lab.need-determined": {
+        "producers": frozenset({"planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "lab.requested": {
+        "producers": frozenset({"planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "lab.result-attached": {
+        "producers": frozenset({"lab", "manager"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
     "fix.superseded": {
         "producers": frozenset({"sharpener"}),
         "payload_required": True,
