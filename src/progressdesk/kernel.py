@@ -490,22 +490,37 @@ class Kernel:
         }
         try:
             chain = self._ancestors(task)
-        except Exception as exc:  # DefinitionError (ValueError) — broken chain
+            unsigned: list[str] = []
+            stale: list[str] = []
+            for definition in chain:
+                if definition.kind not in required:
+                    continue
+                latest = self.definitions.latest(definition.id)
+                identity = f"{definition.kind}@{definition.id}:{definition.revision}"
+                if latest.revision != definition.revision:
+                    stale.append(
+                        f"{identity} (current revision {latest.revision}; historical "
+                        "signoff no longer authorizes dispatch)"
+                    )
+                elif not self.definitions.is_signed_off(definition):
+                    unsigned.append(identity)
+        except Exception as exc:  # DefinitionError (ValueError) — broken chain/history
             return CheckResult(
                 "signoff.required", False,
                 reason=f"parentRefs chain unresolvable ({exc}) — no signoff state derivable",
             )
-        unsigned = [
-            f"{d.kind}@{d.id}:{d.revision}"
-            for d in chain
-            if d.kind in required and not self.definitions.is_signed_off(d)
-        ]
-        if unsigned:
+        if stale or unsigned:
+            details: list[str] = []
+            if stale:
+                details.append(f"stale required revisions: {stale}")
+            if unsigned:
+                details.append(f"unsigned required revisions: {unsigned}")
             return CheckResult(
                 "signoff.required", False,
                 reason=(
-                    "required signoffs do not match exact revisions: unsigned "
-                    f"{unsigned} (§6.2; signoff binds the displayed exact version, §16.1)"
+                    "required signoffs do not match exact current revisions: "
+                    f"{'; '.join(details)} (§6.2/§6.4; a successor normative "
+                    "revision invalidates dependent dispatch)"
                 ),
             )
         return CheckResult("signoff.required", True)

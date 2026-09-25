@@ -538,21 +538,6 @@ class _PlanValidator:
         visit(root)
         return completed
 
-    def reaches(self, definition: Definition, target_ref: str) -> bool:
-        frontier = [definition]
-        seen: set[str] = set()
-        while frontier:
-            current = frontier.pop()
-            ref = f"{current.id}@{current.revision}"
-            if ref == target_ref:
-                return True
-            if ref in seen:
-                continue
-            seen.add(ref)
-            for parent_ref in current.parentRefs:
-                frontier.append(self.resolve_current(parent_ref, f"parent of {ref}"))
-        return False
-
 
 class ProjectService:
     """Deterministic owner-facing project formation and first-start GO."""
@@ -960,10 +945,10 @@ class ProjectService:
             for index, ref in enumerate(task_refs)
         )
         for milestone in milestones:
-            if milestone.kind != "Milestone" or not validator.reaches(milestone, draft_ref):
+            if milestone.kind != "Milestone":
                 raise ProjectError(
                     "definition_chain_invalid",
-                    f"milestone {milestone.id}@{milestone.revision} is not a current descendant of the draft",
+                    f"milestone {milestone.id}@{milestone.revision} does not have kind Milestone",
                 )
 
         milestone_set = set(milestone_refs)
