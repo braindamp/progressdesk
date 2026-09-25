@@ -89,6 +89,7 @@ class StartRecoveryService:
         accepted_artifact_provider: Callable[[str], tuple[str, ...] | list[str]] | None = None,
         workspace_rebuilder: WorkspaceRebuilder | None = None,
         run_factory: RunFactory | None = None,
+        reconciler: Any | None = None,
         use_default_termination_authority: bool = True,
         max_attempts: int = 3,
         retry_delay_seconds: float = 0.0,
@@ -113,6 +114,7 @@ class StartRecoveryService:
         self.accepted_artifact_provider = accepted_artifact_provider
         self.workspace_rebuilder = workspace_rebuilder
         self.run_factory = run_factory
+        self.reconciler = reconciler
         self.max_attempts = max_attempts
         self.retry_delay_seconds = retry_delay_seconds
         self.sleep = sleep
@@ -301,6 +303,11 @@ class StartRecoveryService:
                 new_run_id = str(uuid.uuid4())
                 try:
                     terminated = self._terminate_stale(project_id)
+                    reconciliation_report = None
+                    if self.reconciler is not None:
+                        reconciliation_report = self.reconciler.reconcile(project_id)
+                        if reconciliation_report.status == "unresolved":
+                            raise RecoveryError("stale execution reconciliation is unresolved")
                     recovery_result = self._rebuild_workspace(project_id, new_run_id)
                     if self.run_factory is not None:
                         self.run_factory(project_id, new_run_id)
@@ -315,6 +322,13 @@ class StartRecoveryService:
                         "attempts": attempt,
                         "terminatedRunIds": [run.identity.runId for run in terminated],
                         "evidenceRefs": list(evidence_refs),
+                        "reconciliationStatus": (
+                            reconciliation_report.status if reconciliation_report is not None else "not_requested"
+                        ),
+                        "blockedActionIds": (
+                            list(reconciliation_report.blocked_actions)
+                            if reconciliation_report is not None else []
+                        ),
                         "recoveryResult": recovery_result,
                     }
                     event = self.log.record(

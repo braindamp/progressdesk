@@ -165,6 +165,26 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    "action.pending": {
+        "producers": frozenset({"broker", "manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "action.reconciled": {
+        "producers": frozenset({"manager", "police"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "reconciliation.completed": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "reconciliation.unresolved": {
+        "producers": frozenset({"manager", "police"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
     "checkpoint.created": {
         "producers": frozenset({"manager"}),
         "payload_required": True,
