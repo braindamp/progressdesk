@@ -18,7 +18,8 @@ writer across processes is a deployment invariant, not this module's job.
 Unknown schema versions stop affected handling (§4.2) — `UnknownSchemaVersionError`
 is raised, never coerced. Unknown event types are rejected. A malformed existing
 log is corruption: EventLog() init re-reads fail-closed; corruption never becomes
-an empty/"ready" default (§4.4 spirit, recovery mechanics land in MS2).
+an empty/"ready" default. Replay deduplicates identical event IDs, rejects
+conflicting IDs, and orders by sequence rather than timestamp (§4.4).
 
 Registry: event families are registered only with their delivered use (§4.5):
 definition, planning, project formation/first-start GO, and dispatch rejection.
@@ -31,9 +32,10 @@ import json
 import os
 import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from progressdesk.artifacts import ArtifactStore
 from progressdesk.state import utc_now
@@ -234,6 +236,55 @@ def event_from_dict(data: Any) -> Event:
     return event
 
 
+_PROCESS_LOCKS: dict[str, threading.Lock] = {}
+_PROCESS_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def _event_process_lock(path: Path) -> Iterator[None]:
+    """Serialize all EventLog instances in this process for one event file."""
+    key = os.path.normcase(os.path.abspath(os.fspath(path)))
+    with _PROCESS_LOCKS_GUARD:
+        lock = _PROCESS_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        yield
+
+
+@contextmanager
+def _event_file_lock(path: Path) -> Iterator[None]:
+    """Serialize writers across processes without putting a lock in the event log."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = Path(str(path) + ".lock")
+    handle = open(lock_path, "a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            if lock_path.stat().st_size == 0:
+                handle.write(b"\\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 class EventLog:
     """Append-only events.jsonl surface. One control-host writer per event file.
 
@@ -245,16 +296,20 @@ class EventLog:
     def __init__(self, events_path: Path, artifacts: ArtifactStore) -> None:
         self.events_path = Path(events_path)
         self.artifacts = artifacts
-        self._lock = threading.Lock()
         self._last_sequence = 0
         if self.events_path.exists():
             self._scan_existing()
 
-    def _scan_existing(self) -> None:
-        """Fail-closed read of the existing log: every line must parse and
-        validate. Malformed interior records are corruption — raise, never
-        silently present an empty/ready log (§4.4)."""
-        seen_ids: set[str] = set()
+    def _load_events(self) -> list[Event]:
+        """Load, validate, deduplicate, and order events by sequence.
+
+        Identical event IDs are idempotent. The same ID with different content is
+        corruption. Replay order is the integer sequence, never timestamp order.
+        """
+        if not self.events_path.exists():
+            return []
+        by_id: dict[str, Event] = {}
+        first_line: dict[str, int] = {}
         with open(self.events_path, "r", encoding="utf-8-sig") as handle:
             for line_no, line in enumerate(handle, start=1):
                 if not line.strip():
@@ -266,24 +321,43 @@ class EventLog:
                         f"events.jsonl line {line_no}: unparseable JSON (corruption, not a ready default): {exc}"
                     ) from exc
                 event = event_from_dict(data)
-                if event.id in seen_ids:
-                    raise EventError(
-                        f"events.jsonl line {line_no}: duplicate event id {event.id!r} (corruption)"
-                    )
-                seen_ids.add(event.id)
-                if event.sequence != self._last_sequence + 1:
-                    raise EventError(
-                        f"events.jsonl line {line_no}: sequence {event.sequence} breaks continuity "
-                        f"(expected {self._last_sequence + 1})"
-                    )
-                self._last_sequence = event.sequence
+                previous = by_id.get(event.id)
+                if previous is not None:
+                    if previous != event:
+                        raise EventError(
+                            f"events.jsonl line {line_no}: conflicting duplicate event id "
+                            f"{event.id!r} (first seen line {first_line[event.id]})"
+                        )
+                    continue
+                by_id[event.id] = event
+                first_line[event.id] = line_no
+
+        ordered = sorted(by_id.values(), key=lambda event: event.sequence)
+        expected = 1
+        for event in ordered:
+            if event.sequence != expected:
+                raise EventError(
+                    f"events.jsonl event {event.id!r}: sequence {event.sequence} breaks continuity "
+                    f"(expected {expected})"
+                )
+            expected += 1
+        return ordered
+
+    def _scan_existing(self) -> None:
+        """Fail-closed initialization from the authoritative event history."""
+        events = self._load_events()
+        self._last_sequence = events[-1].sequence if events else 0
 
     def read_all(self) -> list[Event]:
-        """Replay-supporting read: all events, fail-closed (same checks as init)."""
+        """Pure replay read: validated, deduplicated, sequence-ordered events."""
         if not self.events_path.exists():
             return []
-        with open(self.events_path, "r", encoding="utf-8-sig") as handle:
-            return [event_from_dict(json.loads(line)) for line in handle if line.strip()]
+        with _event_process_lock(self.events_path):
+            return self._load_events()
+
+    def replay(self) -> list[Event]:
+        """Return the pure event replay; performs no model/tool/external effect."""
+        return self.read_all()
 
     def record(
         self,
@@ -309,7 +383,8 @@ class EventLog:
             raise EventError(f"Event.type {type!r} requires a payload (payloadRef)")
         # payload_required=False means OPTIONAL, never forbidden: signoff/approval
         # events carry the signed revision identity in their payload artifact.
-        with self._lock:
+        with _event_process_lock(self.events_path), _event_file_lock(self.events_path):
+            self._scan_existing()
             payload_ref: str | None = None
             if payload is not None:
                 digest = self.artifacts.put(payload)
