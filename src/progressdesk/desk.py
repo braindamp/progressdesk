@@ -74,7 +74,7 @@ from progressdesk.events import Event, EventLog
 from progressdesk.state import load_state, write_state
 
 PROJECT_PLAN_SCHEMA_VERSION = 1
-PROJECT_VIEW_SCHEMA_VERSION = 1
+PROJECT_VIEW_SCHEMA_VERSION = "1"
 PROJECT_VIEW_RELATIVE = Path("views/project.json")
 PROJECT_MANIFEST_RELATIVE = Path("project.json")
 
