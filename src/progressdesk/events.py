@@ -198,7 +198,22 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
     "fix.superseded": {
         "producers": frozenset({"sharpener"}),
         "payload_required": True,
-        "project_scoped": False,
+        "project_scoped": True,
+    },
+    "fix.applied": {
+        "producers": frozenset({"sharpener"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "fix.failed": {
+        "producers": frozenset({"sharpener"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "fix.skipped": {
+        "producers": frozenset({"sharpener"}),
+        "payload_required": True,
+        "project_scoped": True,
     },
     "checkpoint.created": {
         "producers": frozenset({"manager"}),
