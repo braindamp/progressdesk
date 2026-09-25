@@ -149,6 +149,12 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": False,
     },
+    # Recovery family (§4.4): only created by exclusive tail recovery.
+    "recovery.completed": {
+        "producers": frozenset({"recovery", "manager", "system"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
 }
 
 
@@ -300,53 +306,144 @@ class EventLog:
         if self.events_path.exists():
             self._scan_existing()
 
-    def _load_events(self) -> list[Event]:
-        """Load, validate, deduplicate, and order events by sequence.
-
-        Identical event IDs are idempotent. The same ID with different content is
-        corruption. Replay order is the integer sequence, never timestamp order.
-        """
-        if not self.events_path.exists():
-            return []
+    def _parse_events(self, raw: bytes, source: str) -> list[Event]:
+        """Parse, validate, deduplicate, and order raw event-log bytes."""
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise EventError(f"{source}: event log is not UTF-8 (corruption): {exc}") from exc
         by_id: dict[str, Event] = {}
         first_line: dict[str, int] = {}
-        with open(self.events_path, "r", encoding="utf-8-sig") as handle:
-            for line_no, line in enumerate(handle, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError as exc:
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise EventError(
+                    f"{source} line {line_no}: unparseable JSON (corruption, not a ready default): {exc}"
+                ) from exc
+            event = event_from_dict(data)
+            previous = by_id.get(event.id)
+            if previous is not None:
+                if previous != event:
                     raise EventError(
-                        f"events.jsonl line {line_no}: unparseable JSON (corruption, not a ready default): {exc}"
-                    ) from exc
-                event = event_from_dict(data)
-                previous = by_id.get(event.id)
-                if previous is not None:
-                    if previous != event:
-                        raise EventError(
-                            f"events.jsonl line {line_no}: conflicting duplicate event id "
-                            f"{event.id!r} (first seen line {first_line[event.id]})"
-                        )
-                    continue
-                by_id[event.id] = event
-                first_line[event.id] = line_no
+                        f"{source} line {line_no}: conflicting duplicate event id "
+                        f"{event.id!r} (first seen line {first_line[event.id]})"
+                    )
+                continue
+            by_id[event.id] = event
+            first_line[event.id] = line_no
 
         ordered = sorted(by_id.values(), key=lambda event: event.sequence)
         expected = 1
         for event in ordered:
             if event.sequence != expected:
                 raise EventError(
-                    f"events.jsonl event {event.id!r}: sequence {event.sequence} breaks continuity "
+                    f"{source} event {event.id!r}: sequence {event.sequence} breaks continuity "
                     f"(expected {expected})"
                 )
             expected += 1
         return ordered
 
+    def _load_events(self) -> list[Event]:
+        """Load the current event history through the pure parser."""
+        if not self.events_path.exists():
+            return []
+        return self._parse_events(self.events_path.read_bytes(), str(self.events_path))
+
     def _scan_existing(self) -> None:
         """Fail-closed initialization from the authoritative event history."""
         events = self._load_events()
         self._last_sequence = events[-1].sequence if events else 0
+
+    def _append_event_locked(
+        self,
+        type: str,
+        *,
+        producer: str,
+        payload: bytes | None = None,
+        project_id: str | None = None,
+        run_id: str | None = None,
+        cause_id: str | None = None,
+    ) -> Event:
+        """Append one event while the caller holds process/file locks."""
+        if type not in _EVENT_REGISTRY:
+            raise EventError(f"Unknown event type {type!r} (registry: implemented use only, §4.5)")
+        rule = _EVENT_REGISTRY[type]
+        if rule["payload_required"] and payload is None:
+            raise EventError(f"Event.type {type!r} requires a payload (payloadRef)")
+        payload_ref: str | None = None
+        if payload is not None:
+            digest = self.artifacts.put(payload)
+            payload_ref = f"sha256:{digest}"
+        event = Event(
+            schemaVersion=SCHEMA_VERSION,
+            id=str(uuid.uuid4()),
+            sequence=self._last_sequence + 1,
+            type=type,
+            projectId=project_id,
+            runId=run_id,
+            producer=producer,
+            causeId=cause_id,
+            timestamp=utc_now(),
+            payloadRef=payload_ref,
+        )
+        event.validate()
+        self.events_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.events_path, "a", encoding="utf-8") as handle:
+            handle.write(event.to_json() + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        self._last_sequence = event.sequence
+        return event
+
+    def recover_incomplete_tail(self) -> dict[str, Any]:
+        """Recover only an incomplete final append, preserving its bytes.
+
+        Interior corruption is never repaired here. Recovery is serialized by
+        the same cross-process lock used for writes and appends a durable
+        ``recovery.completed`` event after the truncation.
+        """
+        with _event_process_lock(self.events_path), _event_file_lock(self.events_path):
+            if not self.events_path.exists():
+                return {"recovered": False, "removedBytes": 0, "events": 0}
+            raw = self.events_path.read_bytes()
+            cut = raw.rfind(b"\n") + 1
+            tail = raw[cut:]
+            if not tail:
+                self._scan_existing()
+                return {"recovered": False, "removedBytes": 0, "events": self._last_sequence}
+            complete_events = self._parse_events(raw[:cut], str(self.events_path))
+            removed_digest = self.artifacts.put(tail)
+            removed_ref = f"sha256:{removed_digest}"
+            with open(self.events_path, "r+b") as handle:
+                handle.truncate(cut)
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._last_sequence = complete_events[-1].sequence if complete_events else 0
+            recovery_payload = json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "removedBytes": len(tail),
+                    "removedArtifactRef": removed_ref,
+                    "lastCompleteSequence": self._last_sequence,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            recovery_event = self._append_event_locked(
+                "recovery.completed",
+                producer="recovery",
+                payload=recovery_payload,
+            )
+            return {
+                "recovered": True,
+                "removedBytes": len(tail),
+                "removedArtifactRef": removed_ref,
+                "eventId": recovery_event.id,
+                "events": self._last_sequence,
+            }
 
     def read_all(self) -> list[Event]:
         """Pure replay read: validated, deduplicated, sequence-ordered events."""
@@ -376,37 +473,13 @@ class EventLog:
         1-2), then the referencing event is appended and flushed+fsynced before
         this method returns (step 4).
         """
-        if type not in _EVENT_REGISTRY:
-            raise EventError(f"Unknown event type {type!r} (registry: implemented use only, §4.5)")
-        rule = _EVENT_REGISTRY[type]
-        if rule["payload_required"] and payload is None:
-            raise EventError(f"Event.type {type!r} requires a payload (payloadRef)")
-        # payload_required=False means OPTIONAL, never forbidden: signoff/approval
-        # events carry the signed revision identity in their payload artifact.
         with _event_process_lock(self.events_path), _event_file_lock(self.events_path):
             self._scan_existing()
-            payload_ref: str | None = None
-            if payload is not None:
-                digest = self.artifacts.put(payload)
-                payload_ref = f"sha256:{digest}"
-            event = Event(
-                schemaVersion=SCHEMA_VERSION,
-                id=str(uuid.uuid4()),
-                sequence=self._last_sequence + 1,
-                type=type,
-                projectId=project_id,
-                runId=run_id,
+            return self._append_event_locked(
+                type,
                 producer=producer,
-                causeId=cause_id,
-                timestamp=utc_now(),
-                payloadRef=payload_ref,
+                payload=payload,
+                project_id=project_id,
+                run_id=run_id,
+                cause_id=cause_id,
             )
-            event.validate()
-            self.events_path.parent.mkdir(parents=True, exist_ok=True)
-            line = event.to_json()
-            with open(self.events_path, "a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            self._last_sequence = event.sequence
-            return event
