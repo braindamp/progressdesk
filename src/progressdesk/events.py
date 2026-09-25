@@ -250,6 +250,21 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    "tool.registered": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "tool.verification-recorded": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "tool.activated": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
 }
 
 
