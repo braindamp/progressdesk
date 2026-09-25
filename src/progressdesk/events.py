@@ -230,6 +230,31 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    "milestone.integration-started": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.integration-completed": {
+        "producers": frozenset({"manager", "qa"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.signoff-pending": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.accepted": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.correction-requested": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
     "fix.superseded": {
         "producers": frozenset({"sharpener"}),
         "payload_required": True,
