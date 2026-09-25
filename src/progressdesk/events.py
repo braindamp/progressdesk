@@ -160,6 +160,26 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    "action.requested": {
+        "producers": frozenset({"broker"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "action.completed": {
+        "producers": frozenset({"broker"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "action.failed": {
+        "producers": frozenset({"broker"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "process.registered": {
+        "producers": frozenset({"broker"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
 }
 
 
