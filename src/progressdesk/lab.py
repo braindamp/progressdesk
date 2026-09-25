@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
 from progressdesk.artifacts import ArtifactStore
 from progressdesk.events import Event, EventLog
@@ -151,6 +151,18 @@ class LabRequest:
         }
 
 
+class LabReferralExtension(Protocol):
+    def attach_result(
+        self,
+        request: LabRequest,
+        *,
+        result_ref: str,
+        provenance: str,
+        notes: str = "",
+    ) -> Event:
+        """Attach a result while preserving the originating lab context."""
+
+
 class LabReferralService:
     """Record the planning decision and attach an external result without a connector."""
 
@@ -215,30 +227,71 @@ class LabReferralService:
         ):
             raise LabError("resultRef must be sha256:<64-hex>")
         _text(provenance, "provenance")
-        if not any(
-            event.type == "lab.requested"
-            and event.payloadRef is not None
-            and json.loads(self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1])).get("requestId")
-            == request.request_id
-            for event in self.log.replay()
-        ):
+        requested = False
+        for event in self.log.replay():
+            if event.type != "lab.requested" or event.payloadRef is None:
+                continue
+            payload = json.loads(
+                self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1]).decode("utf-8")
+            )
+            if payload.get("requestId") == request.request_id:
+                requested = True
+                break
+        if not requested:
             raise LabError("lab result request is not a recorded originating request")
         if not self.artifacts.exists(result_ref.split(":", 1)[1]):
             raise LabError("lab result artifact is not present")
+        payload = {
+            "schemaVersion": 1,
+            "requestId": request.request_id,
+            "determinationId": request.determination_id,
+            "definitionRevisionRef": request.definition_revision_ref,
+            "originContext": {
+                "sessionId": request.session_id,
+                "requestId": request.request_id,
+                "definitionRevisionRef": request.definition_revision_ref,
+            },
+            "resultRef": result_ref,
+            "provenance": provenance,
+            "notes": notes,
+        }
+        for event in self.log.replay():
+            if event.type == "lab.result-attached" and event.payloadRef is not None:
+                existing = json.loads(
+                    self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1]).decode("utf-8")
+                )
+                if existing.get("requestId") == request.request_id:
+                    if existing.get("resultRef") == result_ref:
+                        return event
+                    raise LabError("originating lab request already has a different result")
         return self.log.record(
             "lab.result-attached",
             producer="lab",
-            payload=json.dumps(
-                {
-                    "schemaVersion": 1,
-                    "requestId": request.request_id,
-                    "determinationId": request.determination_id,
-                    "definitionRevisionRef": request.definition_revision_ref,
-                    "resultRef": result_ref,
-                    "provenance": provenance,
-                    "notes": notes,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8"),
+            payload=json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+        )
+
+
+class SimulatedLabReferral:
+    """Test extension point: install a fake result artifact, never execute a lab."""
+
+    def __init__(self, service: LabReferralService, artifacts: ArtifactStore) -> None:
+        self.service = service
+        self.artifacts = artifacts
+
+    def attach(
+        self,
+        request: LabRequest,
+        *,
+        result: bytes,
+        provenance: str = "simulated-lab-fixture",
+        notes: str = "",
+    ) -> Event:
+        if not isinstance(result, bytes):
+            raise LabError("simulated lab result must be bytes")
+        digest = self.artifacts.put(result)
+        return self.service.attach_result(
+            request,
+            result_ref=f"sha256:{digest}",
+            provenance=provenance,
+            notes=notes,
         )
