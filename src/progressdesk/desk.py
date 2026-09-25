@@ -72,6 +72,7 @@ from progressdesk.artifacts import ArtifactStore
 from progressdesk.checkpoints import CheckpointManager
 from progressdesk.definitions import Definition, DefinitionError, Definitions
 from progressdesk.events import Event, EventLog
+from progressdesk.project_status import ProjectStatus, ProjectStatusBuilder
 from progressdesk.state import load_state, write_state
 
 PROJECT_PLAN_SCHEMA_VERSION = 1
@@ -87,6 +88,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "definition.signoff",
         "project.create",
         "project.start",
+        "project.status",
     }
 )
 
@@ -1553,3 +1555,7 @@ class ProgressDeskOperations:
 
     def project_start(self, project_id: str, *, request_id: str) -> ProjectStart:
         return self.projects.start(project_id, request_id=request_id)
+
+    def project_status(self, project_id: str) -> ProjectStatus:
+        """Return the disposable GUI-ready projection; no model call is made."""
+        return ProjectStatusBuilder(self.projects.log).build(project_id)
