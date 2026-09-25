@@ -20,9 +20,8 @@ is raised, never coerced. Unknown event types are rejected. A malformed existing
 log is corruption: EventLog() init re-reads fail-closed; corruption never becomes
 an empty/"ready" default (§4.4 spirit, recovery mechanics land in MS2).
 
-Registry: ONLY the definition family is registered now (§4.5 — implement only
-events needed by delivered functionality; further types arrive with their
-implementing slices: MS1.2 planning items, MS1.4 project/milestone-GO, ...).
+Registry: event families are registered only with their delivered use (§4.5):
+definition, planning, project formation/first-start GO, and dispatch rejection.
 """
 
 from __future__ import annotations
@@ -114,11 +113,35 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": False,
     },
+    # Project formation/GO family (§4.5). These are the implemented uses for
+    # M1.4: Create Project records one durable project.created fact, while the
+    # first start records a request, the owner's milestone GO confirmation, and
+    # the resulting start. All are project-scoped owner-control-host events.
+    "project.created": {
+        "producers": frozenset({"desk"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "project.start-requested": {
+        "producers": frozenset({"desk"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.go-issued": {
+        "producers": frozenset({"desk"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "project.started": {
+        "producers": frozenset({"desk"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
     # Dispatch family (§4.5 "Dispatch rejected") — registered with its
     # implementing slice MS1.3. The kernel is a control-host component (§1.2),
     # like "desk": the producer string is a typing check only; real authority
-    # derives from who holds the EventLog. Workshop-level at MS1 (projectId
-    # optional — project identity attaches when projects exist, MS1.4).
+    # derives from who holds the EventLog. It may be project-scoped in §6.2
+    # rejections; the flag stays permissive for the pre-project planning path.
     "dispatch.rejected": {
         "producers": frozenset({"kernel"}),
         "payload_required": True,

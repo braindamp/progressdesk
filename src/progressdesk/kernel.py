@@ -18,9 +18,9 @@ Deferred §6.2 checks (implemented-use rule, §4.5 — they land with their
 consuming slices, never as speculative stubs): model assignment exists in
 harness configuration (MS3.2); verified free capacity (MS3.2);
 attempts/wall/resource limits (MS3.3 §10.2); run current and not aborted
-(MS3.4/MS4); project recovery clean boundary (MS4.2 §9); GO recorded for
-execution starts (MS1.4 §5.4 — the kernel consumes signoff FACTS via
-``Definitions.is_signed_off``; it is not the GO recorder).
+(MS3.4/MS4); project recovery clean boundary (MS4.2 §9). MS1.4 supplies the
+implemented GO fact: a project-scoped task dispatch must name a project with
+one recorded milestone GO that contains the task's Milestone definitions.
 
 Determinism: matching uses ``fnmatch.fnmatchcase`` over "/"-normalized
 strings, so decisions do not vary by host OS path/case conventions.
@@ -40,6 +40,7 @@ from typing import Any
 
 from progressdesk.artifacts import ArtifactStore
 from progressdesk.definitions import Definition, Definitions
+from progressdesk.desk import ProjectError, recorded_go_for_artifacts
 from progressdesk.events import Event, EventLog
 from progressdesk.state import payload_digest
 
@@ -65,6 +66,7 @@ CHECK_ORDER = (
     "task.endpoint",
     "parent.current",
     "signoff.required",
+    "go.recorded",
     "scope.contained",
 )
 
@@ -304,6 +306,7 @@ class Kernel:
         self.policy = load_policy(policy_path)
         self.policy_path = Path(policy_path)
         self.log = log
+        self.artifacts = log.artifacts
         self.definitions = definitions
 
     # -- authorization (§6.2) ------------------------------------------------
@@ -410,7 +413,19 @@ class Kernel:
                 reason="skipped: task definition not resolved/current",
             )
 
-        # d. scope.contained — §6.3 structural containment in the scope
+        # d. go.recorded — §6.2 requires GO for execution starts. Workshop-level
+        #    planning dispatches have no Milestone and no projectId; a project
+        #    task must name the project whose one durable GO confirmed its
+        #    displayed milestones/gates.
+        if task is not None:
+            results["go.recorded"] = self._check_go(task, request)
+        else:
+            results["go.recorded"] = CheckResult(
+                "go.recorded", False, skipped=True,
+                reason="skipped: task definition not resolved/current",
+            )
+
+        # e. scope.contained — §6.3 structural containment in the scope
         #    declared by the task's immediate parents' kinds.
         if task is not None:
             results["scope.contained"] = self._check_scope(task, request)
@@ -447,6 +462,7 @@ class Kernel:
             "dispatch.rejected",
             producer="kernel",
             payload=json.dumps(summary, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+            project_id=request.projectId,
         )
         return Decision(ok=False, checks=checks, rejection=rejection, event=event)
 
@@ -493,6 +509,51 @@ class Kernel:
                 ),
             )
         return CheckResult("signoff.required", True)
+
+    def _check_go(self, task: Definition, request: DispatchRequest) -> CheckResult:
+        """Require the first-start GO for project task execution (§5.4/§6.2)."""
+        try:
+            chain = self._ancestors(task)
+        except Exception as exc:
+            return CheckResult(
+                "go.recorded", False,
+                reason=f"task ancestry unresolvable; no GO state derivable ({exc})",
+            )
+        milestone_refs = {
+            f"{item.id}@{item.revision}"
+            for item in chain
+            if item.kind == "Milestone"
+        }
+        if not request.projectId:
+            if milestone_refs:
+                return CheckResult(
+                    "go.recorded", False,
+                    reason=(
+                        "project task dispatch must name projectId; milestone definitions "
+                        f"{sorted(milestone_refs)} require a recorded GO (§6.2)"
+                    ),
+                )
+            return CheckResult(
+                "go.recorded", True,
+                reason="workshop-level task has no project GO precondition",
+            )
+        try:
+            go = recorded_go_for_artifacts(self.log, self.artifacts, request.projectId)
+        except ProjectError as exc:
+            return CheckResult(
+                "go.recorded", False,
+                reason=f"project GO unavailable ({exc})",
+            )
+        if milestone_refs and not milestone_refs.issubset(go.milestoneRefs):
+            missing = sorted(milestone_refs.difference(go.milestoneRefs))
+            return CheckResult(
+                "go.recorded", False,
+                reason=f"recorded GO does not confirm displayed Milestone revisions {missing}",
+            )
+        return CheckResult(
+            "go.recorded", True,
+            reason=f"milestone GO {go.event.id} confirms the displayed project milestones",
+        )
 
     def _check_scope(self, task: Definition, request: DispatchRequest) -> CheckResult:
         permissions = self.policy["taskPermissions"]

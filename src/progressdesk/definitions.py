@@ -9,8 +9,9 @@ Approval/signoff is a separate EVENT (definition.signed-off), never an editable
 `approved: true` field. The signoff payload pins the exact signed identity
 (id, kind, revision) — §5.1 "signoffs bind to the displayed VISP and FUSP
 revisions separately" and §16.1 "signoff applies to the displayed exact
-version". A later revision is unsigned by construction; no cross-kind chain
-validation here (that is create_project step 1, MS1.4 scope).
+version". A later revision is unsigned by construction; cross-kind chain
+validation belongs to the owner ``ProjectService`` in ``desk.py`` (the
+create_project step 1 implementation).
 
 Projections (`latest`, `get`, `is_signed_off`) are disposable views rebuilt
 from events (§5.2 board doctrine applies to all derived views); the events are
@@ -232,6 +233,12 @@ class Definitions:
             "kind": target.kind,
             "revision": target.revision,
         }
+        # Exact-version signoff is idempotent (§16.1 duplicate requests return
+        # the original outcome). Returning the first recorded event also keeps
+        # retries from inflating owner-signoff history.
+        for event in self._signoff_events():
+            if event[1] == signed_identity:
+                return event[0]
         return self.log.record(
             "definition.signed-off",
             producer=producer,
@@ -261,25 +268,49 @@ class Definitions:
 
         A later revision (or a forged identity match on a different definition)
         is unsigned by construction: the signed identity payload must equal the
-        definition's own id/kind/revision triple.
+        definition's own id/kind/revision triple. Malformed signoff history is
+        inconsistent and fails closed rather than being treated as unsigned.
         """
+        identity = {
+            "id": definition.id,
+            "kind": definition.kind,
+            "revision": definition.revision,
+        }
+        return any(event[1] == identity for event in self._signoff_events())
+
+    # -- internals ------------------------------------------------------------
+
+    def _signoff_events(self) -> list[tuple[Event, dict[str, Any]]]:
+        """Strictly decode all signoff events as exact identity payloads."""
+        result: list[tuple[Event, dict[str, Any]]] = []
         for event in self.log.read_all():
             if event.type != "definition.signed-off":
                 continue
             if event.payloadRef is None:
-                continue
-            payload = self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1])
-            # signed identity payloads are {id, kind, revision} only — compare directly
-            data = json.loads(payload)
+                raise DefinitionError(
+                    "definition.signed-off without payload is inconsistent history"
+                )
+            try:
+                data = json.loads(
+                    self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1])
+                )
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise DefinitionError(
+                    f"definition.signed-off {event.id} has unreadable payload"
+                ) from exc
             if (
-                data.get("id") == definition.id
-                and data.get("kind") == definition.kind
-                and data.get("revision") == definition.revision
+                not isinstance(data, dict)
+                or set(data) != {"id", "kind", "revision"}
+                or not isinstance(data["id"], str)
+                or not isinstance(data["kind"], str)
+                or isinstance(data["revision"], bool)
+                or not isinstance(data["revision"], int)
             ):
-                return True
-        return False
-
-    # -- internals ------------------------------------------------------------
+                raise DefinitionError(
+                    f"definition.signed-off {event.id} has malformed identity payload"
+                )
+            result.append((event, data))
+        return result
 
     def _install_and_record(
         self,
