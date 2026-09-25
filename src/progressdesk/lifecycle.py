@@ -196,13 +196,12 @@ class RecoveryPacketBuilder:
         accepted_refs: list[str] = []
         for event in self._events(project_id, "round.accepted"):
             payload = self._payload(event)
-            if payload.get("taskDefinitionRef") == task_ref:
-                candidates = [
-                    self._payload(candidate)["manifestRef"]
-                    for candidate in self._events(project_id, "candidate.submitted")
-                    if self._payload(candidate).get("candidateId") == payload.get("candidateId")
-                ]
-                accepted_refs.extend(candidates)
+            candidates = [
+                self._payload(candidate)["manifestRef"]
+                for candidate in self._events(project_id, "candidate.submitted")
+                if self._payload(candidate).get("candidateId") == payload.get("candidateId")
+            ]
+            accepted_refs.extend(candidates)
         completed_refs = [
             event.payloadRef for event in self._events(project_id, "action.completed") if event.payloadRef
         ]

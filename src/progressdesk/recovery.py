@@ -268,7 +268,11 @@ class StartRecoveryService:
                 return prior
             old_run_id, boundary = self._current_run(project_id)
             active = self._active_runs(project_id)
-            abort_issued = bool(self._events(project_id, "abort.issued"))
+            abort_issued = any(
+                event.type == "abort.issued"
+                and (boundary is None or event.sequence > boundary.sequence)
+                for event in self._events(project_id)
+            )
             healthy = (
                 old_run_id is not None
                 and not abort_issued
@@ -315,6 +319,8 @@ class StartRecoveryService:
                         packet = self.packet_builder.build(project_id)
                         packet_event = self.packet_builder.record(packet)
                     recovery_result = self._rebuild_workspace(project_id, new_run_id)
+                    if self.broker is not None and hasattr(self.broker, "reopen_project_after_recovery"):
+                        self.broker.reopen_project_after_recovery(project_id)
                     if self.run_factory is not None:
                         self.run_factory(project_id, new_run_id)
                     evidence_refs = tuple(self._accepted_refs(project_id))
