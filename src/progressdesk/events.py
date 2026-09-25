@@ -68,7 +68,7 @@ class UnknownSchemaVersionError(EventError):
 # project-scoped=False: definitions are workshop-level until a project exists.
 _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
     "definition.created": {
-        "producers": frozenset({"desk", "planning"}),
+        "producers": frozenset({"desk", "planning", "sharpener"}),
         "payload_required": True,
         "project_scoped": False,
     },
@@ -191,6 +191,11 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "project_scoped": True,
     },
     "fix.recorded": {
+        "producers": frozenset({"sharpener"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "research.completed": {
         "producers": frozenset({"sharpener"}),
         "payload_required": True,
         "project_scoped": False,
