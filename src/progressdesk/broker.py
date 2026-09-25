@@ -7,6 +7,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -136,6 +138,19 @@ class _FileTime(ctypes.Structure):
     ]
 
 
+class _JobObjectBasicAccountingInformation(ctypes.Structure):
+    _fields_ = [
+        ("TotalUserTime", ctypes.c_longlong),
+        ("TotalKernelTime", ctypes.c_longlong),
+        ("ThisPeriodTotalUserTime", ctypes.c_longlong),
+        ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
+        ("TotalPageFaultCount", ctypes.c_uint32),
+        ("TotalProcesses", ctypes.c_uint32),
+        ("ActiveProcesses", ctypes.c_uint32),
+        ("TotalTerminatedProcesses", ctypes.c_uint32),
+    ]
+
+
 def _kernel32():
     if os.name != "nt":
         raise BrokerError("Windows Job Objects are unavailable on this platform")
@@ -175,6 +190,14 @@ def _kernel32():
     library.TerminateProcess.restype = ctypes.c_int
     library.TerminateJobObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     library.TerminateJobObject.restype = ctypes.c_int
+    library.QueryInformationJobObject.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    library.QueryInformationJobObject.restype = ctypes.c_int
     library.CloseHandle.argtypes = [ctypes.c_void_p]
     library.CloseHandle.restype = ctypes.c_int
     library.GetFileAttributesW.argtypes = [ctypes.c_wchar_p]
@@ -293,6 +316,32 @@ class WindowsJob:
             raise BrokerError(f"GetExitCodeProcess failed: {ctypes.get_last_error()}")
         return int(code.value)
 
+    def active_process_count(self) -> int:
+        if self._closed:
+            raise BrokerError("job is already closed")
+        information = _JobObjectBasicAccountingInformation()
+        returned = ctypes.c_uint32()
+        if not self._library.QueryInformationJobObject(
+            self._handle,
+            1,  # JobObjectBasicAccountingInformation
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+            ctypes.byref(returned),
+        ):
+            raise BrokerError(
+                f"QueryInformationJobObject failed: {ctypes.get_last_error()}"
+            )
+        return int(information.ActiveProcesses)
+
+    def wait_until_empty(self, timeout_ms: int = 5000) -> bool:
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            if self.active_process_count() == 0:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+
     def _terminate_for_police(self) -> None:
         if not self._library.TerminateJobObject(self._handle, 1):
             raise BrokerError(f"TerminateJobObject failed: {ctypes.get_last_error()}")
@@ -320,6 +369,17 @@ class ProjectRun:
     def _terminate_for_police(self) -> None:
         self._job._terminate_for_police()
 
+    def active_process_count(self) -> int:
+        return self._job.active_process_count()
+
+    def wait_for_termination(self, timeout_ms: int = 5000) -> int:
+        """Wait for the process and all job members, then release handles."""
+        code = self._job.wait(self._process, timeout_ms)
+        if not self._job.wait_until_empty(timeout_ms):
+            raise BrokerError("project job did not become quiescent")
+        self.close()
+        return code
+
     def close(self) -> None:
         if not self._closed:
             self._job._library.CloseHandle(self._process)
@@ -327,11 +387,54 @@ class ProjectRun:
             self._closed = True
 
 
+class ProjectRunRegistry:
+    """In-memory live ownership; the event log remains the durable identity."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._runs: dict[str, list[ProjectRun]] = {}
+        self._closed: set[str] = set()
+
+    def is_closed(self, project_id: str) -> bool:
+        with self._lock:
+            return project_id in self._closed
+
+    def register(self, project_id: str, run: ProjectRun) -> None:
+        with self._lock:
+            if project_id in self._closed:
+                raise BrokerError("project dispatch is closed")
+            self._runs.setdefault(project_id, []).append(run)
+
+    def unregister(self, run: ProjectRun) -> None:
+        with self._lock:
+            runs = self._runs.get(run.identity.projectId, [])
+            self._runs[run.identity.projectId] = [item for item in runs if item is not run]
+
+    def close_project(self, project_id: str) -> tuple[ProjectRun, ...]:
+        with self._lock:
+            self._closed.add(project_id)
+            return tuple(self._runs.get(project_id, ()))
+
+    def reopen_project(self, project_id: str) -> None:
+        with self._lock:
+            self._closed.discard(project_id)
+
+    def active(self, project_id: str) -> tuple[ProjectRun, ...]:
+        with self._lock:
+            return tuple(self._runs.get(project_id, ()))
+
+
 class PoliceTerminationAuthority:
     """Sole public path to TerminateJobObject (TESP §7.2)."""
 
     def terminate(self, run: ProjectRun) -> None:
         run._terminate_for_police()
+
+    def terminate_project(self, broker: "Broker", project_id: str) -> tuple[ProjectRun, ...]:
+        runs = broker._close_project_dispatch(project_id)
+        for run in runs:
+            self.terminate(run)
+        return runs
 
 
 class Broker:
@@ -346,6 +449,26 @@ class Broker:
         self.workspace_root = Path(workspace_root).resolve()
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.event_log = event_log
+        self.runs = ProjectRunRegistry()
+        self._dispatch_lock = threading.RLock()
+
+    def _assert_dispatch_open(self, project_id: str) -> None:
+        if self.runs.is_closed(project_id):
+            raise BrokerError("project dispatch is closed")
+
+    def _close_project_dispatch(self, project_id: str) -> tuple[ProjectRun, ...]:
+        with self._dispatch_lock:
+            return self.runs.close_project(project_id)
+
+    def reopen_project_after_recovery(self, project_id: str) -> None:
+        with self._dispatch_lock:
+            self.runs.reopen_project(project_id)
+
+    def active_runs(self, project_id: str) -> tuple[ProjectRun, ...]:
+        return self.runs.active(project_id)
+
+    def _forget_run(self, run: ProjectRun) -> None:
+        self.runs.unregister(run)
 
     def _resolve_contained(self, path: Path) -> Path:
         absolute = Path(os.path.abspath(path))
@@ -369,6 +492,8 @@ class Broker:
         arguments: tuple[str, ...],
     ) -> PlannedInvocation:
         spec.validate()
+        with self._dispatch_lock:
+            self._assert_dispatch_open(project_id)
         if not project_id or not run_id or not role:
             raise BrokerError("projectId, runId, and role are required")
         if any(not isinstance(arg, str) or "\x00" in arg for arg in arguments):
@@ -393,6 +518,11 @@ class Broker:
         )
 
     def invoke(self, planned: PlannedInvocation) -> ProjectRun:
+        with self._dispatch_lock:
+            self._assert_dispatch_open(planned.projectId)
+            return self._invoke_locked(planned)
+
+    def _invoke_locked(self, planned: PlannedInvocation) -> ProjectRun:
         if self.event_log is not None:
             self.event_log.record(
                 "action.requested",
@@ -440,11 +570,14 @@ class Broker:
                 project_id=planned.projectId,
                 run_id=planned.runId,
             )
-        return ProjectRun(job, process, identity)
+        run = ProjectRun(job, process, identity)
+        self.runs.register(planned.projectId, run)
+        return run
 
     def wait(self, run: ProjectRun) -> int:
         """Wait for a run and record its broker outcome."""
         code = run.wait()
+        self.runs.unregister(run)
         if self.event_log is not None:
             self.event_log.record(
                 "action.completed",

@@ -215,6 +215,41 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    "police.observation": {
+        "producers": frozenset({"police"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "abort.issued": {
+        "producers": frozenset({"police"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "termination.confirmed": {
+        "producers": frozenset({"police"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "termination.unresolved": {
+        "producers": frozenset({"police"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "recovery.ready": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "recovery.blocked": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "dispatch.reopened": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
 }
 
 

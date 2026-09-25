@@ -12,7 +12,8 @@ import dataclasses
 import hashlib
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager, nullcontext
 from types import MappingProxyType
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
@@ -302,10 +303,23 @@ class RalphRoundService:
         artifacts: ArtifactStore,
         *,
         limits: RoundLimits | None = None,
+        permission_guard: Callable[[str], None] | None = None,
+        transition_guard: Callable[[str], AbstractContextManager[Any]] | None = None,
     ) -> None:
         self.log = log
         self.artifacts = artifacts
         self.default_limits = (limits or RoundLimits()).validate()
+        self.permission_guard = permission_guard
+        self.transition_guard = transition_guard
+
+    def _check_permission(self, project_id: str) -> None:
+        if self.permission_guard is not None:
+            self.permission_guard(project_id)
+
+    def _transition(self, project_id: str) -> AbstractContextManager[Any]:
+        if self.transition_guard is not None:
+            return self.transition_guard(project_id)
+        return nullcontext()
 
     def _events(self, project_id: str, event_type: str | None = None) -> list[Event]:
         return [
@@ -438,6 +452,7 @@ class RalphRoundService:
         kind: str = "worker",
     ) -> str:
         _require_text(project_id, "projectId")
+        self._check_permission(project_id)
         _require_text(task_ref, "taskDefinitionRef")
         _require_text(packet.task_id, "task packet taskId")
         if kind not in {"worker", "corrective"}:
@@ -508,6 +523,7 @@ class RalphRoundService:
         action_ref: str,
         decision: Any,
     ) -> Event:
+        self._check_permission(project_id)
         view = self.state(project_id, round_id)
         self._check_current_authorization(
             self._read_payload(self._started(project_id, round_id)), decision
@@ -540,6 +556,7 @@ class RalphRoundService:
         required_checks: tuple[str, ...] | list[str],
         decision: Any,
     ) -> CandidateManifest:
+        self._check_permission(project_id)
         view = self.state(project_id, round_id)
         self._check_current_authorization(
             self._read_payload(self._started(project_id, round_id)), decision
@@ -617,6 +634,7 @@ class RalphRoundService:
         duration_seconds: int = 1,
         finding_id: str | None = None,
     ) -> QAFinding:
+        self._check_permission(project_id)
         view = self.state(project_id, round_id)
         self._check_current_authorization(
             self._read_payload(self._started(project_id, round_id)), decision
@@ -665,6 +683,25 @@ class RalphRoundService:
         finding_id: str,
         decision: Any,
     ) -> Event:
+        with self._transition(project_id):
+            return self._accept_candidate(
+                project_id=project_id,
+                round_id=round_id,
+                candidate_id=candidate_id,
+                finding_id=finding_id,
+                decision=decision,
+            )
+
+    def _accept_candidate(
+        self,
+        *,
+        project_id: str,
+        round_id: str,
+        candidate_id: str,
+        finding_id: str,
+        decision: Any,
+    ) -> Event:
+        self._check_permission(project_id)
         view = self.state(project_id, round_id)
         self._check_current_authorization(
             self._read_payload(self._started(project_id, round_id)), decision
