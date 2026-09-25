@@ -355,7 +355,7 @@ class _FreshContext:
         self.assignment = assignment
         self.transport = transport
 
-    def invoke(self, prompt: str) -> ModelResponse:
+    def _request(self, prompt: str, attempt: int) -> ModelRequest:
         limits = self.packet.limits
         max_tokens = limits.get("outputTokens", 4096)
         timeout = limits.get("wallTimeSeconds", 900)
@@ -363,14 +363,46 @@ class _FreshContext:
             raise HarnessError("packet_invalid", "limits.outputTokens must be positive")
         if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1:
             raise HarnessError("packet_invalid", "limits.wallTimeSeconds must be positive")
-        return self.transport.invoke(
-            ModelRequest(
-                prompt=_string(prompt, "prompt"),
-                max_output_tokens=max_tokens,
-                timeout_seconds=timeout,
-                metadata=MappingProxyType({"responsibility": self.assignment.responsibility}),
-            )
+        return ModelRequest(
+            prompt=_string(prompt, "prompt"),
+            max_output_tokens=max_tokens,
+            timeout_seconds=timeout,
+            metadata=MappingProxyType(
+                {
+                    "responsibility": self.assignment.responsibility,
+                    "attempt": str(attempt),
+                }
+            ),
         )
+
+    def invoke(self, prompt: str) -> ModelResponse:
+        return self.transport.invoke(self._request(prompt, 1))
+
+    def invoke_with_retry(
+        self,
+        prompt: str,
+        *,
+        safe_to_retry,
+        max_retries: int = 2,
+    ) -> ModelResponse:
+        """Retry only when the caller supplies an explicit safety proof.
+
+        There are at most two retries (three total attempts).  The default
+        transport path never retries implicitly.
+        """
+        if (
+            isinstance(max_retries, bool)
+            or not isinstance(max_retries, int)
+            or not 0 <= max_retries <= 2
+        ):
+            raise HarnessError("retry_invalid", "max_retries must be between 0 and 2")
+        for attempt in range(1, max_retries + 2):
+            try:
+                return self.transport.invoke(self._request(prompt, attempt))
+            except Exception as exc:
+                if attempt > max_retries or not safe_to_retry(exc):
+                    raise
+        raise AssertionError("unreachable retry state")
 
 
 class WorkerContext(_FreshContext):
