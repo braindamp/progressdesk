@@ -215,6 +215,11 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": False,
     },
+    "domain-pack.registered": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
     "fix.superseded": {
         "producers": frozenset({"sharpener"}),
         "payload_required": True,
