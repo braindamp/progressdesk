@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import Any
 
 from progressdesk.artifacts import ArtifactStore
+from progressdesk.checkpoints import CheckpointManager
 from progressdesk.definitions import Definition, DefinitionError, Definitions
 from progressdesk.events import Event, EventLog
 from progressdesk.state import load_state, write_state
@@ -750,6 +751,7 @@ class ProjectService:
                 runId=existing["runId"],
                 goEventIds=[go_event.id],
             )
+            self._ensure_initial_checkpoint(project_id, plan)
             return ProjectStart(
                 projectId=project_id,
                 requestId=request_id,
@@ -849,6 +851,7 @@ class ProjectService:
             runId=run_id,
             goEventIds=[go_event.id],
         )
+        self._ensure_initial_checkpoint(project_id, plan)
         return ProjectStart(
             projectId=project_id,
             requestId=request_id,
@@ -1341,6 +1344,34 @@ class ProjectService:
             view["runId"] = runId
             view["goEventIds"] = goEventIds
         write_state(view, root / PROJECT_VIEW_RELATIVE)
+
+    def _ensure_initial_checkpoint(self, project_id: str, plan: _ValidatedPlan) -> None:
+        """Create the first immutable checkpoint after project start."""
+        CheckpointManager(
+            self.log,
+            self.artifacts,
+            self.projects_root / project_id / "checkpoints",
+        ).create_initial(
+            project_id=project_id,
+            definition_refs=(
+                f"{plan.visp.id}@{plan.visp.revision}",
+                f"{plan.fusp.id}@{plan.fusp.revision}",
+                plan.draft_ref,
+            ),
+            task_and_milestone_state={
+                "milestones": [
+                    {"ref": ref, "status": "pending"} for ref in plan.milestone_refs
+                ],
+                "tasks": [
+                    {
+                        "ref": ref,
+                        "status": "pending",
+                        "dependencies": list(plan.task_dependencies[ref]),
+                    }
+                    for ref in plan.task_refs
+                ],
+            },
+        )
 
     def _created_view_matches_event(self, created: Event) -> bool:
         payload = _event_payload(self.artifacts, created, _CREATED_FIELDS)

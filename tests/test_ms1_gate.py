@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 
 from progressdesk.artifacts import ArtifactStore
+from progressdesk.checkpoints import CheckpointManager
 from progressdesk.definitions import Definitions
 from progressdesk.desk import ProjectService, ProgressDeskOperations
 from progressdesk.events import EventLog
@@ -156,6 +157,16 @@ def test_ms1_integration_gate(tmp_path: Path) -> None:
         for event in log.read_all()
         if event.projectId == creation.projectId
     ) == 1
+
+    checkpoint_files = list((creation.destination / "checkpoints").glob("*.json"))
+    assert len(checkpoint_files) == 1
+    checkpoint_manager = CheckpointManager(
+        log, artifacts, creation.destination / "checkpoints"
+    )
+    checkpoint = checkpoint_manager.load(creation.destination / "checkpoints")
+    assert checkpoint.projectId == creation.projectId
+    assert checkpoint.journalSequence == len(log.read_all()) - 1
+    assert checkpoint_manager.state_projection(checkpoint)["taskAndMilestoneState"]["tasks"]
 
     # (5) A successor normative revision is a different unsigned version. The old
     # signoff remains historical but cannot authorize its stale dependent chain.
