@@ -104,6 +104,7 @@ class MechanicalPropagator:
         *,
         reason: str | None = None,
         superseded_fix_id: str | None = None,
+        classification: str | None = None,
     ) -> Event:
         payload: dict[str, Any] = {
             "schemaVersion": 1,
@@ -117,6 +118,8 @@ class MechanicalPropagator:
             payload["reason"] = reason
         if superseded_fix_id is not None:
             payload["supersededFixId"] = superseded_fix_id
+        if classification is not None:
+            payload["classification"] = classification
         return self.log.record(
             event_type,
             producer="sharpener",
@@ -125,6 +128,39 @@ class MechanicalPropagator:
             ),
             project_id=target.project_id,
         )
+
+    def _record_failure(
+        self,
+        fix: FixRecord,
+        target: TargetState,
+        reason: str,
+        *,
+        classification: str,
+        abort: bool,
+    ) -> None:
+        self._record(
+            "fix.failed",
+            fix,
+            target,
+            reason=reason,
+            classification=classification,
+        )
+        if abort and self.police is not None:
+            try:
+                self.police.abort(
+                    project_id=target.project_id,
+                    classification=classification,
+                    reason=reason,
+                    source="sharpener",
+                )
+            except Exception as exc:
+                self._record(
+                    "fix.failed",
+                    fix,
+                    target,
+                    reason=f"abort unavailable: {exc}",
+                    classification=classification,
+                )
 
     def propagate(self, fix_id: str) -> PropagationReport:
         fix = self.repository.get(fix_id)
@@ -148,13 +184,17 @@ class MechanicalPropagator:
                     continue
                 if current is not None and current not in fix.supersedes_fix_refs:
                     reason = "competing fix requires research-mode decision"
-                    self._record("fix.failed", fix, target, reason=reason)
+                    self._record_failure(
+                        fix, target, reason, classification="requirement", abort=False
+                    )
                     failed.append((target_id, reason))
                     continue
                 if target.active_run_id is not None:
                     if self.police is None:
                         reason = "active execution requires POLICE termination"
-                        self._record("fix.failed", fix, target, reason=reason)
+                        self._record_failure(
+                            fix, target, reason, classification="infra", abort=False
+                        )
                         failed.append((target_id, reason))
                         continue
                     try:
@@ -166,7 +206,9 @@ class MechanicalPropagator:
                         )
                     except Exception as exc:
                         reason = f"POLICE termination failed: {exc}"
-                        self._record("fix.failed", fix, target, reason=reason)
+                        self._record_failure(
+                            fix, target, reason, classification="infra", abort=False
+                        )
                         failed.append((target_id, reason))
                         continue
                 try:
@@ -175,7 +217,9 @@ class MechanicalPropagator:
                     self.applier(fix, target)
                 except Exception as exc:
                     reason = str(exc)
-                    self._record("fix.failed", fix, target, reason=reason)
+                    self._record_failure(
+                        fix, target, reason, classification="defect", abort=True
+                    )
                     failed.append((target_id, reason))
                     continue
                 if current is not None:
