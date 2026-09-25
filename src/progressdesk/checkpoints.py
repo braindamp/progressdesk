@@ -273,6 +273,126 @@ class CheckpointManager:
             )
         return manifest
 
+    def create_named(
+        self,
+        checkpoint_name: str,
+        *,
+        project_id: str,
+        definition_refs: tuple[str, ...] | list[str],
+        accepted_artifact_refs: tuple[str, ...] | list[str] = (),
+        tool_skill_domain_version_refs: tuple[str, ...] | list[str] = (),
+        task_and_milestone_state: dict[str, Any],
+        pending_action_refs: tuple[str, ...] | list[str] = (),
+    ) -> CheckpointManifest:
+        """Create an immutable named checkpoint at the current journal position.
+
+        The name is an immutable identity input, not a mutable label. Reusing
+        the same name at the same journal position is idempotent; reusing it
+        with different bytes is a collision and fails closed.
+        """
+        if (
+            not isinstance(checkpoint_name, str)
+            or not checkpoint_name.strip()
+            or len(checkpoint_name) > 200
+            or any(ord(character) < 32 for character in checkpoint_name)
+        ):
+            raise CheckpointError("checkpoint_name must be a bounded non-empty string")
+        if not isinstance(task_and_milestone_state, dict):
+            raise CheckpointError("task_and_milestone_state must be an object")
+        for event in self.log.replay():
+            if event.type != "checkpoint.created" or event.projectId != project_id:
+                continue
+            if event.payloadRef is None:
+                continue
+            payload = json.loads(self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1]))
+            if payload.get("checkpointName") != checkpoint_name:
+                continue
+            manifest_data = {
+                key: value for key, value in payload.items() if key != "checkpointName"
+            }
+            return CheckpointManifest.from_dict(manifest_data)
+        events = self.log.replay()
+        if not events:
+            raise CheckpointError("cannot create a checkpoint before project history exists")
+        journal_sequence = events[-1].sequence
+        checkpoint_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"progressdesk:checkpoint:{project_id}:{checkpoint_name}:{journal_sequence}",
+            )
+        )
+        path = self._path(checkpoint_id)
+        if path.exists():
+            manifest = CheckpointManifest.from_dict(json.loads(path.read_text(encoding="utf-8")))
+            if manifest.projectId != project_id or manifest.journalSequence != journal_sequence:
+                raise CheckpointError("named checkpoint collision")
+            if self._event_for(manifest) is None:
+                self.log.record(
+                    "checkpoint.created",
+                    producer="manager",
+                    payload=_canonical({**manifest.to_dict(), "checkpointName": checkpoint_name}),
+                    project_id=project_id,
+                )
+            return manifest
+        definition_refs = tuple(definition_refs)
+        accepted_artifact_refs = tuple(accepted_artifact_refs)
+        tool_skill_domain_version_refs = tuple(tool_skill_domain_version_refs)
+        pending_action_refs = tuple(pending_action_refs)
+        accepted_payload = {
+            "schemaVersion": CHECKPOINT_SCHEMA_VERSION,
+            "projectId": project_id,
+            "journalSequence": journal_sequence,
+            "acceptedArtifactRefs": list(accepted_artifact_refs),
+        }
+        accepted_ref = _artifact_ref(self.artifacts.put(_canonical(accepted_payload)))
+        state_payload = {
+            "schemaVersion": CHECKPOINT_SCHEMA_VERSION,
+            "projectId": project_id,
+            "journalSequence": journal_sequence,
+            "taskAndMilestoneState": task_and_milestone_state,
+        }
+        state_ref = _artifact_ref(self.artifacts.put(_canonical(state_payload)))
+        manifest = CheckpointManifest(
+            checkpointId=checkpoint_id,
+            projectId=project_id,
+            journalSequence=journal_sequence,
+            definitionRefs=definition_refs,
+            acceptedArtifactManifestRef=accepted_ref,
+            toolSkillDomainVersionRefs=tool_skill_domain_version_refs,
+            taskAndMilestoneStateRef=state_ref,
+            pendingActionRefs=pending_action_refs,
+        )
+        manifest.validate()
+        self._write_immutable(path, _canonical(manifest.to_dict()) + b"\n")
+        if self._event_for(manifest) is None:
+            self.log.record(
+                "checkpoint.created",
+                producer="manager",
+                payload=_canonical({**manifest.to_dict(), "checkpointName": checkpoint_name}),
+                project_id=project_id,
+            )
+        return manifest
+
+    def capture_progress(
+        self,
+        checkpoint_name: str,
+        *,
+        project_id: str,
+        definition_refs: tuple[str, ...] | list[str],
+        task_and_milestone_state: dict[str, Any],
+        accepted_artifact_refs: tuple[str, ...] | list[str] = (),
+        pending_action_refs: tuple[str, ...] | list[str] = (),
+    ) -> CheckpointManifest:
+        """Capture broker-recorded progress without making the view authoritative."""
+        return self.create_named(
+            checkpoint_name,
+            project_id=project_id,
+            definition_refs=definition_refs,
+            accepted_artifact_refs=accepted_artifact_refs,
+            task_and_milestone_state=task_and_milestone_state,
+            pending_action_refs=pending_action_refs,
+        )
+
     def state_projection(self, manifest: CheckpointManifest) -> dict[str, Any]:
         """Load and validate the event-position-derived task/milestone state."""
         manifest.validate()

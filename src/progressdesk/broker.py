@@ -355,10 +355,17 @@ class WindowsJob:
 class ProjectRun:
     """Broker-owned run handle. It exposes waiting, never public termination."""
 
-    def __init__(self, job: WindowsJob, process: ctypes.c_void_p, identity: ProcessIdentity):
+    def __init__(
+        self,
+        job: WindowsJob,
+        process: ctypes.c_void_p,
+        identity: ProcessIdentity,
+        candidate_dir: Path,
+    ):
         self._job = job
         self._process = process
         self.identity = identity
+        self.candidate_dir = Path(candidate_dir)
         self._closed = False
 
     def wait(self, timeout_ms: int = 0xFFFFFFFF) -> int:
@@ -570,20 +577,66 @@ class Broker:
                 project_id=planned.projectId,
                 run_id=planned.runId,
             )
-        run = ProjectRun(job, process, identity)
+        run = ProjectRun(job, process, identity, planned.candidateDir)
         self.runs.register(planned.projectId, run)
         return run
 
-    def wait(self, run: ProjectRun) -> int:
-        """Wait for a run and record its broker outcome."""
+    def _snapshot_candidate(self, run: ProjectRun) -> dict[str, str]:
+        """Content-address every regular candidate file after tool completion."""
+        if self.event_log is None or not run.candidate_dir.exists():
+            return {}
+        captured: dict[str, str] = {}
+        for path in sorted(run.candidate_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(run.candidate_dir).as_posix()
+            captured[relative] = f"sha256:{self.event_log.artifacts.put(path.read_bytes())}"
+        return captured
+
+    def wait(
+        self,
+        run: ProjectRun,
+        *,
+        output_artifact_refs: tuple[str, ...] | list[str] = (),
+        files_changed: tuple[str, ...] | list[str] = (),
+        worker_note: str | None = None,
+    ) -> int:
+        """Wait, snapshot candidate bytes, and record a durable breadcrumb."""
+        for ref in output_artifact_refs:
+            if (
+                not isinstance(ref, str)
+                or not ref.startswith("sha256:")
+                or len(ref.split(":", 1)[1]) != 64
+                or any(c not in "0123456789abcdef" for c in ref.split(":", 1)[1])
+            ):
+                raise BrokerError("output artifact references must be sha256:<64-hex>")
+        if any(not isinstance(path, str) or not path or "\x00" in path for path in files_changed):
+            raise BrokerError("files_changed must contain non-empty paths")
+        if worker_note is not None and (
+            not isinstance(worker_note, str)
+            or len(worker_note) > 2000
+            or any(ord(character) < 32 and character not in "\t\n\r" for character in worker_note)
+        ):
+            raise BrokerError("worker_note is invalid")
         code = run.wait()
         self.runs.unregister(run)
         if self.event_log is not None:
+            captured = self._snapshot_candidate(run)
+            # Explicit file paths are retained as the caller's declaration; the
+            # broker snapshot remains the authoritative content reference set.
+            declared = set(files_changed)
+            files = {path: captured[path] for path in sorted(captured) if path in declared or not declared}
             self.event_log.record(
                 "action.completed",
                 producer="broker",
                 payload=json.dumps(
-                    {"processId": run.identity.processId, "exitCode": code},
+                    {
+                        "processId": run.identity.processId,
+                        "exitCode": code,
+                        "outputArtifactRefs": list(output_artifact_refs),
+                        "filesChanged": files,
+                        "workerNote": worker_note,
+                    },
                     sort_keys=True,
                 ).encode("utf-8"),
                 project_id=run.identity.projectId,
