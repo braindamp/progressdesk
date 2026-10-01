@@ -32,7 +32,6 @@ from .police import FailureClassification, Observation, PoliceService
 from .planning import PlanningSession
 from .rounds import (
     AcceptanceError,
-    AuthorizationError,
     CandidateManifest,
     RalphRoundService,
     RoundLimitError,

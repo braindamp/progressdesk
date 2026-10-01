@@ -249,7 +249,6 @@ class RoundDispatcher:
         project_id: str,
         task_ref: str,
         packet: Any,
-        decision: Any = None,
         run_id: str | None = None,
         adapter: str | None = None,
         round_kind: str = "worker",
@@ -275,7 +274,6 @@ class RoundDispatcher:
             project_id=project_id,
             task_ref=ledger_task_ref,
             packet=packet,
-            decision=decision,
             run_id=run,
             kind=round_kind,
         )
@@ -310,7 +308,7 @@ class RoundDispatcher:
                 run_id=run, project_id=project_id, task_ref=task_ref,
                 detail=f"room not cleared: {clearance.decision} {clearance.rationale}".strip(),
             )
-        outcome = self._settle(project_id, task_ref, run, round_id, envelope, decision, actual_role)
+        outcome = self._settle(project_id, task_ref, run, round_id, envelope, actual_role)
         if not outcome.delivered:
             # Any outcome that did not deliver halves the task. Laya answers the
             # one question that matters — is there two deliverable things in here
@@ -659,7 +657,6 @@ class RoundDispatcher:
             round_id=round_id,
             files=produced,
             required_checks=(),
-            decision=decision,
         )
         outcome.candidate_id = getattr(submitted, "candidateId", None) or str(submitted)
         return outcome

@@ -34,10 +34,6 @@ class RoundLimitError(RoundError):
     """A bounded attempt/action/correction budget was exhausted."""
 
 
-class AuthorizationError(RoundError):
-    """The round is not currently authorized by a successful kernel decision."""
-
-
 class AcceptanceError(RoundError):
     """A candidate cannot be accepted under the QA contract."""
 
@@ -67,21 +63,6 @@ def _require_ref(value: Any, field: str) -> str:
     ):
         raise RoundError(f"{field} must be a sha256:<64-hex> reference")
     return value
-
-
-def _decision_digest(decision: Any) -> str:
-    """Stable proof of the successful authorization decision, without authority."""
-    if dataclasses.is_dataclass(decision):
-        value = dataclasses.asdict(decision)
-    elif hasattr(decision, "to_dict"):
-        value = decision.to_dict()
-    else:
-        value = {"ok": getattr(decision, "ok", False)}
-    return hashlib.sha256(_canonical(value)).hexdigest()
-
-
-def _decision_ok(decision: Any) -> bool:
-    return getattr(decision, "ok", False) is True
 
 
 @dataclass(frozen=True)
@@ -288,7 +269,6 @@ class RoundView:
     kind: str
     status: str
     limits: RoundLimits
-    authorization_digest: str
     actions: int = 0
     candidate: CandidateManifest | None = None
     finding: QAFinding | None = None
@@ -361,18 +341,6 @@ class RalphRoundService:
                 result.append(event)
         return result
 
-    def _authorization(self, round_id: str, decision: Any) -> str | None:
-        """No authoriser, no proof of permission.
-
-        This used to be a digest of a successful kernel decision, re-checked
-        before every result was accepted, so a round could not be recorded
-        against an authorization that had since changed. The kernel is gone, so
-        there is nothing to prove and nothing to re-check: the round ledger
-        records that a round happened, and deciding whether it should have is no
-        longer a thing this module does.
-        """
-        return None
-
     def _limits_for_packet(self, packet: TaskPacket) -> RoundLimits:
         """Apply tighter task-declared limits without trusting worker input."""
         limits = self.default_limits
@@ -395,10 +363,6 @@ class RalphRoundService:
             qa_wall_seconds=limits.qa_wall_seconds,
             correction_limit=limits.correction_limit,
         ).validate()
-
-    def _check_current_authorization(self, payload: Mapping[str, Any], decision: Any) -> None:
-        """Nothing to re-check. Kept as a call site so removing it is one edit."""
-        return None
 
     def _terminal(self, events: list[Event]) -> str | None:
         for event in events:
@@ -442,7 +406,6 @@ class RalphRoundService:
             kind=start["kind"],
             status=status,
             limits=limits,
-            authorization_digest=start["authorizationDigest"],
             actions=actions,
             candidate=candidate,
             finding=finding,
@@ -454,7 +417,6 @@ class RalphRoundService:
         project_id: str,
         task_ref: str,
         packet: TaskPacket,
-        decision: Any,
         run_id: str | None = None,
         kind: str = "worker",
     ) -> str:
@@ -522,13 +484,9 @@ class RalphRoundService:
         project_id: str,
         round_id: str,
         action_ref: str,
-        decision: Any,
     ) -> Event:
         self._check_permission(project_id)
         view = self.state(project_id, round_id)
-        self._check_current_authorization(
-            self._read_payload(self._started(project_id, round_id)), decision
-        )
         if view.status != "active":
             raise RoundError(f"round is terminal: {view.status}")
         _require_ref(action_ref, "actionRef")
@@ -555,13 +513,9 @@ class RalphRoundService:
         round_id: str,
         files: Mapping[str, bytes],
         required_checks: tuple[str, ...] | list[str],
-        decision: Any,
     ) -> CandidateManifest:
         self._check_permission(project_id)
         view = self.state(project_id, round_id)
-        self._check_current_authorization(
-            self._read_payload(self._started(project_id, round_id)), decision
-        )
         if view.status != "active":
             raise RoundError(f"round is terminal: {view.status}")
         if not isinstance(files, Mapping) or not files:
@@ -629,16 +583,12 @@ class RalphRoundService:
         project_id: str,
         round_id: str,
         checks: Mapping[str, bool],
-        decision: Any,
         evidence_refs: tuple[str, ...] | list[str] = (),
         duration_seconds: int = 1,
         finding_id: str | None = None,
     ) -> QAFinding:
         self._check_permission(project_id)
         view = self.state(project_id, round_id)
-        self._check_current_authorization(
-            self._read_payload(self._started(project_id, round_id)), decision
-        )
         if view.status != "active" or view.candidate is None:
             raise AcceptanceError("QA requires an active round with a submitted candidate")
         if (
@@ -682,7 +632,6 @@ class RalphRoundService:
         round_id: str,
         candidate_id: str,
         finding_id: str,
-        decision: Any,
     ) -> Event:
         with self._transition(project_id):
             return self._accept_candidate(
@@ -690,7 +639,6 @@ class RalphRoundService:
                 round_id=round_id,
                 candidate_id=candidate_id,
                 finding_id=finding_id,
-                decision=decision,
             )
 
     def _accept_candidate(
@@ -700,13 +648,9 @@ class RalphRoundService:
         round_id: str,
         candidate_id: str,
         finding_id: str,
-        decision: Any,
     ) -> Event:
         self._check_permission(project_id)
         view = self.state(project_id, round_id)
-        self._check_current_authorization(
-            self._read_payload(self._started(project_id, round_id)), decision
-        )
         if view.status != "active":
             raise AcceptanceError(f"round is terminal: {view.status}")
         if view.candidate is None:
