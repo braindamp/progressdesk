@@ -1,0 +1,106 @@
+%% ProgressDesk — decision and control pathway
+%%
+%% RENDERS, DOES NOT DEFINE. The authority for this graph is:
+%%   FUSP v1.11 §3.3a   the two exception ladders
+%%   FUSP v1.11 F-S8    the loop closes on the instruction
+%%   TESP v1.11 §1.3    housekeeping order, and why the tail is repaired first
+%%   TESP v1.11 §10.0   answers_in, and transport resolved from the role table
+%%   TESP v1.11 §10.3   the rationale is a required manifest field
+%%   TESP v1.11 §10.4a  stated / named / implied
+%%   TESP v1.11 §10.6   CLEANING_LAYA as a decision model
+%%   TESP v1.11 §16.1   round.dispatch as the only door onto a role
+%%   TESP v1.11 §18     completion requirements
+%%
+%% A hand-drawn diagram goes stale, and staleness is what this diagram is most
+%% likely to get wrong. When the specs move, this file is wrong until it is
+%% redrawn against them.
+%%
+%% LEGEND
+%%   green solid   built and exercised
+%%   green bold    built, and newly so
+%%   amber dashed  specified, not reachable yet
+%%   red dashed    does not exist
+%%
+%% The red box is the one that matters: the milestone gate is the only
+%% verification the framework requires, and nothing may be delivered without it.
+
+flowchart TB
+    Owner["Human owner<br/>VISP + FUSP signoff · GO"]
+    Pipe["Definition pipeline<br/>VISP → FUSP → TESP → Milestone → Task"]
+
+    subgraph HOST["Control host — the workshop"]
+        Door["<b>round.dispatch</b><br/>the only door onto a role"]
+        Kernel["Authorization kernel<br/>§6.2 checks"]
+        Seam["Spawn seam<br/>Spawner · ExecutorRegistry"]
+        Log[("Event log<br/>the only record")]
+    end
+
+    subgraph ADAPTERS["Adapters — declared by transport, not chosen in code"]
+        Pi["pi · answers_in: prose<br/><i>which model serves it → ModelAgency</i>"]
+        Sys["systemone · answers_in: distribution<br/>CLEANING_LAYA — cannot answer in words"]
+    end
+
+    subgraph BOUNDARY["Project execution boundary"]
+        Broker["Broker<br/>the only way anything starts"]
+        Dexter["DEXTER — builder<br/>free on the build plane"]
+    end
+
+    subgraph EDGE["Round boundary"]
+        Sweep["floor_sweep · light / strong<br/>deterministic · repairs the tail FIRST"]
+        Laya["CLEANING_LAYA<br/>one typed question → a probability"]
+    end
+
+    subgraph LADDERS["Exception ladders — both terminal, never interleave"]
+        Jack["JACK_THE_SPLITTER<br/>split, or towel"]
+        Schotty["SCHOTTY<br/>forensic restore, or towel"]
+        Police["POLICE<br/>classify + abort"]
+        Red["Red light<br/>a state, not a process"]
+    end
+
+    subgraph LEARN["Self-improvement"]
+        Sharpener["SHARPENER<br/>observer · researcher"]
+        Visp["VISP draft<br/>into human signoff"]
+    end
+
+    Gate["Milestone gate<br/>the only required verification"]
+    Splicer["Splitter validation<br/>seven checks before any child"]
+
+    Owner -->|signs off| Pipe
+    Pipe -->|task ref| Door
+    Door --> Kernel
+    Kernel -->|"refused → dispatch.rejected"| Log
+    Kernel -->|ok| Seam
+    Seam --> Pi
+    Seam --> Sys
+    Pi --> Broker
+    Broker --> Dexter
+    Dexter -->|"candidate + <b>rationale</b> (required)"| Log
+    Dexter --> Sweep
+    Sweep --> Laya
+    Laya -->|restartable| Log
+    Laya -->|"needs SCHOTTY / no verdict"| Schotty
+    Schotty -->|restored| Log
+    Schotty -->|towel| Red
+    Schotty -->|"breach found"| Police
+    Police --> Red
+    Dexter -->|undelivered| Jack
+    Jack --> Splicer
+    Splicer -->|two halves| Log
+    Jack -->|towel| Red
+    Dexter -.->|"rationale absent"| Sharpener
+    Sharpener -->|"skill-doc edit (mechanical)"| Log
+    Sharpener -->|"VISP (decision-bearing)"| Visp
+    Visp --> Owner
+    Log --> Gate
+    Gate -->|pass| Log
+    Gate -->|fail| Broker
+
+    classDef built fill:#1b4332,stroke:#95d5b2,color:#e9f7ef
+    classDef seam fill:#1b4332,stroke:#74c69d,color:#e9f7ef,stroke-width:3px
+    classDef spec fill:#3d3522,stroke:#e9c46a,color:#fefae0,stroke-dasharray: 5 4
+    classDef absent fill:#3b1f1f,stroke:#e07a5f,color:#fdf0ec,stroke-dasharray: 3 3
+
+    class Owner,Pipe,Dexter,Broker,Log built
+    class Door,Seam,Kernel,Sys,Pi,Laya,Sweep seam
+    class Jack,Schotty,Police,Red,Sharpener,Visp,Splicer spec
+    class Gate absent
