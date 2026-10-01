@@ -388,45 +388,42 @@ class Clearance:
     decision: str            # "restartable" | "needs SCHOTTY" | "no verdict"
     rationale: str = ""
     report: SweepReport | None = None
+    probability: float | None = None
 
     @property
     def restartable(self) -> bool:
         return self.decision == "restartable"
 
 
-ROOM_QUESTION = """A {strength} sweep has just run. It is mechanical: it checked for liveness,
-debris, escaped processes and a torn tail, and it reports what it found. It has
-no opinion and it decides nothing.
+def describe(report: SweepReport) -> str:
+    """The sweep, said rather than dumped.
 
-Below is what it found. Answer one question: can the next round start from here?
-
-  restartable     the room is as it was, and a round can begin
-  needs-schotty    something here is not ours to clear, and SCHOTTY must come first
-
-Answer with exactly one line, in this form, and nothing else:
-
-  decision: restartable
-  decision: needs-schotty
-
-No explanation. No second line. If neither value is true, answer `unreadable`
-rather than the one that is closer.
-
-SWEEP REPORT:
-{traces}"""
+    This is the state CLEANING_LAYA is given, and it is prose on purpose. The
+    same reports as `json.dumps(report.to_dict())` were measured against the
+    decision model and came back nearly flat — a mean separation of 0.043
+    between the two answers, which is no separation at all. Said out, the same
+    reports separate by 0.36. A decision model reads sentences; a JSON dump is
+    structure it has no reason to have been trained on.
+    """
+    lines = [f"A {report.strength} floor sweep just ran on project {report.project_id}."]
+    for action in report.actions:
+        mark = "BLOCKED" if action.blocked else "ok"
+        lines.append(f"- {action.operation}: {action.detail} [{mark}]")
+    if report.traces:
+        lines.append("The sweep found problems it could not clear itself:")
+        lines.extend(f"- {trace}" for trace in report.traces)
+    else:
+        lines.append("The sweep found nothing. Every step passed.")
+    return "\n".join(lines)
 
 
 def parse_laya(text: str, allowed: frozenset[str]) -> tuple[str, str]:
-    """Read CLEANING_LAYA's answer. One token, chosen from the set given.
+    """Read a fixed-token answer out of generated text.
 
-    She is not an ordinary model. She is a switch: given free text, she answers
-    with one value from a fixed set and nothing else. No reasoning, no quote,
-    no explanation is asked of her and none is expected, because she cannot
-    produce it.
-
-    So the contract has no second line. A token outside the set is unreadable,
-    and unreadable is never a yes. Everything she cannot do — say why, name a
-    call, explain a judgement — is code's job instead, and code does it by
-    enumerating rather than by asking her to describe.
+    Retained only for the sites in `loop.py` that still ask a language model
+    for one token. The room verdict no longer comes through here: it is asked as
+    a typed question and answered with a probability, so there is no text to
+    read. Every caller of this should be on its way to the decision seam.
     """
     for line in (text or "").splitlines():
         low = line.strip().lower()
@@ -436,42 +433,43 @@ def parse_laya(text: str, allowed: frozenset[str]) -> tuple[str, str]:
     return "", ""
 
 
-RESTARTABLE = frozenset({"restartable", "needs-schotty"})
-
-
-def parse_verdict(text: str) -> tuple[str, str]:
-    """The room question, in the one contract. Unreadable is not a yes."""
-    token, reason = parse_laya(text, RESTARTABLE)
-    if not token:
-        return "no verdict", reason
-    if "schotty" in token:
-        return "needs SCHOTTY", reason
-    return "restartable", reason
-
-
 class Cleaner:
     """Runs the sweep, then asks CLEANING_LAYA what to make of it.
 
     She decides; this applies. She is given no tools and can move nothing, so her
     verdict is what authorises the next round — and it is never a claim that
     something was already done.
+
+    She is a decision model, not a language model. She is asked one typed
+    question and answers with a probability, so there is no line of text to
+    parse and no way for a correct judgement to be lost to a keyword. The
+    previous arrangement asked a large model for `decision: restartable` and
+    read that one line back: the one recorded run of this role answered
+    `estimate: restartable`, as its own brief instructed, and was recorded as
+    having said nothing at all.
+
+    A service that does not answer is not a room that is clean. An unreachable
+    decision is `no verdict`, which is not a yes, exactly as before.
     """
 
-    def __init__(self, sweep: Sweep, ask: Callable[[str, str, str], str]) -> None:
+    def __init__(self, sweep: Sweep, decide: Callable[[str], Any] | None = None) -> None:
         self.sweep = sweep
-        self._ask = ask
+        self._decide = decide
 
     def run(self, project_id: str, *, strength: str = LIGHT) -> Clearance:
         report = self.sweep.script.run(project_id, strength=strength)
-        try:
-            answer = self._ask(project_id, "CLEANING_LAYA", ROOM_QUESTION.format(
-                strength=report.strength,
-                traces=json.dumps(report.to_dict(), indent=2),
-            ))
-            verdict, _ = parse_verdict(answer)
-        except Exception as exc:  # noqa: BLE001 - an unasked room is not a clean room
-            verdict, rationale = "no verdict", f"ask failed: {exc}"
-        clearance = Clearance(project_id, strength, verdict, rationale, report)
+        probability: float | None = None
+        if self._decide is None:
+            verdict, rationale = "no verdict", "no decision seam configured"
+        else:
+            try:
+                decision = self._decide(describe(report))
+                probability = decision.probability
+                verdict = "needs SCHOTTY" if decision.above else "restartable"
+                rationale = decision.detail
+            except Exception as exc:  # noqa: BLE001 - an unasked room is not a clean room
+                verdict, rationale = "no verdict", f"not decided: {exc}"
+        clearance = Clearance(project_id, strength, verdict, rationale, report, probability)
         self.sweep.script.record(
             report,
             "clearance",

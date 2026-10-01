@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping
 from .artifacts import ArtifactStore
 from .broker import Broker, PoliceTerminationAuthority
 from .definitions import Definitions
+from .decide import reads_as_problem
 from .checkpoints import CheckpointManager
 from .desk import ProgressDeskOperations, ProjectService
 from .events import EventLog
@@ -156,7 +157,10 @@ class Runtime:
         police = PoliceService(log, artifacts, broker, authority=authority)
         projects = ProjectService(root / "projects", log, artifacts, definitions)
         sweep = Sweep(log, artifacts, root)
-        cleaner = Cleaner(sweep, lambda pid, role, ctx: ask_role(root, pid, role, ctx))
+        # CLEANING_LAYA is a decision model, not a language model. She is asked
+        # one typed question over HTTP and answers with a probability, so she
+        # gets the seam rather than a brief and a provider.
+        cleaner = Cleaner(sweep, reads_as_problem)
         operations = ProgressDeskOperations(definitions, projects)
         planning = PlanningSession(log, artifacts)
         lab = LabReferralService(log, artifacts)
