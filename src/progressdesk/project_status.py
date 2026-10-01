@@ -44,7 +44,6 @@ class ProjectStatus:
     milestone_qa: tuple[dict[str, Any], ...]
     termination: Mapping[str, Any] | None
     recovery: Mapping[str, Any] | None
-    latest_checkpoint: str | None
     evidence_refs: tuple[str, ...]
     tool_updates: tuple[dict[str, Any], ...]
     last_event_sequence: int
@@ -65,7 +64,6 @@ class ProjectStatus:
             "milestoneQa": list(self.milestone_qa),
             "termination": dict(self.termination) if self.termination is not None else None,
             "recovery": dict(self.recovery) if self.recovery is not None else None,
-            "latestCheckpoint": self.latest_checkpoint,
             "evidenceRefs": list(self.evidence_refs),
             "toolUpdates": list(self.tool_updates),
             "lastEventSequence": self.last_event_sequence,
@@ -151,12 +149,6 @@ class ProjectStatusBuilder:
         for event in events:
             if event.type in {"recovery.attempted", "recovery.blocked", "project.recovered"}:
                 recovery = payloads[event.id]
-        checkpoint = None
-        for event in events:
-            if event.type == "checkpoint.created":
-                value = payloads[event.id].get("checkpointId")
-                if isinstance(value, str):
-                    checkpoint = value
         evidence = tuple(
             dict.fromkeys(event.payloadRef for event in events if event.payloadRef is not None)
         )
@@ -190,7 +182,6 @@ class ProjectStatusBuilder:
             "milestoneQa": milestone_qa,
             "termination": termination,
             "recovery": recovery,
-            "latestCheckpoint": checkpoint,
             "evidenceRefs": evidence,
             "toolUpdates": tool_updates,
             "lastEventSequence": events[-1].sequence,
@@ -207,7 +198,6 @@ class ProjectStatusBuilder:
             milestone_qa=tuple(milestone_qa),
             termination=termination,
             recovery=recovery,
-            latest_checkpoint=checkpoint,
             evidence_refs=evidence,
             tool_updates=tuple(tool_updates),
             last_event_sequence=events[-1].sequence,

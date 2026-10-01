@@ -21,7 +21,6 @@ from .artifacts import ArtifactStore
 from .broker import Broker, PoliceTerminationAuthority
 from .definitions import Definitions
 from .decide import Decision, SystemOneExecutor, Unreachable
-from .checkpoints import CheckpointManager
 from .desk import ProgressDeskOperations, ProjectService
 from .events import EventLog
 from .harness import HarnessConfig, HarnessError, TaskPacket
@@ -584,23 +583,6 @@ def _planning_formalize(rt: Runtime, cmd: Command) -> Any:
     return [i.to_dict() for i in items]
 
 
-def _checkpoints_for(rt: Runtime, project_id: str) -> CheckpointManager:
-    return CheckpointManager(rt.log, rt.artifacts, rt.root / "projects" / project_id / "checkpoints")
-
-
-def _checkpoint_create(rt: Runtime, cmd: Command) -> Any:
-    return _checkpoints_for(rt, cmd.require("project_id")).create_initial(
-        project_id=cmd.require("project_id"),
-        definition_refs=tuple(cmd.get("definition_refs", ())),
-        accepted_artifact_refs=tuple(cmd.get("accepted_artifact_refs", ())),
-        task_and_milestone_state=cmd.get("task_and_milestone_state", {}),
-    ).to_dict()
-
-
-def _checkpoint_list(rt: Runtime, cmd: Command) -> Any:
-    return _checkpoints_for(rt, cmd.require("project_id")).load().to_dict()
-
-
 def _lab_request(rt: Runtime, cmd: Command) -> Any:
     determination = LabNeedDetermination.from_dict(cmd.get("determination", {}))
     return rt.lab.create_request(
@@ -633,8 +615,6 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "planning.item.attach": _planning_item_attach,
     "planning.item.relate": _planning_item_relate,
     "planning.formalize": _planning_formalize,
-    "checkpoint.create": _checkpoint_create,
-    "checkpoint.list": _checkpoint_list,
     "lab.request": _lab_request,
     "lab.result": _lab_result,
     "definition.create": _definition_create,

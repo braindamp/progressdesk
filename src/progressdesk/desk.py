@@ -71,15 +71,11 @@ from pathlib import Path
 from typing import Any
 
 from progressdesk.artifacts import ArtifactStore
-from progressdesk.checkpoints import CheckpointManager
 from progressdesk.definitions import Definition, DefinitionError, Definitions
 from progressdesk.events import Event, EventLog
 from progressdesk.project_status import ProjectStatus, ProjectStatusBuilder
-from progressdesk.state import load_state, write_state
 
 PROJECT_PLAN_SCHEMA_VERSION = 1
-PROJECT_VIEW_SCHEMA_VERSION = "1"
-PROJECT_VIEW_RELATIVE = Path("views/project.json")
 PROJECT_MANIFEST_RELATIVE = Path("project.json")
 
 SUPPORTED_OPERATIONS = frozenset(
@@ -601,7 +597,7 @@ class ProjectService:
         # create a different project; a missing target still falls through to
         # full pinned-plan validation and staged repair below.
         original = self._matching_created_event(project_id, request_id, draft_ref)
-        if original is not None and self._created_view_matches_event(original):
+        if original is not None and self._created_manifest_matches(original):
             return ProjectCreation(
                 projectId=project_id,
                 requestId=request_id,
@@ -641,7 +637,7 @@ class ProjectService:
                     "destination_conflict",
                     f"project destination {destination} already exists; refusing to overwrite",
                 )
-            if self._completed_view_matches(created, plan, expected_status=None):
+            if self._created_manifest_matches(created):
                 return ProjectCreation(
                     projectId=project_id,
                     requestId=request_id,
@@ -651,7 +647,7 @@ class ProjectService:
                 )
             raise ProjectError(
                 "destination_conflict",
-                f"project destination {destination} exists without the matching completion view",
+                f"project destination {destination} exists without the matching manifest",
             )
 
         stage = self._new_stage(project_id)
@@ -720,10 +716,10 @@ class ProjectService:
             project_id, payload["requestId"], plan, payload
         )
         destination = self.projects_root / project_id
-        if not self._completed_view_matches(created, plan, expected_status=None):
+        if not self._created_manifest_matches(created):
             raise ProjectError(
                 "project_not_ready",
-                f"project {project_id} has no valid event-backed completion view",
+                f"project {project_id} has no valid event-backed manifest",
             )
 
         started = self._events_for(project_id, "project.started")
@@ -755,15 +751,6 @@ class ProjectService:
             go_payload = _event_payload(self.artifacts, go_event, _GO_FIELDS)
             self._assert_go_payload(project_id, request_id, plan, go_payload)
             self._assert_started_payload(project_id, request_id, plan, existing, go_event.id)
-            self._write_view(
-                destination,
-                created,
-                plan,
-                expected_status="started",
-                runId=existing["runId"],
-                goEventIds=[go_event.id],
-            )
-            self._ensure_initial_checkpoint(project_id, plan)
             return ProjectStart(
                 projectId=project_id,
                 requestId=request_id,
@@ -855,15 +842,6 @@ class ProjectService:
             run_id=run_id,
             cause_id=go_event.id,
         )
-        self._write_view(
-            destination,
-            created,
-            plan,
-            expected_status="started",
-            runId=run_id,
-            goEventIds=[go_event.id],
-        )
-        self._ensure_initial_checkpoint(project_id, plan)
         return ProjectStart(
             projectId=project_id,
             requestId=request_id,
@@ -1275,8 +1253,6 @@ class ProjectService:
         created: Event | None,
     ) -> None:
         for relative in (
-            Path("checkpoints"),
-            Path("views"),
             Path("workspace"),
             Path("planning/items"),
             Path("rounds"),
@@ -1286,7 +1262,7 @@ class ProjectService:
         _atomic_bytes(stage / "planning" / "items" / ".keep", b"")
         if created is None:
             # The event has not been acknowledged yet. The first materialization
-            # after record() supplies the event-backed completion view.
+            # after record() installs the destination and its manifest.
             return
         destination = self.projects_root / project_id
         if destination.exists():
@@ -1294,13 +1270,6 @@ class ProjectService:
                 "destination_conflict", f"project destination {destination} appeared during create"
             )
         self._write_manifest(stage, destination.name, created, plan)
-        self._write_view(
-            destination,
-            created,
-            plan,
-            expected_status="created",
-            stage=stage,
-        )
         os.replace(stage, destination)
         _fsync_directory(self.projects_root)
 
@@ -1323,69 +1292,18 @@ class ProjectService:
             _canonical_json(manifest) + b"\n",
         )
 
-    def _write_view(
-        self,
-        destination: Path,
-        created: Event,
-        plan: _ValidatedPlan,
-        *,
-        expected_status: str,
-        stage: Path | None = None,
-        runId: str | None = None,
-        goEventIds: list[str] | None = None,
-    ) -> None:
-        root = destination if stage is None else stage
-        view: dict[str, Any] = {
-            "schemaVersion": PROJECT_VIEW_SCHEMA_VERSION,
-            "source": "events",
-            "status": expected_status,
-            "projectId": destination.name,
-            "requestId": _event_payload(
-                self.artifacts, created, _CREATED_FIELDS
-            )["requestId"],
-            "createdEventId": created.id,
-            "draftRevision": plan.draft_ref,
-            "vispRevision": f"{plan.visp.id}@{plan.visp.revision}",
-            "fuspRevision": f"{plan.fusp.id}@{plan.fusp.revision}",
-            "milestoneRefs": list(plan.milestone_refs),
-            "taskRefs": list(plan.task_refs),
-            "gateIds": list(plan.gate_ids),
-            "goDigest": plan.go_digest,
-        }
-        if expected_status == "started":
-            view["runId"] = runId
-            view["goEventIds"] = goEventIds
-        write_state(view, root / PROJECT_VIEW_RELATIVE)
+    def _created_manifest_matches(self, created: Event) -> bool:
+        """Is the materialised project the one this event says was created?
 
-    def _ensure_initial_checkpoint(self, project_id: str, plan: _ValidatedPlan) -> None:
-        """Create the first immutable checkpoint after project start."""
-        CheckpointManager(
-            self.log,
-            self.artifacts,
-            self.projects_root / project_id / "checkpoints",
-        ).create_initial(
-            project_id=project_id,
-            definition_refs=(
-                f"{plan.visp.id}@{plan.visp.revision}",
-                f"{plan.fusp.id}@{plan.fusp.revision}",
-                plan.draft_ref,
-            ),
-            task_and_milestone_state={
-                "milestones": [
-                    {"ref": ref, "status": "pending"} for ref in plan.milestone_refs
-                ],
-                "tasks": [
-                    {
-                        "ref": ref,
-                        "status": "pending",
-                        "dependencies": list(plan.task_dependencies[ref]),
-                    }
-                    for ref in plan.task_refs
-                ],
-            },
-        )
-
-    def _created_view_matches_event(self, created: Event) -> bool:
+        The manifest is the project itself -- the definition it was built from --
+        so checking it against the event is checking the workspace, not a cache
+        of the workspace. There used to be a second file here, `views/
+        project.json`, holding a `status` string that both call sites passed
+        `expected_status=None` for, so its status was never actually compared
+        and the file duplicated facts the log and the manifest already carried.
+        It is gone. The event log is the record and the manifest is the thing
+        built from it; there is no third copy to fall out of step.
+        """
         payload = _event_payload(self.artifacts, created, _CREATED_FIELDS)
         if created.projectId is None:
             return False
@@ -1398,7 +1316,6 @@ class ProjectService:
                     encoding="utf-8"
                 )
             )
-            view = load_state(destination / PROJECT_VIEW_RELATIVE)
         except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
             return False
         manifest_definition = manifest.get("definition") if isinstance(manifest, dict) else None
@@ -1411,30 +1328,7 @@ class ProjectService:
             and isinstance(manifest_definition, dict)
             and manifest_definition.get("draftRevision") == payload["draftRevision"]
             and manifest_definition.get("goDigest") == payload["goDigest"]
-            and view.get("schemaVersion") == PROJECT_VIEW_SCHEMA_VERSION
-            and view.get("source") == "events"
-            and view.get("projectId") == destination.name
-            and view.get("requestId") == payload["requestId"]
-            and view.get("createdEventId") == created.id
-            and view.get("draftRevision") == payload["draftRevision"]
-            and view.get("goDigest") == payload["goDigest"]
-            and view.get("status") in {"created", "started"}
         )
-
-    def _completed_view_matches(
-        self,
-        created: Event,
-        plan: _ValidatedPlan,
-        *,
-        expected_status: str | None,
-    ) -> bool:
-        if created.projectId is None or not self._created_view_matches_event(created):
-            return False
-        view = load_state(
-            self.projects_root / created.projectId / PROJECT_VIEW_RELATIVE
-        )
-        status = view.get("status")
-        return expected_status is None or status == expected_status
 
 
 def _fsync_directory(path: Path) -> None:
