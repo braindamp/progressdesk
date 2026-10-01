@@ -30,13 +30,6 @@ from .lab import LabNeedDetermination, LabReferralService, SimulatedLabReferral
 from .loop import dispatcher_for
 from .police import FailureClassification, Observation, PoliceService
 from .planning import PlanningSession
-from .rounds import (
-    AcceptanceError,
-    CandidateManifest,
-    RalphRoundService,
-    RoundLimitError,
-    RoundLimits,
-)
 from .spawn import ExecutorRegistry, ManualExecutor, SpawnError, Spawner
 from .toolcenter import ToolCenter
 
@@ -120,7 +113,6 @@ class Runtime:
     definitions: Definitions
     broker: Broker
     tools: ToolCenter
-    rounds: RalphRoundService
     police: PoliceService
     projects: ProjectService
     operations: ProgressDeskOperations
@@ -128,7 +120,6 @@ class Runtime:
     lab: LabReferralService
     simulated_lab: SimulatedLabReferral
     harness: HarnessConfig | None
-    limits: RoundLimits
     _write_lock: threading.Lock
     _spawners: dict[str, Spawner] = field(default_factory=dict)
     sweep: Sweep | None = None
@@ -139,14 +130,13 @@ class Runtime:
 
     # -- construction ----------------------------------------------------
     @classmethod
-    def create(cls, root: Path, *, limits: RoundLimits | None = None) -> "Runtime":
+    def create(cls, root: Path) -> "Runtime":
         root = Path(root).resolve()
         artifacts = ArtifactStore(root / "artifacts")
         log = EventLog(root / "events" / "events.jsonl", artifacts)
         definitions = Definitions(log, artifacts)
         broker = Broker(root, event_log=log)
         tools = ToolCenter(log, artifacts, broker)
-        rounds = RalphRoundService(log, artifacts, limits=limits or RoundLimits())
         authority = PoliceTerminationAuthority()
         # POLICE's RecoveryManager is a Protocol; nothing concrete is bound
         # here. Recovery belongs inside the start chain (MS4.2), not beside it.
@@ -171,7 +161,6 @@ class Runtime:
             definitions=definitions,
             broker=broker,
             tools=tools,
-            rounds=rounds,
             police=police,
             projects=projects,
             operations=operations,
@@ -183,8 +172,7 @@ class Runtime:
             cleaner=None,
             ask=None,
             split_task=split_task(definitions, log),
-            limits=limits or RoundLimits(),
-            _write_lock=threading.Lock(),
+                _write_lock=threading.Lock(),
         )
         runtime.cleaner = Cleaner(sweep, runtime.decide_in_room)
         runtime.ask = runtime.ask_role

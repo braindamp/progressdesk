@@ -312,33 +312,8 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
-    "round.action-recorded": {
-        "producers": frozenset({"broker"}),
-        "payload_required": True,
-        "project_scoped": True,
-    },
     "candidate.submitted": {
         "producers": frozenset({"worker"}),
-        "payload_required": True,
-        "project_scoped": True,
-    },
-    "qa.finding": {
-        "producers": frozenset({"qa"}),
-        "payload_required": True,
-        "project_scoped": True,
-    },
-    "round.accepted": {
-        "producers": frozenset({"manager"}),
-        "payload_required": True,
-        "project_scoped": True,
-    },
-    "round.failed": {
-        "producers": frozenset({"manager", "police"}),
-        "payload_required": True,
-        "project_scoped": True,
-    },
-    "round.exhausted": {
-        "producers": frozenset({"manager"}),
         "payload_required": True,
         "project_scoped": True,
     },

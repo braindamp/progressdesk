@@ -30,7 +30,6 @@ from .artifacts import ArtifactStore
 from .broker import Broker
 from .encoding import read_bytes_with_spec
 from .floor_sweep import Clearance, Cleaner, Sweep, parse_laya
-from .rounds import RalphRoundService
 from .spawn import (
     Budget,
     ContextPack,
@@ -205,7 +204,6 @@ class RoundDispatcher:
 
     def __init__(
         self,
-        rounds: RalphRoundService,
         spawner: Spawner,
         broker: Broker,
         artifacts: ArtifactStore,
@@ -217,7 +215,6 @@ class RoundDispatcher:
         split_task: Callable[[str, str, str], tuple[str, str]] | None = None,
         research_tools: tuple[str, ...] = (),
     ) -> None:
-        self.rounds = rounds
         # The only tools in the system, and they exist for one call: the
         # end-of-project run, where SHARPENER is allowed to go outward.
         self._research_tools = research_tools
@@ -270,12 +267,19 @@ class RoundDispatcher:
         if self.sweep is not None:
             # Before each iteration, before a worker is dispatched.
             self.sweep.after_slice(project_id)
-        round_id = self.rounds.start_round(
+        # A round is not an object. It is two facts: work started, and later,
+        # something arrived. The sweep reads the first to find work that never
+        # delivered; nothing else has to know a round existed.
+        self._log.record(
+            "round.started",
+            producer="manager",
+            payload=json.dumps({
+                "runId": run,
+                "taskDefinitionRef": ledger_task_ref,
+                "kind": round_kind,
+            }).encode("utf-8"),
             project_id=project_id,
-            task_ref=ledger_task_ref,
-            packet=packet,
             run_id=run,
-            kind=round_kind,
         )
         request = self._request(project_id, task_ref, packet, run, tools, budget, role)
         actual_role = request.role
@@ -308,7 +312,7 @@ class RoundDispatcher:
                 run_id=run, project_id=project_id, task_ref=task_ref,
                 detail=f"room not cleared: {clearance.decision} {clearance.rationale}".strip(),
             )
-        outcome = self._settle(project_id, task_ref, run, round_id, envelope, actual_role)
+        outcome = self._settle(project_id, task_ref, run, envelope, actual_role)
         if not outcome.delivered:
             # Any outcome that did not deliver halves the task. Laya answers the
             # one question that matters — is there two deliverable things in here
@@ -622,8 +626,8 @@ class RoundDispatcher:
         return _with(outcome, status="split", detail=halves[0][:200], halves=halves)
 
     def _settle(
-        self, project_id: str, task_ref: str, run: str, round_id: str,
-        envelope: ResultEnvelope, decision: Any, role: str = "DEXTER",
+        self, project_id: str, task_ref: str, run: str,
+        envelope: ResultEnvelope, role: str = "DEXTER",
     ) -> DispatchOutcome:
         produced, specs = self._collect(project_id, run)
         outcome = DispatchOutcome(
@@ -652,13 +656,20 @@ class RoundDispatcher:
             # not an error — and saying so is what lets the split path be
             # reached at all.
             return outcome
-        submitted = self.rounds.submit_candidate(
+        candidate_id = str(uuid.uuid4())
+        self._log.record(
+            "candidate.submitted",
+            producer="worker",
+            payload=json.dumps({
+                "runId": run,
+                "taskDefinitionRef": task_ref,
+                "candidateId": candidate_id,
+                "files": {name: f"sha256:{d}" for name, d in outcome.files.items()},
+            }).encode("utf-8"),
             project_id=project_id,
-            round_id=round_id,
-            files=produced,
-            required_checks=(),
+            run_id=run,
         )
-        outcome.candidate_id = getattr(submitted, "candidateId", None) or str(submitted)
+        outcome.candidate_id = candidate_id
         return outcome
 
     def _collect(self, project_id: str, run: str) -> tuple[dict[str, bytes], dict[str, Any]]:
@@ -770,7 +781,6 @@ def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
     """Compose the dispatcher from an assembled Runtime."""
     harness = getattr(runtime, "harness", None)
     return RoundDispatcher(
-        runtime.rounds,
         runtime.spawner_for(project_id),
         runtime.broker,
         runtime.artifacts,
