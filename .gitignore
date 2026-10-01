@@ -5,3 +5,13 @@ __pycache__/
 # uv
 .venv/
 # uv.lock IS committed (pinned reproducibility per TESP 1.1)
+
+# runtime state, not product. The .gitkeep sentinels in artifacts/ and
+# projects/ are gone, so nothing here is tracked. This also matters to the
+# machine: floor_sweep(strong) refuses to reset a tree that git reports as
+# dirty, and `git status --porcelain` counts untracked paths. Without these
+# lines the strong sweep could never succeed on a machine that has ever run a
+# round.
+artifacts/
+events/
+projects/
