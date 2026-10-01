@@ -20,7 +20,7 @@ from typing import Any, Callable, Mapping
 from .artifacts import ArtifactStore
 from .broker import Broker, PoliceTerminationAuthority
 from .definitions import Definitions
-from .decide import Decision, SystemOneExecutor, Unreachable
+from .decide import READS_AS_PROBLEM, Decision, SystemOneExecutor, Unreachable
 from .desk import ProgressDeskOperations, ProjectService
 from .events import EventLog
 from .harness import HarnessConfig, HarnessError, TaskPacket
@@ -255,6 +255,7 @@ class Runtime:
         brief_budget: int = 24_000,
         state_budget: int = 8_000,
         wall_seconds: int = 180,
+        question: str | None = None,
     ) -> Any:
         """Put one role's context in front of its adapter and return the envelope.
 
@@ -316,6 +317,41 @@ class Runtime:
         envelope = self._dispatch(
             project_id, "CLEANING_LAYA", state=state, expecting="distribution",
             brief_budget=0,
+        )
+        if envelope.status != "completed" or "probability" not in envelope.watch:
+            raise Unreachable(
+                envelope.watch.get("reason")
+                or f"decision run ended {envelope.status!r} without a probability"
+            )
+        return Decision(
+            probability=float(envelope.watch["probability"]),
+            threshold=float(envelope.watch.get("threshold", 0.5)),
+            detail=str(envelope.watch.get("detail") or envelope.output),
+        )
+
+    def propose_visp(self, project_id: str, title: str, content: str) -> str:
+        """File what a role proposed as a VISP draft, for a human to sign.
+
+        Not applied, not scheduled, not treated as doctrine. A definition of
+        kind VISP carrying the words, and the owner signs it or does not. That
+        is the whole of how a framework change happens here.
+        """
+        definition = self.definitions.create(
+            kind="VISP",
+            content=("# " + title + "\n\n" + content.strip() + "\n").encode("utf-8"),
+            producer="sharpener",
+        )
+        return f"{definition.id}@{definition.revision}"
+
+    def noul(self, project_id: str, state: str, question: str) -> Decision:
+        """Put one yes/no question to the decision model, get a probability.
+
+        `decide_in_room` is this with the room question already chosen; the
+        boundary needs to ask something else.
+        """
+        envelope = self._dispatch(
+            project_id, "CLEANING_LAYA", state=state, expecting="distribution",
+            brief_budget=0, question=question or READS_AS_PROBLEM,
         )
         if envelope.status != "completed" or "probability" not in envelope.watch:
             raise Unreachable(

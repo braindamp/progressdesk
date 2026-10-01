@@ -194,6 +194,9 @@ class RoundDispatcher:
         sweep: Sweep | None = None,
         cleaner: Cleaner | None = None,
         ask: Callable[..., str] | None = None,
+        ask_noul: Callable[[str, str, str], Any] | None = None,
+        read_brief: Callable[[str], str] | None = None,
+        propose_visp: Callable[[str, str, str], str] | None = None,
         split_task: Callable[[str, str, str], tuple[str, str]] | None = None,
         research_tools: tuple[str, ...] = (),
     ) -> None:
@@ -219,6 +222,9 @@ class RoundDispatcher:
         self.sweep = sweep
         self.cleaner = cleaner
         self._ask_role = ask
+        self._ask_noul = ask_noul
+        self._read_brief = read_brief
+        self._propose_visp = propose_visp
         self._split_task = split_task
 
     # -- the one operation -----------------------------------------------
@@ -293,6 +299,8 @@ class RoundDispatcher:
         # the round look delivered, which is the only thing the debris pass
         # looks at.
         outcome = self._settle(project_id, task_ref, run, envelope, actual_role)
+        if not outcome.delivered:
+            outcome = self._route(project_id, task_ref, outcome, tools, actual_role)
 
         clearance = self._clear(project_id)
         if clearance is not None and not clearance.restartable:
@@ -312,6 +320,98 @@ class RoundDispatcher:
                 ).strip(),
             )
         return outcome
+
+    def _route(
+        self, project_id: str, task_ref: str, outcome: DispatchOutcome,
+        tools: tuple[str, ...], role: str,
+    ) -> DispatchOutcome:
+        """A round that produced nothing: what is it, and what now?
+
+        She reads what the builder said. A builder that reported it could not do
+        the work is a fact about the framework and goes to SHARPENER; work that
+        is merely too big goes to JACK to be halved; anything else is a towel.
+        Two yes/no questions rather than one three-way choice, because a
+        three-way choice on this model returns the same answer whatever the
+        input and whichever order the options are in.
+        """
+        if self._ask_noul is None:
+            return _with(outcome, status="towel", detail="no decision seam")
+        said = outcome.detail or "the builder said nothing and produced nothing."
+        try:
+            if self._ask_noul(
+                project_id, said, "Does this message report that the work could not be done?"
+            ).above:
+                return self._hand_to("SHARPENER", project_id, said, outcome, tools, role)
+            if self._ask_noul(
+                project_id, said, "Is this one piece of work, or two that could each be delivered?"
+            ).above:
+                return self._hand_to("JACK_THE_SPLITTER", project_id, said, outcome)
+        except Exception as exc:  # noqa: BLE001 - an undecided round is a towel
+            return _with(outcome, status="towel", detail=f"not routed: {exc}")
+        return _with(outcome, status="towel", detail="neither an error nor divisible")
+
+    def _hand_to(
+        self, role: str, project_id: str, said: str, outcome: DispatchOutcome,
+        tools: tuple[str, ...] = (), involved: str = "DEXTER",
+    ) -> DispatchOutcome:
+        if self._ask_role is None:
+            return _with(outcome, status="towel", detail=f"no way to reach {role}")
+        if role == "SHARPENER":
+            # A question, not a message. He was shown a builder's words with
+            # nothing asked of him, and did the only defensible thing: decline.
+            # The dispatch facts are in it because they are what turns "it
+            # couldn't" into something to answer -- what it was actually given,
+            # and what it actually left behind.
+            brief = ""
+            if self._read_brief is not None:
+                try:
+                    brief = self._read_brief(involved)
+                except Exception:  # noqa: BLE001 - a missing brief is not a reason to stop
+                    brief = ""
+            said = (
+                "A builder on this project did not deliver its work.\n\n"
+                f"It said:\n{said}\n\n"
+                f"It was given these tools: {', '.join(tools) or 'none at all'}\n"
+                f"It left behind: {', '.join(outcome.files) or 'no files'}\n\n"
+                f"The role it was running as is {involved}.\n\n"
+                "That is the context it was working from, in full:\n\n"
+                f"{brief}\n\n"
+                "What should change in this framework so that the next builder can "
+                "do this work? If you have not seen enough to answer, say that "
+                "instead of guessing."
+            )
+        try:
+            answer = self._ask_role(project_id, role, said)
+        except Exception as exc:  # noqa: BLE001
+            return _with(outcome, status="towel", detail=f"{role} unavailable: {exc}")
+        if role != "SHARPENER":
+            return _with(outcome, status="routed", detail=f"routed to {role}")
+        # A framework fix is proposed, never applied. Whether what he wrote is a
+        # proposal or a refusal is not ours to decide by reading it: she reads it
+        # and answers, the way she answers everything. Filing a refusal as a VISP
+        # is how a towel becomes doctrine, and it is the one thing this path must
+        # not do.
+        try:
+            verdict = self._ask_noul(
+                project_id, answer,
+                "Does this text propose a specific change, or does it decline to answer?",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _with(outcome, status="towel", detail=f"not decided: {exc}")
+        if not verdict.above:
+            return _with(outcome, status="towel", detail=f"SHARPENER did not propose: {answer[:200]}")
+        if self._propose_visp is None:
+            return _with(outcome, status="routed", detail="proposed, no VISP seam")
+        try:
+            ref = self._propose_visp(
+                project_id, "a builder could not do its work", answer
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _with(outcome, status="routed", detail=f"proposed, VISP failed: {exc}")
+        return _with(
+            outcome, status="proposed",
+            detail=f"VISP draft {ref} awaiting signoff",
+        )
 
     # -- helpers ----------------------------------------------------------
     def _clear(self, project_id: str) -> Clearance | None:
@@ -755,5 +855,7 @@ def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
         sweep=runtime.sweep,
         cleaner=runtime.cleaner,
         ask=getattr(runtime, "ask", None),
+        ask_noul=getattr(runtime, "noul", None),
+        propose_visp=getattr(runtime, "propose_visp", None),
         split_task=getattr(runtime, "split_task", None),
     )
