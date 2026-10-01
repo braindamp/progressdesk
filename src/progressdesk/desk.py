@@ -228,22 +228,13 @@ class _ValidatedPlan:
     """
 
     name: str
-    draft: Definition
-
-    @property
-    def draft_ref(self) -> str:
-        return f"{self.draft.id}@{self.draft.revision}"
-
-    @property
-    def content_ref(self) -> str:
-        return self.draft.contentRef
+    draft_ref: str
 
     def to_manifest(self) -> dict[str, Any]:
         return {
             "schemaVersion": PROJECT_PLAN_SCHEMA_VERSION,
             "name": self.name,
-            "draftRevision": self.draft_ref,
-            "specRef": self.content_ref,
+            "specRef": self.draft_ref,
         }
 
 def _canonical_json(value: Any) -> bytes:
@@ -357,7 +348,7 @@ class ProjectService:
                 self._project_locks[project_id] = lock
             return lock
 
-    def create(self, draft_revision: str, *, request_id: str) -> ProjectCreation:
+    def create(self, spec: str, *, request_id: str) -> ProjectCreation:
         """Validate, stage, record, and atomically publish one project.
 
         The exact request id is the idempotency key. A retry returns the original
@@ -365,7 +356,9 @@ class ProjectService:
         directory publication; it never appends a duplicate project.
         """
         request_id = _request_id(request_id)
-        draft_ref = _exact_ref(draft_revision, "draft_revision")
+        if not spec.strip():
+            raise ProjectError("draft_invalid", "a project needs a spec")
+        draft_ref = f"sha256:{self.artifacts.put(spec.encode('utf-8'))}"
         project_id = str(
             uuid.uuid5(
                 uuid.NAMESPACE_URL,
@@ -394,7 +387,7 @@ class ProjectService:
                 event=original,
             )
 
-        plan = self._validate_plan(draft_ref)
+        plan = _ValidatedPlan(name=f"project-{request_id[:8]}", draft_ref=draft_ref)
         created: Event | None = None
         request_owner: tuple[str, str] | None = None
         for event in self.log.read_all():
@@ -441,8 +434,7 @@ class ProjectService:
                 "schemaVersion": PROJECT_PLAN_SCHEMA_VERSION,
                 "projectId": project_id,
                 "requestId": request_id,
-                "draftRevision": plan.draft_ref,
-                "specRef": plan.content_ref,
+                "specRef": plan.draft_ref,
             }
             try:
                 created = self.log.record(
@@ -470,25 +462,6 @@ class ProjectService:
             destination=destination,
             event=created,
         )
-
-    def _validate_plan(self, draft_ref: str) -> _ValidatedPlan:
-        """Is there something here worth building from?
-
-        That is the whole check: a definition at an exact revision, with content
-        in it. It no longer has to be a TESP, and it no longer has nine fields
-        cross-checked against each other. A project is a name and a spec.
-        """
-        definition_id, _, revision = draft_ref.partition("@")
-        draft = self.definitions.get(definition_id, int(revision))
-        try:
-            spec = self.artifacts.get_bytes(draft.contentRef.split(":", 1)[1])
-        except (OSError, IndexError) as exc:
-            raise ProjectError(
-                "draft_invalid", f"draft {draft_ref} has no readable content"
-            ) from exc
-        if not spec.strip():
-            raise ProjectError("draft_invalid", f"draft {draft_ref} is empty")
-        return _ValidatedPlan(name=f"project-{draft.id[:8]}", draft=draft)
 
     def _events_for(self, project_id: str, event_type: str) -> list[Event]:
         return [

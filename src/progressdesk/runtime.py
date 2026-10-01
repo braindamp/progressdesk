@@ -366,8 +366,14 @@ def _definition_signoff(rt: Runtime, cmd: Command) -> Any:
 
 
 def _project_create(rt: Runtime, cmd: Command) -> Any:
+    """A project is a name and a spec. The spec is the text you were given.
+
+    It is no longer a reference to a stored TESP definition, so there is no
+    revision to pin, no definition to create first, and nothing to validate the
+    draft against. The bytes are hashed and kept; the words are the project.
+    """
     return rt.operations.project_create(
-        cmd.require("draft_revision"),
+        str(cmd.require("spec")),
         request_id=str(cmd.require("request_id")),
     ).to_manifest()
 
@@ -375,42 +381,21 @@ def _project_create(rt: Runtime, cmd: Command) -> Any:
 def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
     """Run one round. The only door onto a role.
 
-    A task is a stored definition, so the packet is assembled from the
-    authoritative chain rather than restated by the caller: the round runs what
-    the definition says, or it does not run. Nothing here returns prose.
+    The slice arrives as text and is the whole of what the builder is given. It
+    used to be a reference to a stored Task definition, resolved through the
+    definition chain, which meant nothing could be built until a four-document
+    hierarchy had been stood up around it. The slice is the work.
     """
     project_id = cmd.require("project_id")
-    task_ref = str(cmd.require("task_ref"))
+    slice_text = str(cmd.require("slice"))
 
-    # Callers may name a task either way, and both forms are in circulation: the
-    # store is keyed by bare id, the kernel and the round ledger by the exact
-    # revision ref (§5.1). A door that accepts only one of them is a door people
-    # trip over. The caller's revision is not trusted -- the stored head decides,
-    # so naming a stale revision cannot smuggle one through.
-    try:
-        head = rt.definitions.latest(task_ref.split("@", 1)[0])
-    except Exception as exc:  # noqa: BLE001 - an unknown task is a typed refusal
-        raise CommandError("unknown_task", f"no task definition {task_ref!r}: {exc}") from exc
-
-    try:
-        content = rt.artifacts.get_bytes(head.contentRef.split(":", 1)[1]).decode("utf-8")
-    except (OSError, IndexError, UnicodeDecodeError) as exc:
-        raise CommandError("task_unreadable", f"task {task_ref!r} has no readable content: {exc}") from exc
-
-    # Two forms, and they are not interchangeable. The store is keyed by bare
-    # id; the kernel and the round ledger are keyed by the exact revision ref
-    # (§5.1). Passing the bare id to the kernel is a typed rejection, which is
-    # exactly what it did the first time.
-    exact = f"{head.id}@{head.revision}"
     packet = TaskPacket(
-        task_id=head.id,
-        task_revision=head.revision,
-        # The nearest declared parent stands in for the milestone. A task with no
-        # parent is its own milestone, which is honest rather than invented.
-        milestone_id=(head.parentRefs[0] if head.parentRefs else head.id),
-        parent_definition_refs=head.parentRefs,
-        outcome=content.strip(),
-        scope=content.strip(),
+        task_id=f"{project_id}:{len(slice_text)}",
+        task_revision=1,
+        milestone_id=project_id,
+        parent_definition_refs=(),
+        outcome=slice_text,
+        scope=slice_text,
         input_artifact_refs=(),
         interfaces=(),
         allowed_tool_refs=(),
@@ -422,23 +407,19 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
 
     outcome = dispatcher_for(rt, project_id).dispatch(
         project_id=project_id,
-        task_ref=exact,
+        task_ref=slice_text[:80],
         packet=packet,
     )
     return {
         "runId": outcome.run_id,
         "projectId": outcome.project_id,
-        "taskRef": outcome.task_ref,
         "status": outcome.status,
         "delivered": outcome.delivered,
         "candidateId": outcome.candidate_id,
         "wallMs": outcome.wall_ms,
         "nudges": outcome.nudges,
-        "verdict": outcome.verdict,
         "detail": outcome.detail,
     }
-
-
 
 def _project_events(rt: Runtime, cmd: Command) -> Any:
     events = rt.log.read_all()

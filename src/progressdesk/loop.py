@@ -175,24 +175,6 @@ def _says_police(text: str) -> bool:
     return False
 
 
-def _says_splittable(text: str) -> bool:
-    """Her one question, in the one contract: can this be halved into two?"""
-    return parse_laya(text, frozenset({"yes", "no"}))[0] == "yes"
-
-
-def _halves(verdict: str) -> list[str]:
-    """JACK answers with exactly two pieces and nothing else."""
-    text = (verdict or "").strip()
-    if text.startswith("{"):
-        try:
-            payload = json.loads(text)
-        except ValueError:
-            return []
-        halves = payload.get("halves") or []
-        return [h for h in halves if isinstance(h, str) and h.strip()][:2]
-    return []
-
-
 def _with(outcome: "DispatchOutcome", **changes: Any) -> "DispatchOutcome":
     import dataclasses
 
@@ -312,15 +294,7 @@ class RoundDispatcher:
                 run_id=run, project_id=project_id, task_ref=task_ref,
                 detail=f"room not cleared: {clearance.decision} {clearance.rationale}".strip(),
             )
-        outcome = self._settle(project_id, task_ref, run, envelope, actual_role)
-        if not outcome.delivered:
-            # Any outcome that did not deliver halves the task. Laya answers the
-            # one question that matters — is there two deliverable things in here
-            # — and JACK acts on it. If she says no, that is the towel: there is
-            # no retry and no counter, because a task too small to halve has
-            # nothing left to try.
-            outcome = self._split(project_id, task_ref, packet, outcome)
-        return outcome
+        return self._settle(project_id, task_ref, run, envelope, actual_role)
 
     # -- helpers ----------------------------------------------------------
     def _clear(self, project_id: str) -> Clearance | None:
@@ -590,40 +564,6 @@ class RoundDispatcher:
         if _says_police(answer):
             return self._police(project_id, _first_line(answer))
         return _with(outcome, status="cleaned", detail=_first_line(answer))
-
-    def _split(
-        self, project_id: str, task_ref: str, packet: Any, outcome: DispatchOutcome
-    ) -> DispatchOutcome:
-        """A task that did not deliver gets halved, or it gets a towel.
-
-        Laya judges from the task, because the only question is its shape and
-        she is the one reading it. JACK halves without judging. No counters, no
-        depth limit, no retry: her no is terminal.
-        """
-        if self._ask_role is None:
-            return outcome
-        task = getattr(packet, "outcome", "") or task_ref
-        context = "\n".join([
-            f"task: {task}", f"outcome: {outcome.status}", outcome.detail,
-        ])[:6_000]
-        try:
-            answer = self._ask_role(project_id, "CLEANING_LAYA", context)
-        except Exception as exc:  # noqa: BLE001 - an unanswered split is a towel
-            return _with(outcome, status="towel", detail=f"split not asked: {exc}")
-
-        if not _says_splittable(answer):
-            return _with(outcome, status="towel", detail=_first_line(answer))
-        try:
-            verdict = self._ask_role(project_id, "JACK_THE_SPLITTER", task)
-        except Exception as exc:  # noqa: BLE001
-            return _with(outcome, status="towel", detail=f"split failed: {exc}")
-        halves = _halves(verdict)
-        if not halves:
-            return _with(outcome, status="towel", detail="split returned no two halves")
-        if self._split_task is not None:
-            a_id, b_id = self._split_task(task_ref, halves[0], halves[1])  # halves[0] runs now
-            return _with(outcome, status="split", detail=f"a={a_id} (now) b={b_id} (after)", halves=halves)
-        return _with(outcome, status="split", detail=halves[0][:200], halves=halves)
 
     def _settle(
         self, project_id: str, task_ref: str, run: str,
