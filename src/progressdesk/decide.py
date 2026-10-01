@@ -23,12 +23,22 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
-__all__ = ["Decision", "Unreachable", "endpoint", "noul", "reads_as_problem"]
+from .spawn import ResultEnvelope, SpawnError, SpawnRequest
+
+__all__ = [
+    "Decision",
+    "SystemOneExecutor",
+    "Unreachable",
+    "endpoint",
+    "noul",
+    "reads_as_problem",
+]
 
 # Where the decision service listens. Overridable so the same product can point
 # at a different endpoint without being rebuilt.
@@ -67,6 +77,9 @@ class Decision:
 
     probability: float
     detail: str = ""
+    # Carried rather than assumed, so a consumer never re-derives the boundary
+    # from a module constant that the adapter may not be using.
+    threshold: float = THRESHOLD
 
     @property
     def answered(self) -> bool:
@@ -74,18 +87,24 @@ class Decision:
 
     @property
     def above(self) -> bool:
-        """Above the measured separation, not merely above even odds."""
-        return self.probability > THRESHOLD
+        """Above the separation that was measured, not merely above even odds."""
+        return self.probability > self.threshold
 
     def to_dict(self) -> dict[str, Any]:
-        return {"probability": round(self.probability, 4), "detail": self.detail}
+        return {
+            "probability": round(self.probability, 4),
+            "threshold": self.threshold,
+            "above": self.above,
+            "detail": self.detail,
+        }
 
 
 def endpoint() -> str:
     return ENDPOINT
 
 
-def noul(state: str, instructions: str, *, name: str = "decision") -> Decision:
+def noul(state: str, instructions: str, *, name: str = "decision",
+         endpoint_url: str | None = None) -> Decision:
     """Ask one yes/no question about a state. One forward pass, no generation.
 
     Raises `Unreachable` rather than returning a default. A caller that cannot
@@ -97,7 +116,7 @@ def noul(state: str, instructions: str, *, name: str = "decision") -> Decision:
         "questions": {name: {"type": "noul", "instructions": instructions}},
     }).encode("utf-8")
     request = urllib.request.Request(
-        ENDPOINT,
+        endpoint_url or ENDPOINT,
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -124,3 +143,108 @@ def noul(state: str, instructions: str, *, name: str = "decision") -> Decision:
 def reads_as_problem(state: str) -> Decision:
     """The room question. True means something here is not ours to clear."""
     return noul(state, READS_AS_PROBLEM, name="has_problem")
+
+
+class SystemOneExecutor:
+    """The decision model, as an adapter like any other.
+
+    Every other role in this workshop is reached through the same seam: a
+    `SpawnRequest` goes to `Spawner.spawn`, which looks the adapter up by kind
+    in the registry. This one is registered under `systemone` and therefore
+    needs no special path of its own — no callable threaded through the
+    Runtime, no role quietly missing from the role table, no second way in.
+
+    A decision model has no brief. It is not asked to obey a contract, because
+    it cannot generate one; it is handed a state and a question and it answers
+    with a distribution. So the context pack holds the state and nothing else,
+    and the question belongs to the adapter rather than to a prompt.
+
+    The answer is returned twice, deliberately. `output` is the canonical line a
+    human reads in the journal. `watch` carries the probability as a value, so
+    the consumer reads a number and never re-parses the line. That is the whole
+    point of the seam: a verdict that has to survive a regex is a verdict that
+    can be lost.
+    """
+
+    kind = "systemone"
+    # A decision model reads text and returns a distribution. It holds no
+    # process, opens no file and starts nothing, so the declared sandbox is the
+    # honest one and the request must say the same thing.
+    sandbox = "none"
+    # It cannot produce words, and saying so here is what lets the seam refuse a
+    # caller who asked for some instead of formatting a number as a sentence.
+    answers_in = "distribution"
+
+    def __init__(
+        self,
+        *,
+        question: str = READS_AS_PROBLEM,
+        threshold: float = THRESHOLD,
+        endpoint_url: str | None = None,
+    ) -> None:
+        self.question = question
+        self.threshold = threshold
+        self._endpoint = endpoint_url or ENDPOINT
+
+    # -- the Executor contract -------------------------------------------
+    def spawn(self, req: SpawnRequest) -> ResultEnvelope:
+        """One question, one forward pass. Never raises for a run outcome."""
+        state = self._state(req)
+        began = time.monotonic()
+        try:
+            decision = noul(state, self.question, endpoint_url=self._endpoint)
+        except Unreachable as exc:
+            # A service that is not answering is an infrastructure fault, not a
+            # failed decision and not a wrong one. The status says so, and the
+            # consumer can tell this apart from a low probability, which is the
+            # distinction the whole seam exists to preserve.
+            return ResultEnvelope(
+                run_id=req.run_id,
+                kind=self.kind,
+                sandbox=self.sandbox,
+                status="infra-fault",
+                detail=str(exc),
+                wall_ms=int((time.monotonic() - began) * 1000),
+                watch={"question": self.question, "unreachable": True, "reason": str(exc)},
+            )
+        return ResultEnvelope(
+            run_id=req.run_id,
+            kind=self.kind,
+            sandbox=self.sandbox,
+            status="completed",
+            output=(
+                f"decision: {'yes' if decision.above else 'no'} "
+                f"(p={decision.probability:.3f}, threshold={self.threshold:g})"
+            ),
+            wall_ms=int((time.monotonic() - began) * 1000),
+            watch={
+                "question": self.question,
+                "probability": decision.probability,
+                "threshold": self.threshold,
+                "above": decision.above,
+                "detail": decision.detail,
+            },
+        )
+
+    def cancel(self, run_id: str) -> None:
+        """Nothing to cancel. One forward pass has no session to lose.
+
+        Declared rather than omitted: a role that cannot be cancelled is not an
+        adapter this framework can use, and this one genuinely has nothing
+        running, so the honest implementation is empty.
+        """
+
+    # -- helpers ----------------------------------------------------------
+    @staticmethod
+    def _state(req: SpawnRequest) -> str:
+        """The state is the last section of the pack.
+
+        A context pack is an ordered contract and nothing is appended to it, so
+        "the last section" is a position and not a name. For this adapter the
+        pack holds one thing: what is being decided about. A brief ahead of it
+        would be instructions no decision model can act on.
+        """
+        sections = req.context_pack.sections
+        if not sections:
+            raise SpawnError("spawn_invalid", "a decision needs a state to decide about")
+        return sections[-1].text

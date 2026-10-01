@@ -29,7 +29,7 @@ from typing import Any
 
 from .broker import Broker, BrokerError, PlannedTransport, ProjectRun
 from .encoding import EncodingFault, argv_for, decode
-from .spawn import ResultEnvelope, SpawnError, SpawnRequest
+from .spawn import ANSWERS, ResultEnvelope, SpawnError, SpawnRequest
 
 __all__ = ["CommandTransport", "ParsedRun", "pi_argv", "pi_jsonl", "pi_transport"]
 
@@ -170,11 +170,20 @@ class CommandTransport:
         *,
         project_id: str,
         sandbox: str = "none",
+        answers_in: str = "prose",
         termination_grace_ms: int = 5000,
         runtime_family: str = "unknown",
     ) -> None:
+        if answers_in not in ANSWERS:
+            raise SpawnError(
+                "adapter_invalid", f"answers_in must be one of {ANSWERS}, got {answers_in!r}"
+            )
         self.kind = kind
         self.sandbox = sandbox
+        # An agent harness is asked a question and answers in words. Declared
+        # so the seam can refuse a caller that wanted a number rather than hand
+        # back prose and call it an answer.
+        self.answers_in = answers_in
         self._broker = broker
         self._terminator = terminator
         self._build_argv = build_argv

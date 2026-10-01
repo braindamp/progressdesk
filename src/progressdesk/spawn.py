@@ -55,6 +55,18 @@ __all__ = [
 # knows about models: a role is a job, not a model, and nothing here says
 # anything about which model fills it or what that model is like.
 SANDBOXES = ("none", "workspace", "read-only")
+# What an adapter produces when it is asked something.
+#
+# `prose` is words, and a caller can read them however badly. `distribution` is
+# a calibrated answer to a typed question, and there is nothing in it to read
+# loosely. The two are not interchangeable and a caller that wants one must not
+# be handed the other, so the adapter declares which it is and the seam refuses
+# the mismatch instead of formatting a number as though it were a sentence.
+#
+# This is the difference between a contract and a request. A role told in prose
+# to "answer with one value and nothing else" is being asked; a role whose
+# adapter cannot emit prose at all is bound.
+ANSWERS = ("prose", "distribution")
 # §10.2a. One line: a provider glitch must never cost a builder its session.
 STATUSES = ("completed", "interrupted", "nudge-storm", "infra-fault", "cancelled")
 
@@ -295,6 +307,7 @@ class Executor(Protocol):
 
     kind: str
     sandbox: str
+    answers_in: str  # one of ANSWERS: "prose" or "distribution"
 
     def spawn(self, req: SpawnRequest) -> ResultEnvelope:
         """Run one dispatch and report. Never raises for a run outcome."""
@@ -341,6 +354,11 @@ class ExecutorRegistry:
             raise SpawnError("adapter_duplicate", f"{adapter.kind!r} is already registered")
         if not hasattr(adapter, "cancel"):
             raise SpawnError("adapter_invalid", "an adapter that cannot be cancelled is not used")
+        if getattr(adapter, "answers_in", None) not in ANSWERS:
+            raise SpawnError(
+                "adapter_invalid",
+                f"adapter {adapter.kind!r} must declare answers_in as one of {ANSWERS}",
+            )
         self._adapters[adapter.kind] = adapter
 
     def kinds(self) -> tuple[str, ...]:
@@ -491,6 +509,9 @@ class ManualExecutor:
 
     kind = "manual"
     sandbox = "none"
+    # A human types whatever they type. There is no shape to enforce and none is
+    # claimed; the callers that need a distribution must not come here.
+    answers_in = "prose"
 
     def __init__(self, workspace: Path, *, answer: str | None = None) -> None:
         self.workspace = Path(workspace)

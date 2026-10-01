@@ -20,7 +20,7 @@ from typing import Any, Callable, Mapping
 from .artifacts import ArtifactStore
 from .broker import Broker, PoliceTerminationAuthority
 from .definitions import Definitions
-from .decide import reads_as_problem
+from .decide import Decision, SystemOneExecutor, Unreachable
 from .checkpoints import CheckpointManager
 from .desk import ProgressDeskOperations, ProjectService
 from .events import EventLog
@@ -157,14 +157,18 @@ class Runtime:
         police = PoliceService(log, artifacts, broker, authority=authority)
         projects = ProjectService(root / "projects", log, artifacts, definitions)
         sweep = Sweep(log, artifacts, root)
-        # CLEANING_LAYA is a decision model, not a language model. She is asked
-        # one typed question over HTTP and answers with a probability, so she
-        # gets the seam rather than a brief and a provider.
-        cleaner = Cleaner(sweep, reads_as_problem)
         operations = ProgressDeskOperations(definitions, projects)
         planning = PlanningSession(log, artifacts)
         lab = LabReferralService(log, artifacts)
-        return cls(
+        # CLEANING_LAYA is a decision model, not a language model, so she is not
+        # a brief and a provider. She is an adapter on the same seam as every
+        # other role, resolved by transport from the role table like the rest.
+        #
+        # `cleaner` and `ask` are bound after construction because both need
+        # this instance. Asking a role used to build a second Runtime to get at
+        # one, which meant a second event log, a second kernel and a second read
+        # of the config on every single question.
+        runtime = cls(
             root=root,
             artifacts=artifacts,
             log=log,
@@ -181,12 +185,15 @@ class Runtime:
             simulated_lab=SimulatedLabReferral(log, artifacts),
             harness=_load_harness(root),
             sweep=sweep,
-            cleaner=cleaner,
-            ask=lambda pid, role, ctx: ask_role(root, pid, role, ctx),
+            cleaner=None,
+            ask=None,
             split_task=split_task(definitions, log),
             limits=limits or RoundLimits(),
             _write_lock=threading.Lock(),
         )
+        runtime.cleaner = Cleaner(sweep, runtime.decide_in_room)
+        runtime.ask = runtime.ask_role
+        return runtime
 
     # -- the spawn seam ---------------------------------------------------
     def spawner_for(self, project_id: str, *, require: tuple[str, ...] = ()) -> Spawner:
@@ -214,6 +221,11 @@ class Runtime:
                     )
                 except SpawnError:
                     pass  # manual is first-class and is the fallback by design
+                # The decision model is registered beside the others, not wired
+                # around them. A service that is down is an infra-fault when a
+                # verdict is asked for, which the caller needs to see; it is not
+                # a missing adapter to be shielded from.
+                registry.register(SystemOneExecutor())
                 spawner = Spawner(registry, project_id=project_id)
                 self._spawners[project_id] = spawner
             missing = [kind for kind in require if kind not in spawner.registry.kinds()]
@@ -223,6 +235,115 @@ class Runtime:
                     f"no adapter for {missing}; registered: {list(spawner.registry.kinds())}",
                 )
             return spawner
+
+    # -- asking a role ----------------------------------------------------
+    def _adapter(self, project_id: str, role: str, *, expecting: str) -> tuple[Any, Any]:
+        """Resolve a role to its adapter, refusing a caller that wants the wrong thing.
+
+        `expecting` is what the caller is going to do with the answer: read
+        words, or read a probability. An adapter that cannot produce that is
+        refused here rather than accommodated, because the failure this
+        prevents is a number formatted as a sentence and handed back as prose.
+        """
+        if self.harness is None:
+            raise RuntimeError("no role table configured")
+        definition = self.harness.definition_for(role)
+        registry = self.spawner_for(project_id).registry
+        adapter = registry.get(definition.transport)
+        if adapter.answers_in != expecting:
+            raise SpawnError(
+                "answers_mismatch",
+                f"role {role!r} is reached by {definition.transport!r}, which answers in "
+                f"{adapter.answers_in!r}; this call needs {expecting!r}. Asking a role for "
+                f"words it cannot produce, or a probability it cannot give, is a category "
+                f"error and is refused rather than approximated.",
+            )
+        return adapter, definition
+
+    def _dispatch(
+        self,
+        project_id: str,
+        role: str,
+        *,
+        state: str,
+        expecting: str,
+        cast: bool = False,
+        tools: tuple[str, ...] = (),
+        brief_budget: int = 24_000,
+        state_budget: int = 8_000,
+        wall_seconds: int = 180,
+    ) -> Any:
+        """Put one role's context in front of its adapter and return the envelope.
+
+        The adapter is not chosen here. It comes from the role table, so a role
+        served by a decision service and a role served by a gateway are reached
+        the same way and differ only in configuration.
+        """
+        adapter, definition = self._adapter(project_id, role, expecting=expecting)
+        sections = []
+        if brief_budget:
+            # A brief is instructions. A decision model is not instructed, so it
+            # is not given one; asking it to obey prose is the mistake this seam
+            # was built to remove.
+            sections.append(ContextSection("your brief", read_brief(role), brief_budget))
+        if cast:
+            sections.append(ContextSection("the other roles", _cast_briefs(role), 40_000))
+        sections.append(ContextSection("what you are looking at", state, state_budget))
+        request = SpawnRequest(
+            run_id=f"ask-{role.lower()}",
+            task_ref=f"{project_id}:{role}",
+            role=role,
+            context_pack=ContextPack(tuple(sections)),
+            tool_allowlist=tools,
+            budget=Budget(wall_seconds=wall_seconds),
+            model_spec=ModelSpec(provider=definition.provider, model=definition.model_id),
+            # The adapter's own declaration is what is recorded; asking for
+            # anything else is refused rather than quietly downgraded.
+            sandbox=adapter.sandbox,
+        )
+        return self.spawner_for(project_id).spawn(request, kind=definition.transport)
+
+    def ask_role(
+        self,
+        project_id: str,
+        role: str,
+        context: str,
+        *,
+        cast: bool = False,
+        tools: tuple[str, ...] = (),
+    ) -> str:
+        """Ask a role that answers in words, and return what it said.
+
+        Refused for a role reached by a decision model. That role has no words;
+        it has a distribution, and formatting one as a sentence and calling it
+        an answer is precisely the substitution this seam exists to stop. Use
+        `decide_in_room`, or read the envelope.
+        """
+        return self._dispatch(
+            project_id, role, state=context, expecting="prose", cast=cast, tools=tools
+        ).output or ""
+
+    def decide_in_room(self, project_id: str, state: str) -> Decision:
+        """CLEANING_LAYA's answer to one room, as a value.
+
+        Raises `Unreachable` when the decision service did not answer, so the
+        caller can hold "no" and "nobody answered" apart. A dead service must
+        never read as a clean room.
+        """
+        envelope = self._dispatch(
+            project_id, "CLEANING_LAYA", state=state, expecting="distribution",
+            brief_budget=0,
+        )
+        if envelope.status != "completed" or "probability" not in envelope.watch:
+            raise Unreachable(
+                envelope.watch.get("reason")
+                or f"decision run ended {envelope.status!r} without a probability"
+            )
+        return Decision(
+            probability=float(envelope.watch["probability"]),
+            threshold=float(envelope.watch.get("threshold", 0.5)),
+            detail=str(envelope.watch.get("detail") or envelope.output),
+        )
 
     # -- the one door ----------------------------------------------------
     def route(self, cmd: Command) -> Any:
@@ -437,6 +558,22 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
 AGENTS = Path(__file__).resolve().parent / "agents"
 
 
+def read_brief(role: str) -> str:
+    """One role's brief, as text.
+
+    Named rather than inlined because two callers need it and because a role
+    with no brief on disk is a configuration error worth naming plainly, not an
+    empty section that quietly reaches a model as no context at all.
+    """
+    path = AGENTS / f"{role}.md"
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HarnessError(
+            "brief_missing", f"no brief for role {role!r} at {path.name}: {exc}"
+        ) from exc
+
+
 def _cast_briefs(exclude: str) -> str:
     """Every other role's brief, as one section.
 
@@ -454,34 +591,15 @@ def _cast_briefs(exclude: str) -> str:
 
 def ask_role(root: Path, project_id: str, role: str, context: str, *, cast: bool = False,
              tools: tuple[str, ...] = ()) -> str:
-    """Put a role's brief and some context in front of the model; return its answer.
+    """Ask a role from outside a Runtime, for a caller that has none.
 
-    The role gets no tools unless the caller grants them — every role but
-    SHARPENER at the end of a project passes none. It reads and it says, and
-    the caller acts on what it said, which is what keeps a verdict from being
-    mistaken for a result.
+    A thin wrapper. Everything it used to do — building a Runtime, resolving a
+    role, choosing an adapter, assembling the pack — now lives on Runtime, so
+    this path and the one inside a running workshop cannot drift apart.
     """
-    root = Path(root)
-    runtime = Runtime.create(root)
-    harness = runtime.harness
-    if harness is None:
-        raise RuntimeError("no role table configured")
-    provider, model = harness.for_role(role)
-    request = SpawnRequest(
-        run_id=f"ask-{role.lower()}",
-        task_ref=f"{project_id}:{role}",
-        role=role,
-        context_pack=ContextPack((
-            ContextSection("your brief", (AGENTS / f"{role}.md").read_text(encoding="utf-8"), 24_000),
-            *((ContextSection("the other roles", _cast_briefs(role), 40_000),) if cast else ()),
-            ContextSection("what you are looking at", context, 8_000),
-        )),
-        tool_allowlist=tools,
-        budget=Budget(wall_seconds=180),
-        model_spec=ModelSpec(provider=provider, model=model),
-        sandbox="none",
+    return Runtime.create(Path(root)).ask_role(
+        project_id, role, context, cast=cast, tools=tools
     )
-    return runtime.spawner_for(project_id).spawn(request, kind="pi").output or ""
 
 
 def split_task(definitions: Definitions, log: EventLog):  # noqa: ARG001 - one log, one Definitions

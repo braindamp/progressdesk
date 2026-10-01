@@ -452,7 +452,11 @@ class Cleaner:
     decision is `no verdict`, which is not a yes, exactly as before.
     """
 
-    def __init__(self, sweep: Sweep, decide: Callable[[str], Any] | None = None) -> None:
+    def __init__(
+        self,
+        sweep: Sweep,
+        decide: Callable[[str, str], Any] | None = None,
+    ) -> None:
         self.sweep = sweep
         self._decide = decide
 
@@ -463,7 +467,7 @@ class Cleaner:
             verdict, rationale = "no verdict", "no decision seam configured"
         else:
             try:
-                decision = self._decide(describe(report))
+                decision = self._decide(project_id, describe(report))
                 probability = decision.probability
                 verdict = "needs SCHOTTY" if decision.above else "restartable"
                 rationale = decision.detail

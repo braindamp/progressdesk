@@ -142,6 +142,23 @@ class HarnessConfig:
         definition = self.models[self.roles[role]]
         return definition.provider, definition.model_id
 
+    def definition_for(self, role: str) -> ModelDefinition:
+        """The whole definition, including which adapter reaches it.
+
+        `for_role` answers "which model" and drops the transport, which left the
+        one field that says *how the role is reached* unreadable by anything. A
+        role served by a decision service over `/v1/systemone` and a role served
+        by a gateway are the same shape of thing and are dispatched through the
+        same seam; the difference is configuration, not a special case in code.
+        """
+        if role not in self.roles:
+            raise HarnessError("unknown_role", f"no model configured for role {role!r}")
+        return self.models[self.roles[role]]
+
+    def transport_for(self, role: str) -> str:
+        """The adapter kind that reaches this role."""
+        return self.definition_for(role).transport
+
     @classmethod
     def from_dict(cls, value: Any) -> "HarnessConfig":
         if not isinstance(value, Mapping):
