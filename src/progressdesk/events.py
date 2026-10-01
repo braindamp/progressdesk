@@ -1,7 +1,16 @@
 """Event envelope, type registry, and single-writer append log (TESP §4).
 
 M10 events.py. Envelope fields exactly §4.2: schemaVersion, id, sequence, type,
-projectId, runId, producer, causeId, timestamp, payloadRef. Workshop-level events
+projectId, runId, producer, causeId, timestamp, taskRef, payloadRef.
+
+`taskRef` is what the event is about, in the same way `projectId` is which project.
+It belongs beside those rather than inside a body: the round ledger asks "which
+task was this round for?" on every read, and a structural fact read off a
+first-class field is a grep rather than a second file fetch.
+
+It is absent rather than null when unset, so a line written before this field
+existed still parses. That is not a compatibility shim -- there is no branch for
+the old shape anywhere -- it is the same treatment `runId` and `causeId` get.
 may omit project/run identity; the control host assigns sequence, id, timestamp,
 and producer identity from the authenticated internal caller — a submitted
 producer string never grants authority (§4.2). Here `record()` is the control
@@ -408,6 +417,7 @@ class Event:
     producer: str
     causeId: str | None
     timestamp: str
+    taskRef: str | None
     payloadRef: str | None
 
     def validate(self) -> None:
@@ -467,6 +477,7 @@ def event_from_dict(data: Any) -> Event:
             producer=data["producer"],
             causeId=data.get("causeId"),
             timestamp=data["timestamp"],
+            taskRef=data.get("taskRef"),
             payloadRef=data.get("payloadRef"),
         )
     except TypeError as exc:
@@ -597,6 +608,7 @@ class EventLog:
         producer: str,
         payload: bytes | None = None,
         project_id: str | None = None,
+        task_ref: str | None = None,
         run_id: str | None = None,
         cause_id: str | None = None,
     ) -> Event:
@@ -620,6 +632,7 @@ class EventLog:
             producer=producer,
             causeId=cause_id,
             timestamp=utc_now(),
+            taskRef=task_ref,
             payloadRef=payload_ref,
         )
         event.validate()
@@ -696,6 +709,7 @@ class EventLog:
         producer: str,
         payload: bytes | None = None,
         project_id: str | None = None,
+        task_ref: str | None = None,
         run_id: str | None = None,
         cause_id: str | None = None,
     ) -> Event:

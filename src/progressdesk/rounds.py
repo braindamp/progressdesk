@@ -492,6 +492,7 @@ class RalphRoundService:
             payload=_canonical(payload),
             project_id=project_id,
             run_id=run_id,
+            task_ref=task_ref,
         )
         return round_id
 
@@ -499,19 +500,14 @@ class RalphRoundService:
         self, project_id: str, task_ref: str, run_id: str | None, reason: str
     ) -> None:
         for event in self._events(project_id, "round.exhausted"):
-            if self._read_payload(event).get("taskDefinitionRef") == task_ref:
+            if event.taskRef == task_ref:
                 return
         self.log.record(
             "round.exhausted",
             producer="manager",
-            payload=_canonical(
-                {
-                    "schemaVersion": ROUND_SCHEMA_VERSION,
-                    "taskDefinitionRef": task_ref,
-                    "reason": reason,
-                }
-            ),
+            payload=_canonical({"reason": reason}),
             project_id=project_id,
+            task_ref=task_ref,
             run_id=run_id,
         )
 
@@ -610,7 +606,6 @@ class RalphRoundService:
             producer="worker",
             payload=_canonical(
                 {
-                    "schemaVersion": ROUND_SCHEMA_VERSION,
                     "roundId": round_id,
                     "taskId": manifest.task_id,
                     "candidateId": manifest.candidate_id,
@@ -671,6 +666,7 @@ class RalphRoundService:
             producer="qa",
             payload=_canonical(finding.to_dict()),
             project_id=project_id,
+            task_ref=view.task_ref,
         )
         return finding
 
@@ -723,15 +719,13 @@ class RalphRoundService:
             producer="manager",
             payload=_canonical(
                 {
-                    "schemaVersion": ROUND_SCHEMA_VERSION,
                     "roundId": round_id,
-                    "taskDefinitionRef": view.task_ref,
                     "candidateId": candidate_id,
                     "findingId": finding_id,
-                    "attempt": view.attempt,
                 }
             ),
             project_id=project_id,
+            task_ref=view.task_ref,
         )
 
     def fail_round(
@@ -751,17 +745,22 @@ class RalphRoundService:
             producer="manager",
             payload=_canonical(
                 {
-                    "schemaVersion": ROUND_SCHEMA_VERSION,
                     "roundId": round_id,
                     "reason": reason,
                     "evidenceRefs": list(evidence_refs),
                 }
             ),
             project_id=project_id,
+            task_ref=view.task_ref,
         )
 
     def accepted_for_task(self, project_id: str, task_ref: str) -> bool:
+        """Is this task accepted? A field on the line, not a body to load.
+
+        This is asked on every milestone gate run and every status projection, so
+        it is the one read that had to stop touching the artifact store.
+        """
         return any(
-            self._read_payload(event).get("taskDefinitionRef") == task_ref
+            event.taskRef == task_ref
             for event in self._events(project_id, "round.accepted")
         )

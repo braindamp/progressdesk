@@ -720,7 +720,6 @@ def raise_red_light(rt: "Runtime", project_id: str, reason: str) -> dict[str, An
         "recovery.blocked",
         producer="manager",
         payload=json.dumps({
-            "schemaVersion": 1,
             "projectId": project_id,
             "reason": reason,
             "raisedBy": "SCHOTTY towel",

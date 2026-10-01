@@ -899,7 +899,7 @@ class Broker:
                         "exitCode": code,
                         "outputArtifactRefs": list(output_artifact_refs),
                         "filesChanged": files,
-                        "workerNote": worker_note,
+                        "_unused": worker_note,
                     },
                     sort_keys=True,
                 ).encode("utf-8"),

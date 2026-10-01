@@ -62,7 +62,6 @@ class ResearchFinding:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schemaVersion": 1,
             "sourceProblemRef": self.source_problem_ref,
             "decisionQuestion": self.decision_question,
             "evidenceRefs": list(self.evidence_refs),
@@ -120,8 +119,7 @@ class ResearchService:
             producer="sharpener",
             payload=json.dumps(
                 {
-                    "schemaVersion": 1,
-                    "vispRef": f"{visp.id}@{visp.revision}",
+                            "vispRef": f"{visp.id}@{visp.revision}",
                     "finding": finding.to_dict(),
                     "humanSignoffRequired": True,
                     "planningLlmMustDetermineLabNeed": True,

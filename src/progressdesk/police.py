@@ -243,7 +243,6 @@ class PoliceService:
             self._closed_projects.add(project_id)
             abort_id = str(uuid.uuid4())
             payload = {
-                "schemaVersion": 1,
                 "abortId": abort_id,
                 "projectId": project_id,
                 "classification": classification.value,
@@ -263,8 +262,7 @@ class PoliceService:
                         producer="police",
                         payload=json.dumps(
                             {
-                                "schemaVersion": 1,
-                                "roundId": round_id,
+                                            "roundId": round_id,
                                 "taskDefinitionRef": task_ref,
                                 "reason": reason,
                                 "classification": classification.value,
@@ -298,8 +296,7 @@ class PoliceService:
                 self._record_or_capture(
                     "termination.confirmed",
                     {
-                        "schemaVersion": 1,
-                        "abortId": abort_id,
+                            "abortId": abort_id,
                         "projectId": project_id,
                         "processIds": [run.identity.processId for run in runs],
                         "activeProcessCount": 0,
@@ -310,8 +307,7 @@ class PoliceService:
                 self._record_or_capture(
                     "termination.unresolved",
                     {
-                        "schemaVersion": 1,
-                        "abortId": abort_id,
+                            "abortId": abort_id,
                         "projectId": project_id,
                         "processIds": [run.identity.processId for run in runs],
                         "error": termination_error,
@@ -337,8 +333,7 @@ class PoliceService:
                 self._record_or_capture(
                     "recovery.ready",
                     {
-                        "schemaVersion": 1,
-                        "abortId": abort_id,
+                            "abortId": abort_id,
                         "projectId": project_id,
                         "recoveryResult": result,
                     },
@@ -348,8 +343,7 @@ class PoliceService:
                 self._record_or_capture(
                     "recovery.blocked",
                     {
-                        "schemaVersion": 1,
-                        "abortId": abort_id,
+                            "abortId": abort_id,
                         "projectId": project_id,
                         "reason": recovery_error,
                     },
@@ -359,8 +353,7 @@ class PoliceService:
                 self._record_or_capture(
                     "recovery.blocked",
                     {
-                        "schemaVersion": 1,
-                        "abortId": abort_id,
+                            "abortId": abort_id,
                         "projectId": project_id,
                         "reason": termination_error,
                     },
