@@ -164,7 +164,6 @@ _GATE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
-_ROOT_KINDS = frozenset({"VISP", "Requirements", "FUSP"})
 
 
 class ProjectError(ValueError):
@@ -183,6 +182,15 @@ class ProjectCreation:
     draftRevision: str
     destination: Path
     event: Event
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {
+            "projectId": self.projectId,
+            "requestId": self.requestId,
+            "draftRevision": self.draftRevision,
+            "destination": str(self.destination),
+            "createdEventId": self.event.id,
+        }
 
 
 @dataclass(frozen=True)
@@ -209,66 +217,34 @@ class GoRecord:
 
 @dataclass(frozen=True)
 class _ValidatedPlan:
+    """A project is a name and a spec.
+
+    It used to be nine fields deep: a task list, a dependency DAG, a model per
+    task, gates with milestone bindings, a signoff policy and decision ports --
+    validated against each other, because a plan is a structure and structures
+    need checking. But the TESP is a document, and a document is checked by
+    being readable. Everything here that is not the name or the spec was
+    bookkeeping for a structure the product does not have.
+    """
+
     name: str
     draft: Definition
-    visp: Definition
-    fusp: Definition
-    milestones: tuple[Definition, ...]
-    tasks: tuple[Definition, ...]
-    task_dependencies: dict[str, tuple[str, ...]]
-    assignments: dict[str, dict[str, Any]]
-    gates: tuple[dict[str, Any], ...]
-    required_milestones: tuple[str, ...]
-    decision_ports: tuple[dict[str, Any], ...]
 
     @property
     def draft_ref(self) -> str:
         return f"{self.draft.id}@{self.draft.revision}"
 
     @property
-    def milestone_refs(self) -> tuple[str, ...]:
-        return tuple(f"{item.id}@{item.revision}" for item in self.milestones)
-
-    @property
-    def task_refs(self) -> tuple[str, ...]:
-        return tuple(f"{item.id}@{item.revision}" for item in self.tasks)
-
-    @property
-    def gate_ids(self) -> tuple[str, ...]:
-        return tuple(gate["gateId"] for gate in self.gates)
-
-    @property
-    def go_digest(self) -> str:
-        confirmation = {
-            "milestoneRefs": list(self.milestone_refs),
-            "gates": list(self.gates),
-        }
-        return "sha256:" + hashlib.sha256(_canonical_json(confirmation)).hexdigest()
+    def content_ref(self) -> str:
+        return self.draft.contentRef
 
     def to_manifest(self) -> dict[str, Any]:
         return {
             "schemaVersion": PROJECT_PLAN_SCHEMA_VERSION,
             "name": self.name,
             "draftRevision": self.draft_ref,
-            "vispRevision": f"{self.visp.id}@{self.visp.revision}",
-            "fuspRevision": f"{self.fusp.id}@{self.fusp.revision}",
-            "milestoneRefs": list(self.milestone_refs),
-            "taskRefs": list(self.task_refs),
-            "taskDependencies": {
-                ref: list(values) for ref, values in self.task_dependencies.items()
-            },
-            "assignments": {
-                ref: _assignment_to_json(value)
-                for ref, value in self.assignments.items()
-            },
-            "gates": list(self.gates),
-            "signoffPolicy": {
-                "requiredMilestoneRefs": list(self.required_milestones)
-            },
-            "decisionPorts": list(self.decision_ports),
-            "goDigest": self.go_digest,
+            "specRef": self.content_ref,
         }
-
 
 def _canonical_json(value: Any) -> bytes:
     return json.dumps(
@@ -326,90 +302,6 @@ def _request_id(value: Any) -> str:
     if len(request_id) > 200:
         raise ProjectError("bad_request", "requestId must not exceed 200 characters")
     return request_id
-
-
-def _assignment_to_json(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "worker": value["worker"],
-        "reviewer": value["reviewer"],
-        "qa": value["qa"],
-        "budget": dict(value["budget"]),
-    }
-
-
-def _normalize_assignment(value: Any, context: str) -> dict[str, Any]:
-    data = _require_object(value, context)
-    _strict_fields(data, _ASSIGNMENT_FIELDS, context)
-    budget = _require_object(data["budget"], f"{context}.budget")
-    _strict_fields(budget, _BUDGET_FIELDS, f"{context}.budget")
-    return {
-        "worker": _nonempty_string(data["worker"], f"{context}.worker"),
-        "reviewer": _nonempty_string(data["reviewer"], f"{context}.reviewer"),
-        "qa": _nonempty_string(data["qa"], f"{context}.qa"),
-        "budget": {
-            "maxAttempts": _positive_int(
-                budget["maxAttempts"], f"{context}.budget.maxAttempts"
-            ),
-            "wallTimeSeconds": _positive_int(
-                budget["wallTimeSeconds"], f"{context}.budget.wallTimeSeconds"
-            ),
-            "outputTokens": _positive_int(
-                budget["outputTokens"], f"{context}.budget.outputTokens"
-            ),
-        },
-    }
-
-
-def _normalize_gate(value: Any, context: str) -> dict[str, Any]:
-    data = _require_object(value, context)
-    common = {"gateId", "milestoneRef"}
-    if "template" in data:
-        _strict_fields(data, frozenset(common | {"template"}), context)
-        gate_id = _nonempty_string(data["gateId"], f"{context}.gateId")
-        if not _GATE_ID_RE.fullmatch(gate_id):
-            raise ProjectError(
-                "draft_invalid", f"{context}.gateId has an invalid identifier shape"
-            )
-        template = data["template"]
-        if template not in SUPPORTED_GATE_COMMANDS:
-            raise ProjectError(
-                "gate_not_allowed",
-                f"{context}.template {template!r} is not a supported gate template",
-            )
-        return {
-            "gateId": gate_id,
-            "milestoneRef": _exact_ref(
-                data["milestoneRef"], f"{context}.milestoneRef"
-            ),
-            "template": template,
-            "command": list(SUPPORTED_GATE_COMMANDS[template]),
-        }
-
-    custom_fields = common | {"executable", "arguments", "ownerAuthorization"}
-    _strict_fields(data, frozenset(custom_fields), context)
-    gate_id = _nonempty_string(data["gateId"], f"{context}.gateId")
-    if not _GATE_ID_RE.fullmatch(gate_id):
-        raise ProjectError(
-            "draft_invalid", f"{context}.gateId has an invalid identifier shape"
-        )
-    executable = _nonempty_string(data["executable"], f"{context}.executable")
-    arguments = data["arguments"]
-    if not isinstance(arguments, list) or any(
-        not isinstance(argument, str) or "\x00" in argument for argument in arguments
-    ):
-        raise ProjectError(
-            "draft_invalid", f"{context}.arguments must be a list of strings"
-        )
-    authorization = _nonempty_string(
-        data["ownerAuthorization"], f"{context}.ownerAuthorization"
-    )
-    return {
-        "gateId": gate_id,
-        "milestoneRef": _exact_ref(data["milestoneRef"], f"{context}.milestoneRef"),
-        "template": "custom",
-        "command": [executable, *arguments],
-        "ownerAuthorization": authorization,
-    }
 
 
 def _normalize_port(value: Any, context: str) -> dict[str, Any]:
@@ -484,53 +376,6 @@ def _event_payload(
     if data.get("schemaVersion") != PROJECT_PLAN_SCHEMA_VERSION:
         return {}
     return data
-
-
-class _PlanValidator:
-    def __init__(self, definitions: Definitions, artifacts: ArtifactStore) -> None:
-        self.definitions = definitions
-        self.artifacts = artifacts
-        self._resolved: dict[str, Definition] = {}
-
-    def resolve_current(self, ref: str, context: str) -> Definition:
-        _exact_ref(ref, context)
-        if ref in self._resolved:
-            return self._resolved[ref]
-        identifier, revision = _ref_parts(ref)
-        try:
-            definition = self.definitions.get(identifier, revision)
-            latest = self.definitions.latest(identifier)
-        except DefinitionError as exc:
-            raise ProjectError("definition_chain_invalid", str(exc)) from exc
-        if latest.revision != revision:
-            raise ProjectError(
-                "stale_draft",
-                f"{context} pins {ref}, but current revision is {latest.revision}",
-            )
-        self._resolved[ref] = definition
-        return definition
-
-    def ancestors(self, root: Definition) -> dict[str, Definition]:
-        completed: dict[str, Definition] = {}
-        active: set[str] = set()
-
-        def visit(definition: Definition) -> None:
-            ref = f"{definition.id}@{definition.revision}"
-            if ref in active:
-                raise ProjectError(
-                    "definition_chain_invalid", f"definition parent cycle at {ref}"
-                )
-            if ref in completed:
-                return
-            active.add(ref)
-            for parent_ref in definition.parentRefs:
-                parent = self.resolve_current(parent_ref, f"parent of {ref}")
-                visit(parent)
-            active.remove(ref)
-            completed[ref] = definition
-
-        visit(root)
-        return completed
 
 
 class ProjectService:
@@ -647,12 +492,7 @@ class ProjectService:
                 "projectId": project_id,
                 "requestId": request_id,
                 "draftRevision": plan.draft_ref,
-                "vispRevision": f"{plan.visp.id}@{plan.visp.revision}",
-                "fuspRevision": f"{plan.fusp.id}@{plan.fusp.revision}",
-                "milestoneRefs": list(plan.milestone_refs),
-                "taskRefs": list(plan.task_refs),
-                "gateIds": list(plan.gate_ids),
-                "goDigest": plan.go_digest,
+                "specRef": plan.content_ref,
             }
             try:
                 created = self.log.record(
@@ -682,220 +522,28 @@ class ProjectService:
         )
 
     def _validate_plan(self, draft_ref: str) -> _ValidatedPlan:
-        validator = _PlanValidator(self.definitions, self.artifacts)
-        draft = validator.resolve_current(draft_ref, "draft_revision")
+        """Is there a usable TESP?
+
+        That is the whole check. It has to be a TESP, and it has to have content
+        worth building from. Everything else this used to verify -- that the
+        task list was complete, that dependencies formed a DAG, that every
+        assignment named a real task, that every gate pointed inside a real
+        milestone -- was checking a structure the product no longer builds.
+        """
+        draft = self.definitions.get(
+            draft_ref.split("@", 1)[0], int(draft_ref.split("@", 1)[1])
+        )
         if draft.kind != "TESP":
             raise ProjectError(
                 "definition_chain_invalid", "draft_revision must identify a TESP definition"
             )
-
-        chain = validator.ancestors(draft)
-        ancestors = [item for item in chain.values() if item.id != draft.id]
-        if any(item.kind not in _ROOT_KINDS for item in ancestors):
-            raise ProjectError(
-                "definition_chain_invalid",
-                "TESP parents may contain only VISP, Requirements, and FUSP definitions",
-            )
-        visps = [item for item in ancestors if item.kind == "VISP"]
-        fusps = [item for item in ancestors if item.kind == "FUSP"]
-        if len(visps) != 1 or len(fusps) != 1:
-            raise ProjectError(
-                "definition_chain_invalid",
-                "draft chain must resolve exactly one displayed VISP and one displayed FUSP",
-            )
-        visp, fusp = visps[0], fusps[0]
-        fusp_chain = validator.ancestors(fusp)
-        if not any(item.kind == "VISP" for item in fusp_chain.values()):
-            raise ProjectError(
-                "definition_chain_invalid", "the displayed FUSP must descend from the VISP"
-            )
-        if not self.definitions.is_signed_off(visp) or not self.definitions.is_signed_off(fusp):
-            raise ProjectError(
-                "signoff_required",
-                "current exact VISP and FUSP revisions require separate owner signoffs",
-            )
-
         try:
-            data = json.loads(
-                self.artifacts.get_bytes(draft.contentRef.split(":", 1)[1])
-            )
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ProjectError(
-                "draft_invalid", "the current TESP draft artifact is unreadable JSON"
-            ) from exc
-        data = _require_object(data, "TESP draft")
-        _strict_fields(data, _PLAN_FIELDS, "TESP draft")
-        if (
-            isinstance(data["schemaVersion"], bool)
-            or data["schemaVersion"] != PROJECT_PLAN_SCHEMA_VERSION
-        ):
-            raise ProjectError(
-                "draft_invalid",
-                f"TESP draft schemaVersion must be {PROJECT_PLAN_SCHEMA_VERSION}",
-            )
-        name = _nonempty_string(data["name"], "TESP draft.name")
-        if len(name) > 200:
-            raise ProjectError("draft_invalid", "TESP draft.name must not exceed 200 characters")
-
-        milestone_values = data["milestoneRefs"]
-        task_values = data["taskRefs"]
-        if not isinstance(milestone_values, list) or not milestone_values:
-            raise ProjectError("draft_invalid", "milestoneRefs must be a non-empty list")
-        milestone_refs = tuple(
-            _exact_ref(value, f"milestoneRefs[{index}]")
-            for index, value in enumerate(milestone_values)
-        )
-        if len(set(milestone_refs)) != len(milestone_refs):
-            raise ProjectError("draft_invalid", "milestoneRefs contains a duplicate")
-        if not isinstance(task_values, list):
-            raise ProjectError("draft_invalid", "taskRefs must be a list")
-        task_refs = tuple(
-            _exact_ref(value, f"taskRefs[{index}]")
-            for index, value in enumerate(task_values)
-        )
-        if len(set(task_refs)) != len(task_refs):
-            raise ProjectError("draft_invalid", "taskRefs contains a duplicate")
-
-        milestones = tuple(
-            validator.resolve_current(ref, f"milestoneRefs[{index}]")
-            for index, ref in enumerate(milestone_refs)
-        )
-        tasks = tuple(
-            validator.resolve_current(ref, f"taskRefs[{index}]")
-            for index, ref in enumerate(task_refs)
-        )
-        for milestone in milestones:
-            if milestone.kind != "Milestone":
-                raise ProjectError(
-                    "definition_chain_invalid",
-                    f"milestone {milestone.id}@{milestone.revision} does not have kind Milestone",
-                )
-
-        milestone_set = set(milestone_refs)
-        task_set = set(task_refs)
-        for task in tasks:
-            if task.kind != "Task":
-                raise ProjectError(
-                    "definition_chain_invalid",
-                    f"task {task.id}@{task.revision} does not have kind Task",
-                )
-            milestone_parents = [
-                validator.resolve_current(ref, f"parent of task {task.id}@{task.revision}")
-                for ref in task.parentRefs
-            ]
-            if len(milestone_parents) != 1 or milestone_parents[0].kind != "Milestone":
-                raise ProjectError(
-                    "definition_chain_invalid",
-                    f"task {task.id}@{task.revision} must declare exactly one Milestone parent",
-                )
-            parent_ref = f"{milestone_parents[0].id}@{milestone_parents[0].revision}"
-            if parent_ref not in milestone_set:
-                raise ProjectError(
-                    "definition_chain_invalid",
-                    f"task {task.id}@{task.revision} points outside the displayed milestones",
-                )
-
-        dependencies = _require_object(data["taskDependencies"], "taskDependencies")
-        if set(dependencies) != task_set:
-            raise ProjectError(
-                "draft_invalid", "taskDependencies must name every displayed task exactly"
-            )
-        normalized_dependencies: dict[str, tuple[str, ...]] = {}
-        for ref in task_refs:
-            values = dependencies[ref]
-            if not isinstance(values, list):
-                raise ProjectError(
-                    "draft_invalid", f"taskDependencies[{ref}] must be a list"
-                )
-            parsed = tuple(
-                _exact_ref(value, f"taskDependencies[{ref}][{index}]")
-                for index, value in enumerate(values)
-            )
-            if ref in parsed or not set(parsed).issubset(task_set):
-                raise ProjectError(
-                    "dependency_invalid",
-                    f"taskDependencies[{ref}] has a self or unknown dependency",
-                )
-            if len(set(parsed)) != len(parsed):
-                raise ProjectError(
-                    "dependency_invalid", f"taskDependencies[{ref}] contains duplicates"
-                )
-            normalized_dependencies[ref] = parsed
-        _reject_dependency_cycle(normalized_dependencies)
-
-        assignments_data = _require_object(data["assignments"], "assignments")
-        if set(assignments_data) != task_set:
-            raise ProjectError(
-                "draft_invalid", "assignments must name every displayed task exactly"
-            )
-        assignments = {
-            ref: _normalize_assignment(assignments_data[ref], f"assignments[{ref}]")
-            for ref in task_refs
-        }
-
-        gates_data = data["gates"]
-        if not isinstance(gates_data, list):
-            raise ProjectError("draft_invalid", "gates must be a list")
-        gates = tuple(
-            _normalize_gate(value, f"gates[{index}]")
-            for index, value in enumerate(gates_data)
-        )
-        if len({gate["gateId"] for gate in gates}) != len(gates):
-            raise ProjectError("draft_invalid", "gateIds must be unique")
-        for gate in gates:
-            if gate["milestoneRef"] not in milestone_set:
-                raise ProjectError(
-                    "draft_invalid",
-                    f"gate {gate['gateId']!r} points outside the displayed milestones",
-                )
-
-        signoff = _require_object(data["signoffPolicy"], "signoffPolicy")
-        _strict_fields(
-            signoff, frozenset({"requiredMilestoneRefs"}), "signoffPolicy"
-        )
-        required_values = signoff["requiredMilestoneRefs"]
-        if not isinstance(required_values, list):
-            raise ProjectError(
-                "draft_invalid", "signoffPolicy.requiredMilestoneRefs must be a list"
-            )
-        required_milestones = tuple(
-            _exact_ref(value, f"signoffPolicy.requiredMilestoneRefs[{index}]")
-            for index, value in enumerate(required_values)
-        )
-        if (
-            len(set(required_milestones)) != len(required_milestones)
-            or not set(required_milestones).issubset(milestone_set)
-        ):
-            raise ProjectError(
-                "draft_invalid",
-                "signoffPolicy must contain unique displayed milestone references",
-            )
-
-        ports_data = data["decisionPorts"]
-        if not isinstance(ports_data, list):
-            raise ProjectError("draft_invalid", "decisionPorts must be a list")
-        ports = tuple(
-            _normalize_port(value, f"decisionPorts[{index}]")
-            for index, value in enumerate(ports_data)
-        )
-        if len({port["portId"] for port in ports}) != len(ports):
-            raise ProjectError("draft_invalid", "decisionPorts must have unique portIds")
-
-        return _ValidatedPlan(
-            name=name,
-            draft=draft,
-            visp=visp,
-            fusp=fusp,
-            milestones=milestones,
-            tasks=tasks,
-            task_dependencies=normalized_dependencies,
-            assignments=assignments,
-            gates=gates,
-            required_milestones=required_milestones,
-            decision_ports=ports,
-        )
-
-    # -- event/history helpers ----------------------------------------------
+            spec = self.artifacts.get_bytes(draft.contentRef.split(":", 1)[1])
+        except (OSError, IndexError) as exc:
+            raise ProjectError("draft_invalid", f"TESP {draft_ref} has no readable content") from exc
+        if not spec.strip():
+            raise ProjectError("draft_invalid", f"TESP {draft_ref} is empty")
+        return _ValidatedPlan(name=f"project-{draft.id[:8]}", draft=draft)
 
     def _events_for(self, project_id: str, event_type: str) -> list[Event]:
         return [
@@ -1060,26 +708,6 @@ def _fsync_directory(path: Path) -> None:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-
-
-def _reject_dependency_cycle(dependencies: dict[str, tuple[str, ...]]) -> None:
-    complete: set[str] = set()
-    active: list[str] = []
-
-    def visit(ref: str) -> None:
-        if ref in active:
-            cycle = " -> ".join(active[active.index(ref) :] + [ref])
-            raise ProjectError("dependency_invalid", f"task dependency cycle: {cycle}")
-        if ref in complete:
-            return
-        active.append(ref)
-        for dependency in dependencies[ref]:
-            visit(dependency)
-        active.pop()
-        complete.add(ref)
-
-    for ref in dependencies:
-        visit(ref)
 
 
 def recorded_go_for_artifacts(
