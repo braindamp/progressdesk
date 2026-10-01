@@ -212,6 +212,7 @@ class RoundDispatcher:
         broker: Broker,
         artifacts: ArtifactStore,
         resolve_role: Callable[[str], tuple[str, str]] | None = None,
+        resolve_transport: Callable[[str], str] | None = None,
         sweep: Sweep | None = None,
         cleaner: Cleaner | None = None,
         ask: Callable[..., str] | None = None,
@@ -232,6 +233,10 @@ class RoundDispatcher:
         # role -> (provider, model). A flat lookup on our side; whatever routes
         # underneath the provider is not ours to see.
         self.resolve_role = resolve_role
+        # role -> adapter kind. Same flatness, same reason: which adapter reaches
+        # a role is configuration, so the dispatch layer holds no per-role branch
+        # and cannot acquire one by forgetting to update itself.
+        self.resolve_transport = resolve_transport
         # The scripted HOUSEKEEPING passes (§10.6). Optional so a caller can
         # compose a round without a workshop root; the Runtime always passes it.
         self.sweep = sweep
@@ -248,7 +253,7 @@ class RoundDispatcher:
         packet: Any,
         decision: Any,
         run_id: str | None = None,
-        adapter: str = "pi",
+        adapter: str | None = None,
         round_kind: str = "worker",
         role: str = "DEXTER",
         tools: tuple[str, ...] = (),
@@ -258,6 +263,8 @@ class RoundDispatcher:
         # envelope identity the seam carries. They are different things and
         # conflating them makes every round unresolvable.
         run = run_id or str(uuid.uuid4())
+        if adapter is None:
+            adapter = self._adapter_for(role)
         # The three-attempt budget in §10.2 bounds the *builder* trying to
         # deliver a task. A review is work on the same task but not another
         # try at delivering it, so it is accounted under its own reference.
@@ -287,10 +294,14 @@ class RoundDispatcher:
             )
 
         # A transport fault is nudged inside the seam, not here: the seam owns
-        # the budget so no caller can quietly reduce it to one. This was the
+        # the budget so no caller can quietly reduce it to one. That was the
         # defect — the loop nudged once and then declared the round undelivered.
-        envelope = self.spawner.spawn(request, kind=adapter)
-
+        #
+        # There is exactly one spawn. This used to be followed by a second,
+        # unconditional call that threw the first envelope away and ran the
+        # builder a second time: two attempts spent, double the wall, and any
+        # nudge the seam had already earned discarded. The comment above
+        # described the intended behaviour and the line below it contradicted it.
         clearance = self._clear(project_id)
         if clearance is not None and not clearance.restartable:
             # She said the room is not ready. SCHOTTY is the thinking one: he
@@ -708,6 +719,23 @@ class RoundDispatcher:
             sandbox="none",
         )
 
+    def _adapter_for(self, role: str) -> str:
+        """The adapter kind that reaches this role, from the role table.
+
+        Named, not defaulted. A dispatch that guessed `pi` would send a
+        decision-model role to a gateway and a gateway role to a classifier,
+        and the second of those looks like a very slow, very expensive outage.
+        """
+        if self.resolve_transport is None:
+            raise SpawnError(
+                "no_assignment",
+                "no role table is configured; the dispatch cannot name an adapter",
+            )
+        try:
+            return self.resolve_transport(role)
+        except Exception as exc:  # noqa: BLE001 - a bad table is a refusal, not a crash
+            raise SpawnError("no_assignment", f"role {role!r} is not configured: {exc}") from exc
+
     def _model(self, role: str) -> tuple[str, str]:
         """The provider and model this role names. We declare the role, not the model."""
         if self.resolve_role is None:
@@ -756,6 +784,7 @@ def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
         runtime.broker,
         runtime.artifacts,
         resolve_role=(harness.for_role if harness is not None else None),
+        resolve_transport=(harness.transport_for if harness is not None else None),
         sweep=runtime.sweep,
         cleaner=runtime.cleaner,
         ask=getattr(runtime, "ask", None),

@@ -24,11 +24,12 @@ from .decide import Decision, SystemOneExecutor, Unreachable
 from .checkpoints import CheckpointManager
 from .desk import ProgressDeskOperations, ProjectService
 from .events import EventLog
-from .harness import HarnessConfig, HarnessError
+from .harness import HarnessConfig, HarnessError, TaskPacket
 from .floor_sweep import Cleaner, Sweep
 from .spawn import Budget, ContextPack, ContextSection, ModelSpec, SpawnRequest
 from .kernel import DispatchRequest, Kernel, KernelRejection
 from .lab import LabNeedDetermination, LabReferralService, SimulatedLabReferral
+from .loop import dispatcher_for
 from .police import FailureClassification, Observation, PoliceService
 from .planning import PlanningSession
 from .rounds import (
@@ -397,6 +398,98 @@ def _project_start(rt: Runtime, cmd: Command) -> Any:
     return {"projectId": started.project_id, "runId": getattr(started, "run_id", None)}
 
 
+def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
+    """Run one round. The only door onto a role.
+
+    A task is a stored definition, so the packet is assembled from the
+    authoritative chain rather than restated by the caller: the round runs what
+    the definition says, or it does not run. Nothing here returns prose.
+    """
+    project_id = cmd.require("project_id")
+    task_ref = str(cmd.require("task_ref"))
+
+    # Callers may name a task either way, and both forms are in circulation: the
+    # store is keyed by bare id, the kernel and the round ledger by the exact
+    # revision ref (§5.1). A door that accepts only one of them is a door people
+    # trip over. The caller's revision is not trusted -- the stored head decides,
+    # so naming a stale revision cannot smuggle one through.
+    try:
+        head = rt.definitions.latest(task_ref.split("@", 1)[0])
+    except Exception as exc:  # noqa: BLE001 - an unknown task is a typed refusal
+        raise CommandError("unknown_task", f"no task definition {task_ref!r}: {exc}") from exc
+
+    try:
+        content = rt.artifacts.get_bytes(head.contentRef.split(":", 1)[1]).decode("utf-8")
+    except (OSError, IndexError, UnicodeDecodeError) as exc:
+        raise CommandError("task_unreadable", f"task {task_ref!r} has no readable content: {exc}") from exc
+
+    # Two forms, and they are not interchangeable. The store is keyed by bare
+    # id; the kernel and the round ledger are keyed by the exact revision ref
+    # (§5.1). Passing the bare id to the kernel is a typed rejection, which is
+    # exactly what it did the first time.
+    exact = f"{head.id}@{head.revision}"
+    packet = TaskPacket(
+        task_id=head.id,
+        task_revision=head.revision,
+        # The nearest declared parent stands in for the milestone. A task with no
+        # parent is its own milestone, which is honest rather than invented.
+        milestone_id=(head.parentRefs[0] if head.parentRefs else head.id),
+        parent_definition_refs=head.parentRefs,
+        outcome=content.strip(),
+        scope=content.strip(),
+        input_artifact_refs=(),
+        interfaces=(),
+        allowed_tool_refs=(),
+        skill_refs=(),
+        acceptance_conditions=(),
+        accepted_example_refs=(),
+        limits={},
+    )
+
+    # The kernel decides whether a round may begin at all. It is asked before
+    # anything is spawned, and a refusal is returned rather than raised: this is
+    # the gate working, not the door failing.
+    decision = rt.kernel.authorize(DispatchRequest(
+        callerRole="worker",
+        action="task.execute",
+        taskDefinitionRef=exact,
+        projectId=project_id,
+    ))
+    if not getattr(decision, "ok", False):
+        # The typed rejection is the answer, not the check list: it names the
+        # code, the checks that failed, and the reason. Falling back to the
+        # per-check reasons keeps the message useful if a Decision ever arrives
+        # without one.
+        rejection = getattr(decision, "rejection", None)
+        if rejection is not None:
+            failed = ", ".join(rejection.failed_checks) or "none named"
+            detail = f"{rejection.code} [{failed}]: {rejection.message}"
+        else:
+            detail = ", ".join(
+                f"{c.name}: {c.reason or 'failed'}" for c in decision.failing()
+            ) or "no reason given"
+        raise CommandError("not_authorized", f"kernel refused the dispatch: {detail}")
+
+    outcome = dispatcher_for(rt, project_id).dispatch(
+        project_id=project_id,
+        task_ref=exact,
+        packet=packet,
+        decision=decision,
+    )
+    return {
+        "runId": outcome.run_id,
+        "projectId": outcome.project_id,
+        "taskRef": outcome.task_ref,
+        "status": outcome.status,
+        "delivered": outcome.delivered,
+        "candidateId": outcome.candidate_id,
+        "wallMs": outcome.wall_ms,
+        "nudges": outcome.nudges,
+        "verdict": outcome.verdict,
+        "detail": outcome.detail,
+    }
+
+
 def _project_status(rt: Runtime, cmd: Command) -> Any:
     return rt.operations.project_status(cmd.require("project_id")).to_dict()
 
@@ -549,6 +642,7 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "definition.signoff": _definition_signoff,
     "project.create": _project_create,
     "project.start": _project_start,
+    "round.dispatch": _round_dispatch,
     "project.abort": _project_abort,
     "project.status": _project_status,
     "project.events": _project_events,
