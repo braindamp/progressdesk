@@ -472,27 +472,22 @@ class ProjectService:
         )
 
     def _validate_plan(self, draft_ref: str) -> _ValidatedPlan:
-        """Is there a usable TESP?
+        """Is there something here worth building from?
 
-        That is the whole check. It has to be a TESP, and it has to have content
-        worth building from. Everything else this used to verify -- that the
-        task list was complete, that dependencies formed a DAG, that every
-        assignment named a real task, that every gate pointed inside a real
-        milestone -- was checking a structure the product no longer builds.
+        That is the whole check: a definition at an exact revision, with content
+        in it. It no longer has to be a TESP, and it no longer has nine fields
+        cross-checked against each other. A project is a name and a spec.
         """
-        draft = self.definitions.get(
-            draft_ref.split("@", 1)[0], int(draft_ref.split("@", 1)[1])
-        )
-        if draft.kind != "TESP":
-            raise ProjectError(
-                "definition_chain_invalid", "draft_revision must identify a TESP definition"
-            )
+        definition_id, _, revision = draft_ref.partition("@")
+        draft = self.definitions.get(definition_id, int(revision))
         try:
             spec = self.artifacts.get_bytes(draft.contentRef.split(":", 1)[1])
         except (OSError, IndexError) as exc:
-            raise ProjectError("draft_invalid", f"TESP {draft_ref} has no readable content") from exc
+            raise ProjectError(
+                "draft_invalid", f"draft {draft_ref} has no readable content"
+            ) from exc
         if not spec.strip():
-            raise ProjectError("draft_invalid", f"TESP {draft_ref} is empty")
+            raise ProjectError("draft_invalid", f"draft {draft_ref} is empty")
         return _ValidatedPlan(name=f"project-{draft.id[:8]}", draft=draft)
 
     def _events_for(self, project_id: str, event_type: str) -> list[Event]:

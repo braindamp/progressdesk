@@ -752,20 +752,22 @@ class RoundDispatcher:
 
     @staticmethod
     def _pack(packet: Any) -> ContextPack:
-        """The context pack, in the fixed order §11.5 sets out."""
-        sections = [
-            ContextSection("outcome", _text(getattr(packet, "outcome", "")), TASK_SECTION_BUDGET),
-            ContextSection("scope", _text(getattr(packet, "scope", "")), TASK_SECTION_BUDGET),
-            ContextSection(
-                "interfaces", _text(getattr(packet, "interfaces", ())), TASK_SECTION_BUDGET
-            ),
-            ContextSection(
-                "acceptance",
-                _text(getattr(packet, "acceptance_conditions", ())), TASK_SECTION_BUDGET,
-            ),
-        ]
-        return ContextPack(tuple(s for s in sections if s.text.strip()))
+        """The slice, and nothing else.
 
+        This used to emit four sections -- outcome, scope, interfaces,
+        acceptance -- and the dispatcher filled the first two with the same text
+        and left the other two empty. So a builder read its task twice and was
+        handed two headings with nothing under them.
+
+        A slice is one document and it carries its own scope, its interfaces and
+        what done means. Splitting it across fields would be a structure
+        invented here and honoured nowhere, and the writer of a slice is the
+        only one who knows where those things belong in it. DoD and interfaces
+        can come back as sections when there is something to put in them.
+        """
+        return ContextPack((
+            ContextSection("the slice", _text(getattr(packet, "outcome", "")), TASK_SECTION_BUDGET),
+        ))
 
 def _text(value: Any) -> str:
     if isinstance(value, str):
