@@ -1,0 +1,47 @@
+{
+ "name": "reviewer_unavailable_parks",
+ "description": "fail-closed: unavailable reviewer parks",
+ "slice": {
+  "id": "SCEN",
+  "goal_id": "S24",
+  "title": "scenario slice",
+  "depends_on": [],
+  "scope_globs": [
+   "**"
+  ],
+  "criteria": [],
+  "status": "ready",
+  "reason_code": null,
+  "risk_tier": "med",
+  "assignment": {
+   "producer_class": "cheap",
+   "executor": "default",
+   "budget": {
+    "tokens_out": 500,
+    "iterations": 3
+   }
+  },
+  "evaluation": {
+   "tier": "med",
+   "reviewers": []
+  },
+  "rework_count": 0
+ },
+ "script": [
+  {
+   "status": "completed",
+   "decision": "accept",
+   "exit_class": "ok"
+  },
+  {
+   "status": "completed",
+   "decision": "unavailable",
+   "exit_class": "ok"
+  }
+ ],
+ "expect": {
+  "status": "parked",
+  "reason_code": "reviewer_unavailable",
+  "rework_count": 0
+ }
+}

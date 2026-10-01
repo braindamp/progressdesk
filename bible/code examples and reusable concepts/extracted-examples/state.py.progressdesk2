@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from .jsonschema import validate
+
+STATE_PATH = Path("state/progressdesk_state.json")
+SCHEMA_PATH = Path("schemas/state.schema.json")
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def load_state(root: Path | None = None) -> dict[str, Any]:
+    base = root or Path.cwd()
+    state = read_json(base / STATE_PATH)
+    schema = read_json(base / SCHEMA_PATH)
+    errors = validate(state, schema)
+    if errors:
+        raise ValueError("Invalid ProgressDesk state: " + "; ".join(errors))
+    integrity = state.get("integrity", {})
+    payload = {key: value for key, value in state.items() if key != "integrity"}
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    if integrity.get("payloadSha256") not in (None, digest):
+        raise ValueError(f"State integrity mismatch: expected {integrity['payloadSha256']}, got {digest}")
+    return state
+
+
+def write_state(state: dict[str, Any], root: Path | None = None) -> None:
+    base = root or Path.cwd()
+    state["updatedAt"] = utc_now()
+    state.pop("integrity", None)
+    digest = hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
+    state["integrity"] = {"algorithm": "sha256", "payloadSha256": digest}
+    target = base / STATE_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(".json.tmp")
+    text = json.dumps(state, indent=2) + "\n"
+    temporary.write_text(text, encoding="utf-8-sig")
+    temporary.replace(target)
+
+
+def find_milestone(state: dict[str, Any], milestone_id: str) -> dict[str, Any]:
+    for milestone in state["milestones"]:
+        if milestone["id"] == milestone_id:
+            return milestone
+    raise KeyError(f"Unknown milestone '{milestone_id}'")
+
+
+def dependencies_satisfied(state: dict[str, Any], milestone: dict[str, Any]) -> bool:
+    statuses = {item["id"]: item["status"] for item in state["milestones"]}
+    return all(statuses.get(dependency) == "accepted" for dependency in milestone["dependsOn"])
+
+
+def run_check(command: str, root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, cwd=root, shell=True, capture_output=True, text=True)

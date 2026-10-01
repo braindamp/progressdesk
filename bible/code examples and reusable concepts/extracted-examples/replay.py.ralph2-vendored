@@ -1,0 +1,114 @@
+"""S25 replay: recompute + verify a finished run from its durable records only."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from progressdesk2.vendor.ralph2.records import Slice, UsageEvent, Verdict
+from progressdesk2.vendor.ralph2.state import Store
+
+REQUIRED_EVENT_FIELDS = (
+    "ts",
+    "run_id",
+    "slice_id",
+    "role",
+    "executor",
+    "model",
+    "provider",
+    "iteration",
+    "attempt",
+    "tokens_in",
+    "tokens_in_cached",
+    "tokens_out",
+    "wall_ms",
+    "exit_class",
+    "cost_est",
+    "free_window",
+    "estimated",
+)
+
+
+class ReplayError(ValueError):
+    """Run records are inconsistent; replay refuses to certify."""
+
+
+def _verify_events(events: list[dict[str, Any]]) -> tuple[list[str], dict[str, int]]:
+    """Validate each usage event; recompute token totals from the raw rows."""
+    bad_events: list[str] = []
+    tokens = {"in": 0, "cached": 0, "out": 0}
+    for i, e in enumerate(events):
+        missing = [k for k in REQUIRED_EVENT_FIELDS if k not in e]
+        if missing:
+            bad_events.append(f"event[{i}] missing {missing}")
+            continue
+        try:
+            UsageEvent.from_dict(e).validate()
+        except ValueError as exc:
+            bad_events.append(f"event[{i}] invalid: {exc}")
+            continue
+        tokens["in"] += int(e["tokens_in"])
+        tokens["cached"] += int(e["tokens_in_cached"])
+        tokens["out"] += int(e["tokens_out"])
+    return bad_events, tokens
+
+
+def _slice_entry(s: Slice, events: list[dict[str, Any]], store: Store, problems: list[str]) -> dict[str, Any]:
+    """Terminal-status verification for one slice; appends problems (negative checks)."""
+    ev_for = [e for e in events if e.get("slice_id") == s.id]
+    verdicts = [v for v in store.list("verdict", slice_id=s.id) if isinstance(v, Verdict)] if ev_for else []
+    review_accepts = [v for v in verdicts if v.kind == "reviewer" and v.decision == "accept"]
+    entry: dict[str, Any] = {
+        "status": s.status,
+        "reason_code": s.reason_code,
+        "events": len(ev_for),
+        "review_accepts": len(review_accepts),
+        "rework_count": s.rework_count,
+    }
+    if s.status == "accepted" and ev_for and not review_accepts:
+        problems.append(f"{s.id}: accepted with events but no reviewer accept")
+    if s.status == "parked" and s.reason_code is None:
+        problems.append(f"{s.id}: parked without reason_code")
+    if s.status in ("running", "evaluating"):
+        entry["incomplete"] = True
+    return entry
+
+
+def replay_run(store: Store, run_id: str) -> dict[str, Any]:
+    """Reconstruct + verify a run's outcome from usage.jsonl + slices + verdicts.
+
+    Verification (negative checks, evidence over narrative):
+      - every event parses and is a valid UsageEvent (or is reported as skipped)
+      - every slice's terminal status matches what its events+verdicts imply
+      - accepted slices have >= 1 reviewer accept verdict; parked slices carry a
+        known reason_code; running/evaluating slices are reported as incomplete
+      - token totals recompute from the raw events
+    Never spawns a model, never touches the live store (read-only).
+    """
+    events, skipped = store.read_jsonl("usage")
+    events = [e for e in events if e.get("run_id") == run_id]
+    bad_events, tokens = _verify_events(events)
+    slices = [s for s in store.list("slice") if isinstance(s, Slice)]
+    per_slice: dict[str, dict[str, Any]] = {}
+    problems: list[str] = []
+    for s in slices:
+        per_slice[s.id] = _slice_entry(s, events, store, problems)
+    if skipped and not events:
+        problems.append("usage.jsonl: all lines unparseable")
+    return {
+        "run_id": run_id,
+        "certified": not bad_events and not problems,
+        "bad_events": bad_events,
+        "problems": problems,
+        "skipped_lines": skipped,
+        "tokens": tokens,
+        "slices": per_slice,
+    }
+
+
+def write_report(repo: Path, result: dict[str, Any]) -> Path:
+    out = Path(repo) / ".ralph2" / "replay.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=1, sort_keys=True), encoding="utf-8")
+    return out
