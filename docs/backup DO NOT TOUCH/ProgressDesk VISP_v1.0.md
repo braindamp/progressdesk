@@ -12,6 +12,8 @@
 
 The workshop is a self-improving production environment for AI-assisted software and media output. Humans own vision, functional intent, and every release-relevant decision. Models assist with definition, exploration, implementation, and review; no model grants itself scope or declares its own success.
 
+Build for success, expect to fail. The build is planned so that failure is repeatable but not expected: the normal path is the leanest and thinnest, because it is walked the most; the exception path may involve more work, but must not therefore be complex.
+
 Stable products on top; a living substrate underneath. Products may sit; the substrate improves — but only through its own documented process, and only when evidence justifies the change.
 
 ## 2. Core doctrine
