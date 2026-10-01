@@ -404,9 +404,19 @@ def describe(report: SweepReport) -> str:
     between the two answers, which is no separation at all. Said out, the same
     reports separate by 0.36. A decision model reads sentences; a JSON dump is
     structure it has no reason to have been trained on.
+
+    A step that could not be run is left out. The sweep says so in the log, and
+    the log is the record. But this text is not the log: it is a description of
+    the room, and "unsupported in this environment: no host process enumerator"
+    reads to a decision model as a problem with the room. It measured a
+    brand-new project that had never been touched at 0.67 -- a problem -- and
+    blocked it. A detection control that cannot run is a limitation, not a
+    finding about the scene, and the room is not dirtier for having one.
     """
     lines = [f"A {report.strength} floor sweep just ran on project {report.project_id}."]
     for action in report.actions:
+        if action.detail.startswith("unsupported in this environment"):
+            continue
         mark = "BLOCKED" if action.blocked else "ok"
         lines.append(f"- {action.operation}: {action.detail} [{mark}]")
     if report.traces:
