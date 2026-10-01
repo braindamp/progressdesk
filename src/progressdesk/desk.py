@@ -73,7 +73,6 @@ from typing import Any
 from progressdesk.artifacts import ArtifactStore
 from progressdesk.definitions import Definition, DefinitionError, Definitions
 from progressdesk.events import Event, EventLog
-from progressdesk.project_status import ProjectStatus, ProjectStatusBuilder
 
 PROJECT_PLAN_SCHEMA_VERSION = 1
 PROJECT_MANIFEST_RELATIVE = Path("project.json")
@@ -1460,6 +1459,3 @@ class ProgressDeskOperations:
     def project_start(self, project_id: str, *, request_id: str) -> ProjectStart:
         return self.projects.start(project_id, request_id=request_id)
 
-    def project_status(self, project_id: str) -> ProjectStatus:
-        """Return the disposable GUI-ready projection; no model call is made."""
-        return ProjectStatusBuilder(self.projects.log).build(project_id)

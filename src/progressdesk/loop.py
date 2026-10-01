@@ -249,7 +249,7 @@ class RoundDispatcher:
         project_id: str,
         task_ref: str,
         packet: Any,
-        decision: Any,
+        decision: Any = None,
         run_id: str | None = None,
         adapter: str | None = None,
         round_kind: str = "worker",

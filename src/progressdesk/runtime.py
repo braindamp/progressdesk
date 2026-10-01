@@ -26,7 +26,6 @@ from .events import EventLog
 from .harness import HarnessConfig, HarnessError, TaskPacket
 from .floor_sweep import Cleaner, Sweep
 from .spawn import Budget, ContextPack, ContextSection, ModelSpec, SpawnRequest
-from .kernel import DispatchRequest, Kernel, KernelRejection
 from .lab import LabNeedDetermination, LabReferralService, SimulatedLabReferral
 from .loop import dispatcher_for
 from .police import FailureClassification, Observation, PoliceService
@@ -120,7 +119,6 @@ class Runtime:
     artifacts: ArtifactStore
     log: EventLog
     definitions: Definitions
-    kernel: Kernel
     broker: Broker
     tools: ToolCenter
     rounds: RalphRoundService
@@ -147,7 +145,6 @@ class Runtime:
         artifacts = ArtifactStore(root / "artifacts")
         log = EventLog(root / "events" / "events.jsonl", artifacts)
         definitions = Definitions(log, artifacts)
-        kernel = Kernel(root / "installed" / "kernel" / "policy.json", log, definitions)
         broker = Broker(root, event_log=log)
         tools = ToolCenter(log, artifacts, broker)
         rounds = RalphRoundService(log, artifacts, limits=limits or RoundLimits())
@@ -173,7 +170,6 @@ class Runtime:
             artifacts=artifacts,
             log=log,
             definitions=definitions,
-            kernel=kernel,
             broker=broker,
             tools=tools,
             rounds=rounds,
@@ -445,35 +441,10 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         limits={},
     )
 
-    # The kernel decides whether a round may begin at all. It is asked before
-    # anything is spawned, and a refusal is returned rather than raised: this is
-    # the gate working, not the door failing.
-    decision = rt.kernel.authorize(DispatchRequest(
-        callerRole="worker",
-        action="task.execute",
-        taskDefinitionRef=exact,
-        projectId=project_id,
-    ))
-    if not getattr(decision, "ok", False):
-        # The typed rejection is the answer, not the check list: it names the
-        # code, the checks that failed, and the reason. Falling back to the
-        # per-check reasons keeps the message useful if a Decision ever arrives
-        # without one.
-        rejection = getattr(decision, "rejection", None)
-        if rejection is not None:
-            failed = ", ".join(rejection.failed_checks) or "none named"
-            detail = f"{rejection.code} [{failed}]: {rejection.message}"
-        else:
-            detail = ", ".join(
-                f"{c.name}: {c.reason or 'failed'}" for c in decision.failing()
-            ) or "no reason given"
-        raise CommandError("not_authorized", f"kernel refused the dispatch: {detail}")
-
     outcome = dispatcher_for(rt, project_id).dispatch(
         project_id=project_id,
         task_ref=exact,
         packet=packet,
-        decision=decision,
     )
     return {
         "runId": outcome.run_id,
@@ -488,9 +459,6 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         "detail": outcome.detail,
     }
 
-
-def _project_status(rt: Runtime, cmd: Command) -> Any:
-    return rt.operations.project_status(cmd.require("project_id")).to_dict()
 
 
 def _project_events(rt: Runtime, cmd: Command) -> Any:
@@ -624,7 +592,6 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "project.start": _project_start,
     "round.dispatch": _round_dispatch,
     "project.abort": _project_abort,
-    "project.status": _project_status,
     "project.events": _project_events,
 }
 
@@ -726,8 +693,8 @@ def raise_red_light(rt: "Runtime", project_id: str, reason: str) -> dict[str, An
         }, sort_keys=True, separators=(",", ":")).encode("utf-8"),
         project_id=project_id,
     )
-    status = rt.operations.project_status(project_id).to_dict()
-    return {"projectId": project_id, "status": status["status"], "redLight": status.get("redLight")}
+    # The record is the log; nothing derives a second answer from a projection.
+    return {"projectId": project_id, "redLightRaised": True}
 
 
 def route(runtime: Runtime, verb: str, params: Mapping[str, Any] | None = None) -> Any:

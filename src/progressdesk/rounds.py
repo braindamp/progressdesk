@@ -361,10 +361,17 @@ class RalphRoundService:
                 result.append(event)
         return result
 
-    def _authorization(self, round_id: str, decision: Any) -> str:
-        if not _decision_ok(decision):
-            raise AuthorizationError("round requires a successful current kernel decision")
-        return _decision_digest(decision)
+    def _authorization(self, round_id: str, decision: Any) -> str | None:
+        """No authoriser, no proof of permission.
+
+        This used to be a digest of a successful kernel decision, re-checked
+        before every result was accepted, so a round could not be recorded
+        against an authorization that had since changed. The kernel is gone, so
+        there is nothing to prove and nothing to re-check: the round ledger
+        records that a round happened, and deciding whether it should have is no
+        longer a thing this module does.
+        """
+        return None
 
     def _limits_for_packet(self, packet: TaskPacket) -> RoundLimits:
         """Apply tighter task-declared limits without trusting worker input."""
@@ -390,8 +397,8 @@ class RalphRoundService:
         ).validate()
 
     def _check_current_authorization(self, payload: Mapping[str, Any], decision: Any) -> None:
-        if _decision_digest(decision) != payload.get("authorizationDigest"):
-            raise AuthorizationError("round authorization is missing or changed")
+        """Nothing to re-check. Kept as a call site so removing it is one edit."""
+        return None
 
     def _terminal(self, events: list[Event]) -> str | None:
         for event in events:
@@ -473,7 +480,6 @@ class RalphRoundService:
         if len(starts) >= limits.max_attempts:
             self._record_exhausted(project_id, task_ref, run_id, "attempt_limit")
             raise RoundLimitError("worker attempt limit exhausted")
-        authorization_digest = self._authorization("new", decision)
         round_id = str(uuid.uuid4())
         packet_ref = _artifact_ref(self.artifacts.put(_canonical(packet.to_dict())))
         payload = {
@@ -484,7 +490,6 @@ class RalphRoundService:
             "kind": kind,
             "packetRef": packet_ref,
             "limits": limits.to_dict(),
-            "authorizationDigest": authorization_digest,
         }
         self.log.record(
             "round.started",
