@@ -681,18 +681,6 @@ class ProjectService:
             event=created,
         )
 
-    def started(self, project_id: str) -> bool:
-        """Has housekeeping been kicked off for this project?
-
-        A read, and the only question the start concept ever needed to answer.
-        There is no start step: housekeeping is told to begin, and the log is
-        what records that it did.
-        """
-        return any(
-            event.type == "housekeeping.kicked-off" and event.projectId == project_id
-            for event in self.projects.log.read_all()
-        )
-
     def _validate_plan(self, draft_ref: str) -> _ValidatedPlan:
         validator = _PlanValidator(self.definitions, self.artifacts)
         draft = validator.resolve_current(draft_ref, "draft_revision")

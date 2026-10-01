@@ -143,11 +143,6 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
-    "housekeeping.kicked-off": {
-        "producers": frozenset({"desk"}),
-        "payload_required": True,
-        "project_scoped": True,
-    },
     # Dispatch family (§4.5 "Dispatch rejected") — registered with its
     # implementing slice MS1.3. The kernel is a control-host component (§1.2),
     # like "desk": the producer string is a typing check only; real authority

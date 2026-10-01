@@ -384,30 +384,6 @@ def _project_create(rt: Runtime, cmd: Command) -> Any:
     ).to_manifest()
 
 
-def _project_start(rt: Runtime, cmd: Command) -> Any:
-    """Tell housekeeping to begin.
-
-    There is no start gate. Housekeeping is asked whether the room is clear, and
-    its answer is the whole of what starting means: restartable, or hand the
-    scene to forensics. The GO ceremony, the start-requested event and the
-    milestone GO record all went with the kernel that gave them a reason.
-    """
-    project_id = cmd.require("project_id")
-    rt.log.record(
-        "housekeeping.kicked-off",
-        producer="desk",
-        payload=json.dumps({"requestId": str(cmd.require("request_id"))}).encode("utf-8"),
-        project_id=project_id,
-    )
-    clearance = rt.cleaner.run(project_id, strength="light")
-    return {
-        "projectId": project_id,
-        "verdict": clearance.decision,
-        "restartable": clearance.restartable,
-        "traces": list(clearance.report.traces if clearance.report else []),
-    }
-
-
 def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
     """Run one round. The only door onto a role.
 
@@ -604,7 +580,6 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "definition.read": _definition_read,
     "definition.signoff": _definition_signoff,
     "project.create": _project_create,
-    "project.start": _project_start,
     "round.dispatch": _round_dispatch,
     "project.abort": _project_abort,
     "project.events": _project_events,
