@@ -388,6 +388,11 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
     """
     project_id = cmd.require("project_id")
     slice_text = str(cmd.require("slice"))
+    # What the builder is allowed to do. Empty means no tools at all, not every
+    # default tool: the adapter declares sandbox none, so an agent holding a
+    # shell has nothing between it and the machine. The safety default is
+    # deliberate, and this is how a caller chooses otherwise on purpose.
+    tools = tuple(str(item) for item in cmd.get("tools", ()))
 
     packet = TaskPacket(
         task_id=f"{project_id}:{len(slice_text)}",
@@ -409,6 +414,7 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         project_id=project_id,
         task_ref=slice_text[:80],
         packet=packet,
+        tools=tools,
     )
     return {
         "runId": outcome.run_id,
