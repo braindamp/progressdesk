@@ -690,7 +690,11 @@ class ProjectService:
             return self._start_locked(project_id, request_id)
 
     def _start_locked(self, project_id: str, request_id: str) -> ProjectStart:
-        created = self._single_project_event(project_id, "project.created")
+        created = self._latest_event(project_id, "project.created")
+        if created is None:
+            # Nothing to start. Not a history check -- an operation asked of
+            # something that was never created.
+            raise ProjectError("no_project", f"project {project_id} was never created")
         payload = _event_payload(self.artifacts, created, _CREATED_FIELDS)
         plan = self._validate_plan(payload["draftRevision"])
         destination = self.projects_root / project_id
@@ -1061,17 +1065,16 @@ class ProjectService:
             found = event
         return found
 
-    def _single_project_event(self, project_id: str, event_type: str) -> Event:
+    def _latest_event(self, project_id: str, event_type: str) -> Event | None:
+        """The most recent event of this type, or None if there has never been one.
+
+        More than one is a project that was started over: the latest is the one
+        that is current and the earlier ones are history. It used to insist on
+        exactly one and refuse otherwise, which made a retry something to
+        diagnose rather than something to have done.
+        """
         events = self._events_for(project_id, event_type)
-        if not events:
-            raise ProjectError(
-                "unknown_project",
-                f"project {project_id} has no {event_type} event",
-            )
-        # More than one is a project that was started over. The latest is the
-        # one that is actually current; the earlier ones are history, not a
-        # contradiction to be diagnosed.
-        return events[-1]
+        return events[-1] if events else None
 
     def _find_start_request(self, project_id: str, request_id: str) -> Event | None:
         found: Event | None = None
