@@ -5,9 +5,6 @@ description = "ProgressDesk workshop - target of the progressDesk4-build BUILDER
 requires-python = ">=3.12,<3.13"
 dependencies = []
 
-[dependency-groups]
-dev = ["pytest==8.3.5"]
-
 [tool.uv]
 package = false
 
@@ -18,9 +15,3 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.pytest.ini_options]
-# pytest.ini (P0.2) is the authoritative test config location; this section is a
-# safety mirror so a bare 'pytest' run cannot hit the %TEMP% pytest-of-codexlab
-# ACL block. Keep in sync with pytest.ini addopts.
-addopts = "--basetemp=.pytest-tmp -p no:cacheprovider"
-pythonpath = "src"

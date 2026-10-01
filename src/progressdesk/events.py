@@ -68,12 +68,12 @@ class UnknownSchemaVersionError(EventError):
 # project-scoped=False: definitions are workshop-level until a project exists.
 _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
     "definition.created": {
-        "producers": frozenset({"desk", "planning", "sharpener"}),
+        "producers": frozenset({"desk", "planning", "sharpener", "manager"}),
         "payload_required": True,
         "project_scoped": False,
     },
     "definition.revised": {
-        "producers": frozenset({"desk", "planning"}),
+        "producers": frozenset({"desk", "planning", "manager"}),
         "payload_required": True,
         "project_scoped": False,
     },
@@ -172,6 +172,14 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
     },
     "action.reconciled": {
         "producers": frozenset({"manager", "police"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    # TESP §10.6 names this record. HOUSEKEEPING is deterministic control-host
+    # code, so the producer is the manager and the role it acted as travels in
+    # the payload as `by`.
+    "floor_sweep.action": {
+        "producers": frozenset({"manager"}),
         "payload_required": True,
         "project_scoped": True,
     },

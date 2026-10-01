@@ -1,0 +1,13 @@
+progressdesk nu eigenlijk praktisch helemaal afgebouwd, en dit is het laatste project, build 4 etc geintegreerd, Fable ook.
+
+we waren goed onderweg en rollen zoals SHARPENER, POLICE waren nog niet helemaal goed gedefinieerd.
+toen begonnen we met een logische keten waar LAYA een rol speelt, 
+idee: checken of rare dingen opvallen etc, maar toen kwam er enkel nog B.S. uit het model.
+
+HANDOVER is van kort daarvoor, ook niet helmaal te vertrouwen. het beste gewoon in de code kijken, die laatste modellen klaarstomen
+
+en dan verder.
+
+de logica van hoe de verschillende rollen samenhangen zou al WEL praktisch helemaal erin zitten, dus vraag een model dit uit te schetsen en take it from here.
+
+PS maar die hele setup waar LAYA demo een request krijgt is TOTALE B.S., is gewoon eoa json file in gedumpt ,slaat nergens op.

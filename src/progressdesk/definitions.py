@@ -206,6 +206,56 @@ class Definitions:
         )
         return revised
 
+    def split(
+        self,
+        definition_id: str,
+        *,
+        first: bytes,
+        second: bytes,
+        expected_revision: int,
+        producer: str = "desk",
+    ) -> tuple[Definition, Definition]:
+        """One task becomes two: this one keeps the first half, a new one keeps the second.
+
+        The inverse of obtaining a task. A split is only honest if both halves
+        land together — the original revised to `first`, and a sibling created for
+        `second` under the same parent — so neither can exist without the other
+        and the source cannot end up describing work that is really two.
+
+        Half a is the original, revised in place, so its revision advances.
+        Half b is a new definition and starts at revision 1. They do not share a
+        revision number: they are different definitions from that moment, and
+        only their parent says they came from one task.
+        """
+        for name, blob in (("first", first), ("second", second)):
+            if not isinstance(blob, (bytes, bytearray)) or not bytes(blob).strip():
+                raise DefinitionError(f"{name} half must be non-empty content")
+        original = self.latest(definition_id)
+        if original.revision != expected_revision:
+            raise DefinitionError(
+                f"Stale expected_revision {expected_revision!r}; current is "
+                f"{original.revision} — splitting from a superseded task would "
+                "desync the source"
+            )
+        # Order matters. Half b is created first: if that fails the original is
+        # untouched and nothing is lost. If instead the original were revised
+        # first and b then failed, the source would read as one half task with
+        # the other half silently gone — unrecoverable, because a revision is
+        # appended and never taken back.
+        second_def = self.create(
+            kind=original.kind,
+            content=bytes(second),
+            parent_refs=original.parentRefs,
+            producer=producer,
+        )
+        first_def = self.revise(
+            definition_id,
+            content=bytes(first),
+            expected_revision=expected_revision,
+            producer=producer,
+        )
+        return first_def, second_def
+
     def signoff(
         self,
         definition_id: str,

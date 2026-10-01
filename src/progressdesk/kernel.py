@@ -10,7 +10,7 @@ only; semantic correctness is QA's job — checking globs never proves semantic
 compliance with prose. §6.4: owner authority endpoints are separate —
 ``authorize()`` is the TASK dispatch surface only; owner operations
 (definition.signoff, project.create, project.start, §16.1) are unreachable
-through it, and no credential argument exists anywhere in this module, so a
+through it, and this module takes no such argument at all, so a
 model returning a role label or approval-shaped object can never mint a
 signed-off event (it is not on this path at all).
 
@@ -183,9 +183,8 @@ def load_policy(path: Path) -> dict[str, Any]:
 class DispatchRequest:
     """A task-dispatch authorization request (§6.2). Strict construction.
 
-    No credential field exists — executor environments receive no owner
-    credential (§6.4); authority derives from the installed policy's role
-    table, not from anything the caller attests about itself.
+    Authority derives from the installed policy's role
+    table, not from anything the caller attests about itself (§6.4).
     """
 
     callerRole: str
@@ -294,7 +293,7 @@ class Kernel:
     """Installed-kernel authorization surface (§6.1-6.4).
 
     Deterministic Python + installed policy data. The kernel holds no
-    credential, signs nothing, executes nothing: ``authorize`` either returns
+    signs nothing, executes nothing: ``authorize`` either returns
     an all-green Decision or a typed KernelRejection carried in the Decision
     AND recorded as exactly one ``dispatch.rejected`` event (§6.2 'records
     it'). Structural checks only (§6.3).

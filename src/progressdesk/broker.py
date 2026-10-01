@@ -6,13 +6,12 @@ import ctypes
 import json
 import os
 import subprocess
-import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from progressdesk.events import EventLog
 
@@ -24,6 +23,20 @@ WAIT_FAILED = 0xFFFFFFFF
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 _BLOCKED_SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "bash", "sh"}
+# Capturing a child's output requires bInheritHandles=TRUE, and that flag hands
+# the child every inheritable handle in this process. The only way to hold the
+# child's handle set to exactly what the run needs is an explicit handle list
+# (TESP-S1 §2.4), so redirection and the list are added together or not at all.
+EXTENDED_STARTUPINFO_PRESENT = 0x00080000
+STARTF_USESTDHANDLES = 0x00000100
+PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
+GENERIC_READ = 0x80000000
+GENERIC_WRITE = 0x40000000
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_WRITE = 0x00000002
+OPEN_EXISTING = 3
+CREATE_ALWAYS = 2
+FILE_ATTRIBUTE_NORMAL = 0x00000080
 
 
 class BrokerError(RuntimeError):
@@ -80,6 +93,26 @@ class PlannedInvocation:
 
 
 @dataclass(frozen=True)
+class PlannedTransport:
+    """A model transport launch (TESP §7.5).
+
+    Deliberately not a ToolSpec. A transport has no published entrypoint, no
+    version and no sandbox-verification record to declare — inventing one to
+    satisfy the tool schema would be a false claim. It is still a process, so
+    it goes through the same job, the same identity and the same events.
+    """
+
+    projectId: str
+    runId: str
+    role: str
+    argv: tuple[str, ...]
+    candidateDir: Path
+    stdout: Path | None = None
+    stderr: Path | None = None
+    runtimeFamily: str = "unknown"
+
+
+@dataclass(frozen=True)
 class ProcessIdentity:
     projectId: str
     runId: str
@@ -120,6 +153,43 @@ class _StartupInfo(ctypes.Structure):
         ("hStdOutput", ctypes.c_void_p),
         ("hStdError", ctypes.c_void_p),
     ]
+
+
+class _PinnedHandleList(NamedTuple):
+    """The child's handle list and every allocation that backs it.
+
+    All three fields must outlive the CreateProcessW call. ctypes does not copy
+    the handle array for us, and the attribute list is itself a pointer into
+    the buffer; dropping either before the child is created leaves it reading
+    freed memory, which CreateProcessW reports as ERROR_INVALID_PARAMETER
+    rather than crashing. This is measured, not theoretical — see the note in
+    WindowsJob._pin_handles.
+    """
+
+    buffer: Any
+    attribute_list: Any
+    array: Any
+
+
+class _SECURITY_ATTRIBUTES(ctypes.Structure):
+    """Only ever used to mark a capture handle inheritable."""
+
+    _fields_ = [
+        ("nLength", ctypes.c_uint32),
+        ("lpSecurityDescriptor", ctypes.c_void_p),
+        ("bInheritHandle", ctypes.c_int),
+    ]
+
+
+class _STARTUPINFOEXW(ctypes.Structure):
+    """STARTUPINFO plus the attribute list.
+
+    STARTUPINFO is the first member, so `&ex.StartupInfo == &ex`: one byref
+    serves both forms, and `cb` is what tells CreateProcessW to read the
+    extended one.
+    """
+
+    _fields_ = [("StartupInfo", _StartupInfo), ("lpAttributeList", ctypes.c_void_p)]
 
 
 class _ProcessInformation(ctypes.Structure):
@@ -202,6 +272,35 @@ def _kernel32():
     library.CloseHandle.restype = ctypes.c_int
     library.GetFileAttributesW.argtypes = [ctypes.c_wchar_p]
     library.GetFileAttributesW.restype = ctypes.c_uint32
+    library.InitializeProcThreadAttributeList.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    library.InitializeProcThreadAttributeList.restype = ctypes.c_int
+    library.UpdateProcThreadAttribute.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_size_t,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    library.UpdateProcThreadAttribute.restype = ctypes.c_int
+    library.DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
+    library.DeleteProcThreadAttributeList.restype = None
+    library.CreateFileW.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    library.CreateFileW.restype = ctypes.c_void_p
     return library
 
 
@@ -245,23 +344,126 @@ class WindowsJob:
         candidate_dir: Path,
         *,
         role: str,
+        stdout: Path | None = None,
+        stderr: Path | None = None,
+        runtime_family: str = "unknown",
     ) -> tuple[ProcessIdentity, ctypes.c_void_p]:
         if self._closed:
             raise BrokerError("job is already closed")
+        if stdout is None and stderr is None:
+            # Nothing to redirect: bInheritHandles stays FALSE and the child
+            # inherits nothing at all.
+            return self._launch(argv, candidate_dir, role, None, None, runtime_family)
+        owned: list[ctypes.c_void_p] = []
+        pinned: _PinnedHandleList | None = None
+        try:
+            # stdin comes from NUL: a transport that has been given its prompt
+            # must never sit waiting on an inherited console.
+            standard_input = self._open_inheritable("NUL", GENERIC_READ, OPEN_EXISTING)
+            owned.append(standard_input)
+            out = self._open_inheritable(stdout, GENERIC_WRITE, CREATE_ALWAYS) if stdout is not None else None
+            if out is not None:
+                owned.append(out)
+            err = self._open_inheritable(stderr, GENERIC_WRITE, CREATE_ALWAYS) if stderr is not None else out
+            if err is not None and not any(err is handle for handle in owned):
+                owned.append(err)
+            pinned = self._pin_handles(owned)
+            return self._launch(
+                argv,
+                candidate_dir,
+                role,
+                (standard_input, out or err, err or out),
+                pinned.attribute_list,
+            )
+        finally:
+            if pinned is not None:
+                self._library.DeleteProcThreadAttributeList(pinned.attribute_list)
+            # Nothing here is released until the launch has returned: the
+            # handles are still the child's until it has been created.
+            for handle in owned:
+                self._library.CloseHandle(handle)
+
+    def _open_inheritable(self, path: Path | str, access: int, creation: int) -> ctypes.c_void_p:
+        attributes = _SECURITY_ATTRIBUTES(ctypes.sizeof(_SECURITY_ATTRIBUTES), None, 1)
+        handle = self._library.CreateFileW(
+            os.fspath(path),
+            access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ctypes.byref(attributes),
+            creation,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+        if not handle or handle == INVALID_HANDLE_VALUE:
+            raise BrokerError(f"cannot open {path} for capture: {ctypes.get_last_error()}")
+        return ctypes.c_void_p(handle)
+
+    def _pin_handles(self, handles: list[ctypes.c_void_p]) -> _PinnedHandleList:
+        """Build the child's handle list: exactly these handles, nothing else.
+
+        Returns the backing memory with the list; see _PinnedHandleList for why
+        that lifetime is not optional.
+        """
+        size = ctypes.c_size_t()
+        # The first call always fails; that is how the required size is learned.
+        self._library.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+        buffer = ctypes.create_string_buffer(size.value)
+        attribute_list = ctypes.cast(buffer, ctypes.c_void_p)
+        if not self._library.InitializeProcThreadAttributeList(attribute_list, 1, 0, ctypes.byref(size)):
+            raise BrokerError(f"InitializeProcThreadAttributeList failed: {ctypes.get_last_error()}")
+        array = (ctypes.c_void_p * len(handles))(*(ctypes.cast(h, ctypes.c_void_p) for h in handles))
+        if not self._library.UpdateProcThreadAttribute(
+            attribute_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            ctypes.cast(ctypes.byref(array), ctypes.c_void_p),
+            ctypes.sizeof(array),
+            None,
+            None,
+        ):
+            raise BrokerError(f"UpdateProcThreadAttribute failed: {ctypes.get_last_error()}")
+        return _PinnedHandleList(buffer, attribute_list, array)
+
+    def _launch(
+        self,
+        argv: tuple[str, ...],
+        candidate_dir: Path,
+        role: str,
+        standard_handles: tuple[Any, ...] | None,
+        attribute_list: ctypes.c_void_p | None,
+        runtime_family: str = "unknown",
+    ) -> tuple[ProcessIdentity, ctypes.c_void_p]:
         info = _ProcessInformation()
-        startup = _StartupInfo()
-        startup.cb = ctypes.sizeof(startup)
+        if attribute_list is None:
+            start = _StartupInfo()
+            start.cb = ctypes.sizeof(_StartupInfo)
+            inner = start
+            inherit_handles = False
+            flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT
+        else:
+            extended = _STARTUPINFOEXW()
+            extended.StartupInfo.cb = ctypes.sizeof(_STARTUPINFOEXW)
+            extended.lpAttributeList = attribute_list
+            start = extended
+            inner = extended.StartupInfo
+            inherit_handles = True
+            flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
+        if standard_handles is not None:
+            inner.dwFlags = STARTF_USESTDHANDLES
+            inner.hStdInput, inner.hStdOutput, inner.hStdError = standard_handles
         command_line = subprocess.list2cmdline(list(argv))
         created = self._library.CreateProcessW(
             argv[0],
             command_line,
             None,
             None,
-            False,
-            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+            inherit_handles,
+            flags,
             None,
             os.fspath(candidate_dir),
-            ctypes.byref(startup),
+            # `inner` is the first member of the extended form, so this address
+            # is also the STARTUPINFOEXW address when the extended one is in use.
+            ctypes.byref(inner),
             ctypes.byref(info),
         )
         if not created:
@@ -270,9 +472,7 @@ class WindowsJob:
         thread = ctypes.c_void_p(info.hThread)
         try:
             if not self._library.AssignProcessToJobObject(self._handle, process):
-                raise BrokerError(
-                    f"AssignProcessToJobObject failed: {ctypes.get_last_error()}"
-                )
+                raise BrokerError(f"AssignProcessToJobObject failed: {ctypes.get_last_error()}")
             creation = _FileTime()
             exit_time = _FileTime()
             kernel_time = _FileTime()
@@ -437,7 +637,7 @@ class PoliceTerminationAuthority:
     def terminate(self, run: ProjectRun) -> None:
         run._terminate_for_police()
 
-    def terminate_project(self, broker: "Broker", project_id: str) -> tuple[ProjectRun, ...]:
+    def terminate_project(self, broker: Broker, project_id: str) -> tuple[ProjectRun, ...]:
         runs = broker._close_project_dispatch(project_id)
         for run in runs:
             self.terminate(run)
@@ -530,29 +730,94 @@ class Broker:
             return self._invoke_locked(planned)
 
     def _invoke_locked(self, planned: PlannedInvocation) -> ProjectRun:
+        return self._dispatch(
+            planned.projectId,
+            planned.runId,
+            planned.role,
+            planned.argv,
+            planned.candidateDir,
+            {
+                "toolId": planned.toolId,
+                "version": planned.version,
+                "role": planned.role,
+                "argv": list(planned.argv),
+                "candidateDir": os.fspath(planned.candidateDir),
+            },
+        )
+
+    def spawn_transport(
+        self, planned: PlannedTransport, runtime_family: str = "unknown"
+    ) -> ProjectRun:
+        """Launch a model transport inside the project job.
+
+        The loop is a caller of the broker and never a spawner (TESP §7.1).
+        This is the door for §7.5 model invocation; it shares the spawn path,
+        the identity record and the abort surface with tool invocation rather
+        than adding a second way to create a process.
+        """
+        with self._dispatch_lock:
+            self._assert_dispatch_open(planned.projectId)
+        if not planned.projectId or not planned.runId or not planned.role:
+            raise BrokerError("projectId, runId, and role are required")
+        if not planned.argv or any(
+            not isinstance(arg, str) or not arg or "\x00" in arg for arg in planned.argv
+        ):
+            raise BrokerError("transport argv must be a non-empty tuple of argv strings without NUL")
+        candidate = self._resolve_contained(planned.candidateDir)
+        if not candidate.is_dir():
+            raise BrokerError("candidateDir must be a directory")
+        captured = {}
+        for name, path in (("stdout", planned.stdout), ("stderr", planned.stderr)):
+            if path is not None:
+                captured[name] = self._resolve_contained(path)
+        return self._dispatch(
+            planned.projectId,
+            planned.runId,
+            planned.role,
+            planned.argv,
+            candidate,
+            {
+                "transport": True,
+                "role": planned.role,
+                "argv": list(planned.argv),
+                "candidateDir": os.fspath(candidate),
+                "captured": sorted(captured),
+            },
+            stdout=captured.get("stdout"),
+            stderr=captured.get("stderr"),
+            runtime_family=runtime_family,
+        )
+
+    def _dispatch(
+        self,
+        project_id: str,
+        run_id: str,
+        role: str,
+        argv: tuple[str, ...],
+        candidate_dir: Path,
+        detail: dict[str, Any],
+        *,
+        stdout: Path | None = None,
+        stderr: Path | None = None,
+        runtime_family: str = "unknown",
+    ) -> ProjectRun:
+        """Create suspended, assign to the job, record identity, then resume."""
         if self.event_log is not None:
             self.event_log.record(
                 "action.requested",
                 producer="broker",
-                payload=json.dumps(
-                    {
-                        "toolId": planned.toolId,
-                        "version": planned.version,
-                        "role": planned.role,
-                        "argv": list(planned.argv),
-                        "candidateDir": os.fspath(planned.candidateDir),
-                    },
-                    sort_keys=True,
-                ).encode("utf-8"),
-                project_id=planned.projectId,
-                run_id=planned.runId,
+                payload=json.dumps(detail, sort_keys=True).encode("utf-8"),
+                project_id=project_id,
+                run_id=run_id,
             )
-        job = WindowsJob(planned.projectId, planned.runId)
+        job = WindowsJob(project_id, run_id)
         try:
             identity, process = job.spawn(
-                planned.argv,
-                planned.candidateDir,
-                role=planned.role,
+                argv,
+                candidate_dir,
+                role=role,
+                stdout=stdout,
+                stderr=stderr,
             )
         except Exception as exc:
             job.close()
@@ -561,12 +826,10 @@ class Broker:
                     "action.failed",
                     producer="broker",
                     payload=json.dumps(
-                        {"toolId": planned.toolId, "version": planned.version,
-                         "error": str(exc)},
-                        sort_keys=True,
+                        {**detail, "error": str(exc)}, sort_keys=True,
                     ).encode("utf-8"),
-                    project_id=planned.projectId,
-                    run_id=planned.runId,
+                    project_id=project_id,
+                    run_id=run_id,
                 )
             raise
         if self.event_log is not None:
@@ -574,11 +837,11 @@ class Broker:
                 "process.registered",
                 producer="broker",
                 payload=json.dumps(identity.to_dict(), sort_keys=True).encode("utf-8"),
-                project_id=planned.projectId,
-                run_id=planned.runId,
+                project_id=project_id,
+                run_id=run_id,
             )
-        run = ProjectRun(job, process, identity, planned.candidateDir)
-        self.runs.register(planned.projectId, run)
+        run = ProjectRun(job, process, identity, candidate_dir)
+        self.runs.register(project_id, run)
         return run
 
     def _snapshot_candidate(self, run: ProjectRun) -> dict[str, str]:
@@ -600,6 +863,7 @@ class Broker:
         output_artifact_refs: tuple[str, ...] | list[str] = (),
         files_changed: tuple[str, ...] | list[str] = (),
         worker_note: str | None = None,
+        timeout_ms: int = 0xFFFFFFFF,
     ) -> int:
         """Wait, snapshot candidate bytes, and record a durable breadcrumb."""
         for ref in output_artifact_refs:
@@ -618,7 +882,7 @@ class Broker:
             or any(ord(character) < 32 and character not in "\t\n\r" for character in worker_note)
         ):
             raise BrokerError("worker_note is invalid")
-        code = run.wait()
+        code = run.wait(timeout_ms)
         self.runs.unregister(run)
         if self.event_log is not None:
             captured = self._snapshot_candidate(run)

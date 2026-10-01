@@ -1,7 +1,19 @@
 {
   "schemaVersion": 1,
-  "assignments": {},
-  "placeholders": {
-    "note": "P0 placeholder only. Model/tool assignments per TESP v1.1 section 7.5 land with MS3. Do not extend this shape without a checklist slice."
+  "models": {
+    "space-bunny-alpha": {
+      "modelId": "space-bunny-alpha",
+      "provider": "openrouter",
+      "transport": "pi"
+    }
+  },
+  "roles": {
+    "DEXTER": "space-bunny-alpha",
+    "DEE_DEE": "space-bunny-alpha",
+    "JACK_THE_SPLITTER": "space-bunny-alpha",
+    "SCHOTTY": "space-bunny-alpha",
+    "CLEANING_LAYA": "space-bunny-alpha",
+    "SHARPENER": "space-bunny-alpha",
+    "POLICE": "space-bunny-alpha"
   }
 }

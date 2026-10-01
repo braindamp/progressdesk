@@ -11,9 +11,13 @@ governance, checklist state, and loop evidence stay in the builder.
 
 The accepted specifications are the sole authority for everything in this repo:
 
-- **TESP v1.1** — technical spec: `D:\Coding\progressDesk4-build\ProgressDesk project definition\ProgressDesk TESP_v1.1.md`
-- **FUSP v1.1** — functional spec: same folder
-- **VISP v1.0** — visual spec: same folder
+- **VISP v1.9** — vision and planning spec: `D:\Coding\progressDesk4-build\ProgressDesk project definition\ProgressDesk VISP_v1.9.md`
+- **FUSP v1.9** — functional spec: same folder
+- **TESP v1.10** — technical spec: same folder
+
+These are the current versions. Earlier versions of the same names are retained
+in that folder as history; a version is superseded only by a later version of
+the same document.
 
 Nothing overrides the gospel. In case of conflict: stop, write a typed blocked
 handoff, and use the builder's OWNER_QUESTIONS.md channel — never silently

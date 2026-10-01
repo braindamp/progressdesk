@@ -57,6 +57,8 @@ project.created is durable before the atomic directory publication.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import hashlib
 import json
 import os
@@ -552,6 +554,10 @@ class ProjectService:
         artifacts: ArtifactStore,
         definitions: Definitions,
     ) -> None:
+        # Start and restart are one operation (FUSP §1B, §3.11). Recovery is
+        # not composed here, so a later start refuses rather than inventing a
+        # path of its own.
+        self.recovery_start: Callable[[str, str], Any] | None = None
         self.projects_root = Path(projects_root)
         self.log = log
         self.artifacts = artifacts
@@ -728,10 +734,14 @@ class ProjectService:
         if started:
             existing = _event_payload(self.artifacts, started[0], _STARTED_FIELDS)
             if existing["requestId"] != request_id:
-                raise ProjectError(
-                    "recovery_unavailable",
-                    "project already has a first start; ordinary recovery start is §9 scope",
-                )
+                # Start and restart are one operation (FUSP 1B / 3.11).
+                # A new request id on a started project means recover, not refuse.
+                if self.recovery_start is None:
+                    raise ProjectError(
+                        "recovery_unavailable",
+                        "project already has a first start and no recovery path is composed",
+                    )
+                return self.recovery_start(project_id, request_id)
             request_event = self._require_start_request(
                 project_id, request_id, created.id
             )

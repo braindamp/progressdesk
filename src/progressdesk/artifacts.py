@@ -7,7 +7,7 @@ file, (2) flush and install under the content digest. The referencing event appe
 the event file.
 
 Source-first note: no donor has this store (delivered-code-analysis: ralph2 kept
-usage.jsonl rows only, artifacts were referenced by sha256 in records but never
+rows only, artifacts were referenced by sha256 in records but never
 stored content-addressed). This module is the TESP-native store; patterns (atomic
 temp+os.replace, digest-before-write) come from the P0.3 state.py port.
 """
