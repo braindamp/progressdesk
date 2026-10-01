@@ -1,8 +1,8 @@
 # TESP — Technical Execution Specification (Workshop Core)
 
-- Version: 1.10
+- Version: 1.11
 - Status: DRAFT (v1.x per DESIGN_CONVENTIONS.md — normative upon recorded human acceptance in progressDesk)
-- Parent authority: accepted VISP v1.9 and FUSP v1.9 (and the owner's subsequent accepted amendments).
+- Parent authority: accepted VISP v1.11 and FUSP v1.11 (and the owner's subsequent accepted amendments).
 - Purpose: specify the target workshop sufficiently for implementation through milestones and small tasks; defines how, including model assignment policy per milestone.
 - Development framework: already available; outside this specification. An existing development framework performs the build; this document does not define, bootstrap, or redesign it.
 - Scope: M1–M17 plus the project-formation surface at their accepted scope. Lab internals, INSPECTOR, and full GUI implementation remain deferred.
@@ -10,6 +10,7 @@
 - Amendment note (1.2 → 1.8): parent authority to VISP v1.8 and FUSP v1.8. **No verification runs between build steps** — a builder's completion claim is recorded as given and the item completes (§10.3, §10.4, §12.1). **Advisory sparring round** added at the round boundary: cast model, three fixed questions, never blocking, verdict recorded for the milestone gate and Sharpener (§10.4). **No supervisor role**; the exception path mechanism is specified here — HOUSEKEEPING, JACK_THE_SPLITTER, SCHOTTY (§10.6) — with both ladders terminating in a red-light state. **One gateway, one event store, one entry point** (§16.1). **Per-execution attribution** specified (§4.5) as the precondition for cheapest-best assignment.
 - Amendment note (1.9 → 1.10): §9 tightened. Recovery is owned by the start chain and nothing composed beside `start` may start a project; the prose that restated §4.4 replay and §7.1 spawn identity was removed rather than repeated. No requirement changed.
 - Amendment note (1.0 → 1.1): gate model aligned to FUSP v1.1 (VISP/FUSP signoffs recorded separately; GO after milestone definitions; optional per-milestone signoff); planning surface expanded with the card/item model, meetings, topics, and session-leader modes (§5.2); milestone GO operation (§5.4); `definition.signoff` operation and GUI-ready projections for signoff and image evidence (§16); fix supersession + `fix superseded` event (§14.1, §4.5); crash-injection authority rule (§12.3); failure-escalation ladder removed to the future modelPool TESP.
+- Amendment note (1.10 → 1.11): makes the FUSP v1.11 additions executable. `answers_in` joins the adapter contract (§10.0); the builder's rationale becomes a required shape with three distinct states (§10.3); the round boundary reads that state and routes absence to SHARPENER (FUSP F-S8, §10.4); HOUSEKEEPING is resolved into a deterministic script and a decision-model judgement with an agreed order of operations (§1.3, §10.6); the decision seam is a module (§3); and a round becomes reachable through a verb (§16.1). No new actor, no new gate, and nothing added to the build plane. Aligned to VISP v1.11 and FUSP v1.11; the three move together.
 
 ---
 
@@ -34,7 +35,7 @@ progressDesk command/API surface          <- the one entry point
      ├─ event-log writer
      ├─ POLICE
      ├─ Manager
-     ├─ CLEANING_LAYA (LLM) → floor_sweep (script)
+     ├─ CLEANING_LAYA (decision model) → floor_sweep (script)
      └─ broker control interface
               |
      Project execution boundary
@@ -116,11 +117,29 @@ def abort(run, origin, classification=None, requested_by=None):
 
 ```python
 def housekeeping(run):
+    discard_torn_tail(log)      # FIRST: nothing reads a log it cannot parse (see below)
     for s in open_spawns(run): mark_dead_unless_alive(s.identity)   # pid+ctime+image
     for i in unticked(run): sweep_debris_to_evidence(i)
-    discard_torn_tail(log)                                             # projections rebuild
-    return restartable(run)          # else: hand the scene to SCHOTTY
+    traces = report()           # mechanical only; carries no judgement
+    return decide(traces)       # else: hand the scene to SCHOTTY
 ```
+
+Three things are settled here rather than left to the reader.
+
+**The tail is recovered first, not last.** Liveness reconciliation and debris
+sweeping both read the whole log, and the parser is strict: a torn final append
+raises rather than being skipped. So any pass that reads the log before the tail
+is repaired converts a recoverable tear into an unreadable history, and the
+recovery step that exists to fix it never runs. Repair precedes reading.
+
+**The script decides nothing; the decision model decides one thing.** The three
+passes produce traces and nothing else. `decide` is a single typed question about
+those traces, answered in one forward pass, and it has exactly two answers plus
+the absence of one (§10.6).
+
+**Absence is not the good answer.** A decision service that does not answer
+yields no decision, and an undecided room is not a restartable room. The room
+goes to SCHOTTY. Silence is never read as consent.
 
 ### 1.4 Concurrency
 - One mutating task at a time per project.
@@ -180,8 +199,9 @@ Logical ownership is fixed; exact file subdivision may remain small.
 - M1 Definition pipeline → definition.py: documents, revision chain, planning sessions, project creation
 - M2 Lab addon → lab.py: bounded advisory request/result interface
 - M3 Kernel → kernel.py: synchronous authorization using immutable installed rules
-- M4 Ralph → ralph.py: bounded task execution and milestone progression
+- M4 Ralph → loop.py: bounded task execution and milestone progression
 - M5 POLICE → police.py: deviation classification and sole termination authority
+- M6 Decisions → decide.py: the decision seam and its `systemone` adapter. CLEANING_LAYA is reached through the ordinary spawn seam (§10.0) and declared in the role table by transport, not wired beside it. A module needing no language model does not acquire one.
 - M7 Broker/sandbox → broker.py, sandbox_windows.py: controlled model/tool invocation
 - M8 Worker → worker skill/instructions and fresh-context execution
 - M9 QA → qa.py: approved checks and independent review
@@ -295,6 +315,7 @@ The loop log exists for the exception path and for attribution. Nothing is retai
 | spawn begin / end (with identity) | floor_sweep | is this still alive, or is the scene dirty? |
 | item claimed / ticked / blocked | CLEANING_LAYA, SCHOTTY, DEE_DEE | is this item delivered, blocked, or abandoned? |
 | housekeeping action | SCHOTTY | what was already tried, so it is not repeated? |
+| rationale absent / empty / unreadable | SHARPENER | is the contract being honoured, and if not, which instruction is at fault? |
 | violation detected | POLICE | classify and abort? |
 | abort issued, termination confirmed / unresolved | POLICE, red light | is the stop real, or merely claimed? |
 | stop record | SCHOTTY, red light | terminal state |
@@ -675,9 +696,25 @@ class Executor(Protocol):
     kind: str                       # examples, not a closed set:
                                       #   "pi" | "hermes" | "cline" | "codex" | "thin" | "manual" | ...
     sandbox: str                    # what THIS adapter actually enforces
+    answers_in: str                 # "prose" | "distribution" — what it produces when asked
     def spawn(self, req: SpawnRequest) -> ResultEnvelope: ...
     def cancel(self, run_id: str) -> None: ...
 ```
+
+- `answers_in` is a declaration, validated at registration, and it is the whole
+  difference between a role that answers in words and a role that answers a typed
+  question with a calibrated distribution. The two are not interchangeable: a
+  caller that wants one and is handed the other is refused, not accommodated.
+  A distribution formatted as a sentence is not an answer, and a request for
+  words an adapter cannot emit must not be satisfied by a number. The check is
+  symmetric — asking a decision model for prose, and asking a prose model for a
+  probability, are both refusals.
+- A role's adapter is resolved from the role table by `transport`. The dispatch
+  layer holds no per-role knowledge and no per-role branch.
+- A role reached by a decision model is given no brief. A brief is instructions,
+  and a decision model cannot obey one; it receives the state to decide about and
+  the question, and nothing else. Asking it to conform to a prose contract is the
+  failure this separation exists to prevent.
 
 - The sandbox field is a declaration by the adapter, not a request from the orchestrator. The orchestrator records it; it does not attempt a tier the adapter cannot provide.
 - "none" is a first-class, recorded value, not a silent gap.
@@ -753,7 +790,11 @@ accumulated context, which is the most expensive thing in the run.
 2. Broker creates a fresh builder context and candidate workspace.
 3. Builder uses only assigned tools, and works freely inside the project it is building.
 4. Broker records completed actions and durable artifacts.
-5. Builder submits a candidate manifest and a short rationale for the choices it made.
+5. Builder submits a candidate manifest and a **rationale**: a short account of the
+   choices it made and why. The rationale is a required field of the manifest, not
+   a request for prose. An absent field is a recorded, typed fact, and it is a
+   different fact from an empty one and from an unreadable one. The three are never
+   merged, and none of them is inferred from the other two.
 6. Candidate bytes are frozen and the item is **complete**. No check runs on the candidate here (F-R1).
 7. Builder context ends.
 8. Optional sparring round (§10.4) may engage. The next round may begin regardless.
@@ -774,6 +815,52 @@ A builder's "done" message only submits a candidate.
 - Cadence is policy, not doctrine: every item while the loop is small, sampled as volume grows, decided by measured cost (§4.5) rather than by argument.
 - Milestone QA is a different thing and is not optional — §12.2.
 
+### 10.4a Did the round keep to its brief
+
+The sparring round asks three fixed questions. A fourth concern is not a question
+at all, and it is settled before any model is asked anything: **did the round do
+what its brief and task packet told it to do?**
+
+This is answered in three layers, and only the third involves a model.
+
+1. **Stated.** Whether the round's own account matches the diff, the paths touched
+   and the calls it made. Deterministic. The round's account is re-derived, never
+   believed; a claim contradicted by the workspace is a defect at the point of
+   claim.
+2. **Named.** A short list of conditions compiled in advance from the brief and
+   the packet — touched something that is not in scope, edited a normative
+   document, reached outside the project, removed what it was not asked to remove,
+   changed what another role depends on. Each is a separate question, answered
+   independently, and the list is written by code from the brief rather than chosen
+   by a model.
+3. **Implied.** Whether the intent behind the round is consistent with the brief.
+   This is the only layer a decision model serves, and it serves it as a signal
+   with a probability, never as a verdict.
+
+A signal above its threshold is **not** an incident. It routes to SHARPENER, who
+is the one actor able to decide whether this is a one-off, a pattern, or a defect
+in the instruction that produced it — and to fix that instruction, mechanically
+where it can be (F-S2) or through a VISP where it cannot (F-S4).
+
+**Absence routes the same way, and it is the cheapest signal there is.** A
+submitted manifest with no rationale field is a fact that costs nothing to detect
+and is checked on every round. It goes to SHARPENER, never to POLICE: nothing was
+breached, a contract was not honoured, and the correction belongs on the
+instruction. POLICE joins only if that investigation finds an actual breach.
+
+**Why the rationale is required rather than requested.** A model optimises what is
+observable. A transcript is evidence about what a model said, and a model that
+knows the transcript is scored will shape it — silently switching approach and
+recovering without comment looks exactly like correct planning. The diff is
+evidence about what it did, and the filesystem is not negotiable by presentation
+preference. Requiring the account externally is what makes the third layer
+possible at all; the worst case is otherwise not concealment but reasoning that was
+never externalised, which leaves nothing to check.
+
+**What is learned becomes what is checked.** Observations from this route are the
+material for the condition list at the next round boundary, so a failure of this
+kind changes what the workshop looks for rather than only what it recorded.
+
 ### 10.5 Failure and continuation
 - Failure, timeout, disappearance or exhaustion is recorded and the item is **not delivered**. Nothing inspects the candidate to discover this; the absence of a completion record is the fact.
 - Delivered-by-exception-path, not by per-task rejection: a non-delivered item is routed to the ladders in §10.6, and a governance breach is routed to POLICE (§8).
@@ -791,10 +878,59 @@ The functional shape of both ladders is FUSP §3.3a. This is the mechanism.
 
 **Entry.** On a non-delivered item, a failed run, a timeout, a vanished process, or a detected governance breach. Never on a timer or precaution.
 
-**CLEANING_LAYA — the cleaning lady.** LLM, fast, and the only role between a
-finished slice and the next one. She decides; `floor_sweep` is the script she runs.
-She is not asked whether to continue — that is settled — she is asked whether
-anything is worth noticing.
+**CLEANING_LAYA — the cleaning lady.** The only role between a finished slice and
+the next one. She decides; `floor_sweep` is the script she runs. She is not asked
+whether to continue — that is settled — she is asked whether anything is worth
+noticing.
+
+She is a **decision model, not a language model.** She is non-autoregressive: she
+receives a state and typed questions, and returns calibrated probabilities in one
+forward pass. There is no text to generate and therefore nothing to parse. This is
+the whole reason she exists in this form — a verdict that has to survive a string
+match is a verdict that can be lost, and one was: a role briefed to answer with a
+single line was recorded as having said nothing whenever it answered in its own
+words instead.
+
+Four properties are settled, and they are properties of the seam rather than
+promises about anyone's compliance.
+
+- **She is reached like every other role.** The role table names her transport;
+  the registry resolves it; the spawner dispatches it. There is no per-role branch
+  in the dispatch layer and no callable handed to a consumer.
+- **She is given no brief.** A brief is instructions and she cannot obey one. Her
+  context pack holds the state and nothing else.
+- **She is asked one question type.** A yes/no question with a probability, over a
+  state written as prose. Not an open question about judgement, and not a
+  multi-option choice. A distribution formatted as a sentence is not an answer.
+- **An unanswered decision is not a good answer.** A service that does not answer
+  produces no decision, and an undecided room is not a restartable room. It goes
+  to SCHOTTY. Absence, a low probability, and an unusable payload are three facts
+  and are recorded as three.
+
+The room question is a **detection** question — *does this report describe at least
+one problem* — and not the composite *should this room be cleared*, which measures
+as a signal with nothing to threshold. The state is prose, not a serialised
+report; the same reports asked as structured text return near-uniform
+distributions. The threshold travels with the value rather than being read from a
+constant, so no consumer can apply a boundary the adapter did not use.
+
+Every decision site is specified the same way, and each carries its own question
+and its own calibration. **A site is not wired until its threshold exists and is
+recorded alongside the measurement that produced it**; an uncalibrated site is not
+guessed at.
+
+| site | asked at | question shape |
+|---|---|---|
+| room restartable | every slice, every milestone | detection, one option |
+| work outside the task | per round, per SHARPENER check | named condition, one at a time |
+| change is real | per recorded change | decomposed into separate yes/no questions, never a three-way choice |
+| evidence carries its claim | per cited artifact | yes/no over the bytes beside the claim |
+| task is divisible | once, on non-delivery | yes/no |
+| brief kept | per round, per brief | named conditions from the compiled list (§10.4a) |
+
+A multi-option question is decomposed rather than converted. A model that cannot
+hold a three-way distinction holds two of them perfectly well, and asking for the
+weaker form costs one extra pass and keeps the threshold meaningful.
 
 **floor_sweep — the script, deterministic, runs constantly.** Two strengths, and
 the difference is the boundary:
@@ -846,7 +982,7 @@ is a verdict, not a state, and nothing raises the light for him on its own.
 Nothing runs afterwards and no human is paged; the state is surfaced pull-only
 through §16.1, and any rendered control is derived in progressDesk.
 
-**Ladder discipline.** The two ladders never interleave and never retry. CLEANING_LAYA runs first and decides whether the rest is needed at all. Cost per rung is a fixed constant, never tuned downward by making the rung cleverer.
+**Ladder discipline.** The two ladders never interleave and never retry. CLEANING_LAYA runs first and decides whether the rest is needed at all. Cost per rung is a fixed constant, never tuned downward by making the rung cleverer. Her own rung is the cheapest thing in the workshop, which is what makes it affordable to run at every boundary — and which is the whole reason she is a classifier and not a general model.
 
 ### 10.6 Deterministic risk score
 
@@ -1113,12 +1249,23 @@ planning.item.create / edit / relate / attach
 planning.formalize
 project.create
 project.start               # first start = GO (§5.4)
+round.dispatch              # run one round for one task; the only door onto a role
 project.abort
 project.status
 project.events
 checkpoint.create / list
 lab.request / result
 ```
+
+- `round.dispatch` takes a project and a task, and runs one bounded round to its
+  natural resting point: dispatch, the builder's own completion, the round
+  boundary, the scripted sweep, CLEANING_LAYA's verdict, and whatever that verdict
+  authorises. It is the entry point the exception path hangs from, and without it
+  the roles exist and cannot be reached. It returns the run identity and the
+  resulting state, and it never returns prose.
+- No role is reachable by any other door. `tools/run_role.py` remains for a human
+  running a role by hand; it is a manual adapter at the same seam, not a second
+  way in.
 - `project.abort` — one termination method, two origins: `police` (carries a classification) and `owner` (does not). The origin is a parameter on the same call.
 - The owner's stop must be reachable from the CLI, and that is how it is verified without progressDesk. A GUI control is presentation over the same call, not a second way in.
 - project.start is also restart; only the first start on a created project is the GO.
@@ -1197,6 +1344,12 @@ Tasks
 3. Implement bounded Ralph rounds and candidate acceptance.
 4. Implement POLICE classification and project-wide termination.
 5. Register one sandbox-verified tool capability.
+6. Implement the decision seam and its adapter, declare CLEANING_LAYA's transport
+   in the role table, and prove the room verdict against rooms the sweep damaged.
+7. Make the builder's rationale a required manifest field with three distinct
+   states, and route absence to SHARPENER (FUSP F-S8).
+8. Compile the brief into named conditions and stand up the conformance signal
+   (§10.4a), with its threshold recorded against the measurement that produced it.
 
 Automatic integration gate
 - One real builder round completes and reports, with nothing verifying it in between; the milestone gate is the first check.
@@ -1204,6 +1357,9 @@ Automatic integration gate
 - A project controller, worker, and spawned descendant are all terminated (child and parent processes of that project).
 - A separate project and the workshop control host remain alive.
 - Missing required QA cannot become acceptance.
+- A round is reachable through `round.dispatch` and nothing else, and a role cannot be dispatched through a path that does not resolve its transport from the role table.
+- A builder round that submits no rationale is recorded as absent — not as empty, not as unreadable — and reaches SHARPENER.
+- A decision service that is stopped yields an undecided room that goes to SCHOTTY, and no path returns a restartable room without a probability behind it.
 
 The normal fixture may use a scripted model transport while exercising real broker, filesystem, evaluator, and process behavior. Any live-model demonstration is separately verified free.
 
@@ -1269,6 +1425,8 @@ The target is complete for this TESP when:
 - Events reconstruct logical state without re-execution.
 - Required milestone QA is automatic; milestone acceptance requires the automatic QA integration gate; declared signoff pauses are honored without weakening the gate.
 - Both exception ladders are implemented and terminate: CLEANING_LAYA first, JACK or SCHOTTY on demand, red light as a state and a stop record (§10.6).
+- CLEANING_LAYA is a decision model reached through the ordinary seam, asked a typed question, and answering with a probability. No role is reached by a path that bypasses the role table, and no decision is read out of generated text.
+- A round's rationale is a required shape. Its absence, its emptiness and its unreadability are three recorded facts, absence reaches SHARPENER, and what is learned on that route changes what the next round boundary checks.
 - No component supervises, watches or second-guesses work in progress.
 - Mechanical Sharpener fixes propagate without per-project approval (unlimited authority where no fix exists yet and no decision making is necessary), including supersession of lesser fixes.
 - Decision-bearing Sharpener work enters the VISP/FUSP chain.
