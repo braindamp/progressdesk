@@ -64,7 +64,6 @@ class DispatchOutcome:
     detail: str = ""
     verdict: str | None = None
     halves: list[str] | None = None
-    verdict_ref: str | None = None
 
     @property
     def delivered(self) -> bool:
@@ -83,7 +82,6 @@ class DispatchOutcome:
             "wallMs": self.wall_ms,
             "nudges": self.nudges,
             "detail": self.detail,
-            "verdictRef": self.verdict_ref,
         }
 
 
@@ -650,10 +648,6 @@ class RoundDispatcher:
             # A reviewer returns a verdict, not a deliverable. Submitting it as
             # a candidate would count a review as a delivery and quietly inflate
             # every number built on deliveries.
-            if envelope.output.strip():
-                outcome.verdict_ref = (
-                    f"sha256:{self.artifacts.put(envelope.output.encode('utf-8'))}"
-                )
             return outcome
         if not produced:
             # The worker finished and left nothing. That is an undelivered round,
