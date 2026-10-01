@@ -681,143 +681,17 @@ class ProjectService:
             event=created,
         )
 
-    def start(self, project_id: str, *, request_id: str) -> ProjectStart:
-        """First start records GO; later recovery starts are not fabricated."""
-        if not isinstance(project_id, str) or not _UUID_RE.fullmatch(project_id):
-            raise ProjectError("bad_request", "projectId must be a UUID")
-        request_id = _request_id(request_id)
-        with self._project_lock(project_id):
-            return self._start_locked(project_id, request_id)
+    def started(self, project_id: str) -> bool:
+        """Has housekeeping been kicked off for this project?
 
-    def _start_locked(self, project_id: str, request_id: str) -> ProjectStart:
-        # None here means this was never called for a real project. There is no
-        # sensible answer to that, so there is no check for it: the next line
-        # says exactly what is true, which is that there is no event.
-        created = self._latest_event(project_id, "project.created")
-        payload = _event_payload(self.artifacts, created, _CREATED_FIELDS)
-        plan = self._validate_plan(payload["draftRevision"])
-        destination = self.projects_root / project_id
-        if not self._created_manifest_matches(created):
-            raise ProjectError(
-                "project_not_ready",
-                f"project {project_id} has no valid event-backed manifest",
-            )
-
-        started = self._events_for(project_id, "project.started")
-        if started:
-            existing = _event_payload(self.artifacts, started[0], _STARTED_FIELDS)
-            if existing["requestId"] != request_id:
-                # Start and restart are one operation (FUSP 1B / 3.11).
-                # A new request id on a started project means recover, not refuse.
-                if self.recovery_start is None:
-                    raise ProjectError(
-                        "recovery_unavailable",
-                        "project already has a first start and no recovery path is composed",
-                    )
-                return self.recovery_start(project_id, request_id)
-            request_event = self._require_start_request(
-                project_id, request_id, created.id
-            )
-            go_event = self._require_go_event(
-                project_id, request_id, request_event.id
-            )
-            if go_event is not None:
-                go_payload = _event_payload(self.artifacts, go_event, _GO_FIELDS)
-            return ProjectStart(
-                projectId=project_id,
-                requestId=request_id,
-                draftRevision=plan.draft_ref,
-                runId=existing["runId"],
-                requestedEvent=request_event,
-                goEvent=go_event,
-                startedEvent=started[0],
-            )
-
-        request_event = self._find_start_request(project_id, request_id)
-        if request_event is not None:
-            request_payload = _event_payload(
-                self.artifacts, request_event, _START_REQUEST_FIELDS
-            )
-            run_id = request_payload["runId"]
-        else:
-            conflicting = [
-                event
-                for event in self._events_for(project_id, "project.start-requested")
-                if event.id != request_id
-            ]
-            if conflicting:
-                raise ProjectError(
-                    "start_request_conflict",
-                    "another first-start request is already in progress for this project",
-                )
-            run_id = str(uuid.uuid4())
-            request_payload = {
-                "schemaVersion": PROJECT_PLAN_SCHEMA_VERSION,
-                "projectId": project_id,
-                "requestId": request_id,
-                "draftRevision": plan.draft_ref,
-                "runId": run_id,
-                "goDigest": plan.go_digest,
-            }
-            request_event = self.log.record(
-                "project.start-requested",
-                producer="desk",
-                payload=_canonical_json(request_payload),
-                project_id=project_id,
-                run_id=run_id,
-                cause_id=created.id,
-            )
-
-        go_event = self._require_go_event(project_id, request_id, request_event.id)
-        if go_event is not None:
-            go_payload = _event_payload(self.artifacts, go_event, _GO_FIELDS)
-        else:
-            go_payload = {
-                "schemaVersion": PROJECT_PLAN_SCHEMA_VERSION,
-                "projectId": project_id,
-                "requestId": request_id,
-                "draftRevision": plan.draft_ref,
-                "milestoneRefs": list(plan.milestone_refs),
-                "gateIds": list(plan.gate_ids),
-                "goDigest": plan.go_digest,
-            }
-            go_event = self.log.record(
-                "milestone.go-issued",
-                producer="desk",
-                payload=_canonical_json(go_payload),
-                project_id=project_id,
-                run_id=run_id,
-                cause_id=request_event.id,
-            )
-
-        started_payload = {
-            "schemaVersion": PROJECT_PLAN_SCHEMA_VERSION,
-            "projectId": project_id,
-            "requestId": request_id,
-            "draftRevision": plan.draft_ref,
-            "runId": run_id,
-            "goDigest": plan.go_digest,
-            "goEventId": go_event.id,
-        }
-        started_event = self.log.record(
-            "project.started",
-            producer="desk",
-            payload=_canonical_json(started_payload),
-            project_id=project_id,
-            run_id=run_id,
-            cause_id=go_event.id,
+        A read, and the only question the start concept ever needed to answer.
+        There is no start step: housekeeping is told to begin, and the log is
+        what records that it did.
+        """
+        return any(
+            event.type == "housekeeping.kicked-off" and event.projectId == project_id
+            for event in self.projects.log.read_all()
         )
-        return ProjectStart(
-            projectId=project_id,
-            requestId=request_id,
-            draftRevision=plan.draft_ref,
-            runId=run_id,
-            requestedEvent=request_event,
-            goEvent=go_event,
-            startedEvent=started_event,
-        )
-
-    # -- plan validation -----------------------------------------------------
 
     def _validate_plan(self, draft_ref: str) -> _ValidatedPlan:
         validator = _PlanValidator(self.definitions, self.artifacts)

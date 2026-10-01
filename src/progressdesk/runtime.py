@@ -385,11 +385,27 @@ def _project_create(rt: Runtime, cmd: Command) -> Any:
 
 
 def _project_start(rt: Runtime, cmd: Command) -> Any:
-    started = rt.operations.project_start(
-        cmd.require("project_id"),
-        request_id=str(cmd.require("request_id")),
+    """Tell housekeeping to begin.
+
+    There is no start gate. Housekeeping is asked whether the room is clear, and
+    its answer is the whole of what starting means: restartable, or hand the
+    scene to forensics. The GO ceremony, the start-requested event and the
+    milestone GO record all went with the kernel that gave them a reason.
+    """
+    project_id = cmd.require("project_id")
+    rt.log.record(
+        "housekeeping.kicked-off",
+        producer="desk",
+        payload=json.dumps({"requestId": str(cmd.require("request_id"))}).encode("utf-8"),
+        project_id=project_id,
     )
-    return {"projectId": started.project_id, "runId": getattr(started, "run_id", None)}
+    clearance = rt.cleaner.run(project_id, strength="light")
+    return {
+        "projectId": project_id,
+        "verdict": clearance.decision,
+        "restartable": clearance.restartable,
+        "traces": list(clearance.report.traces if clearance.report else []),
+    }
 
 
 def _round_dispatch(rt: Runtime, cmd: Command) -> Any:

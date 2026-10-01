@@ -143,7 +143,7 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
-    "project.started": {
+    "housekeeping.kicked-off": {
         "producers": frozenset({"desk"}),
         "payload_required": True,
         "project_scoped": True,
