@@ -284,17 +284,34 @@ class RoundDispatcher:
         # builder a second time: two attempts spent, double the wall, and any
         # nudge the seam had already earned discarded. The comment above
         # described the intended behaviour and the line below it contradicted it.
+        # Collect before sweeping. The sweep's debris pass looks for a
+        # round.started with no candidate.submitted and moves the whole round
+        # directory into evidence, then deletes it. Run first, it ate the work
+        # of the round that had just finished: the builder wrote the file, the
+        # sweep filed it as unticked debris, and _collect then read a directory
+        # that no longer existed. Recording the candidate first is what makes
+        # the round look delivered, which is the only thing the debris pass
+        # looks at.
+        outcome = self._settle(project_id, task_ref, run, envelope, actual_role)
+
         clearance = self._clear(project_id)
         if clearance is not None and not clearance.restartable:
-            # She said the room is not ready. SCHOTTY is the thinking one: he
-            # cleans it, or passes it to POLICE. If he cannot, neither can we.
+            # She said the room is not ready for what comes next. SCHOTTY is the
+            # thinking one: he cleans it, or passes it to POLICE. If he cannot,
+            # neither can we. What this round produced is already recorded and
+            # is not thrown away to say so.
             return _with(
                 self._schottify(project_id, clearance),
                 status="blocked",
                 run_id=run, project_id=project_id, task_ref=task_ref,
-                detail=f"room not cleared: {clearance.decision} {clearance.rationale}".strip(),
+                candidate_id=outcome.candidate_id,
+                files=outcome.files,
+                detail=(
+                    f"room not cleared: {clearance.decision} {clearance.rationale}"
+                    f" | this round: {outcome.status} {outcome.detail}"
+                ).strip(),
             )
-        return self._settle(project_id, task_ref, run, envelope, actual_role)
+        return outcome
 
     # -- helpers ----------------------------------------------------------
     def _clear(self, project_id: str) -> Clearance | None:
@@ -592,9 +609,16 @@ class RoundDispatcher:
             # every number built on deliveries.
             return outcome
         if not produced:
-            # The worker finished and left nothing. That is an undelivered round,
-            # not an error — and saying so is what lets the split path be
-            # reached at all.
+            # It finished and left nothing. Why is the one thing worth knowing,
+            # and the builder said it: "no filesystem or shell tool is
+            # available" is a different fact from "I tried and produced nothing",
+            # and only one of them is fixed by handing over tools.
+            #
+            # The detail used to be the transport's message count, which is a
+            # tally of what arrived rather than what was said. The words replace
+            # it, and the count is kept alongside for the case where the builder
+            # said nothing at all.
+            outcome.detail = (envelope.output.strip() or envelope.detail)[:1_000]
             return outcome
         candidate_id = str(uuid.uuid4())
         self._log.record(
@@ -638,7 +662,7 @@ class RoundDispatcher:
                 continue
             data, spec = read_bytes_with_spec(path)
             captured[relative] = data
-            specs[relative] = {**spec.to_dict(), "bytes": len(data)}
+            specs[relative] = spec
         return captured, specs
 
     @staticmethod
