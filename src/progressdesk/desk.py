@@ -690,11 +690,10 @@ class ProjectService:
             return self._start_locked(project_id, request_id)
 
     def _start_locked(self, project_id: str, request_id: str) -> ProjectStart:
+        # None here means this was never called for a real project. There is no
+        # sensible answer to that, so there is no check for it: the next line
+        # says exactly what is true, which is that there is no event.
         created = self._latest_event(project_id, "project.created")
-        if created is None:
-            # Nothing to start. Not a history check -- an operation asked of
-            # something that was never created.
-            raise ProjectError("no_project", f"project {project_id} was never created")
         payload = _event_payload(self.artifacts, created, _CREATED_FIELDS)
         plan = self._validate_plan(payload["draftRevision"])
         destination = self.projects_root / project_id
