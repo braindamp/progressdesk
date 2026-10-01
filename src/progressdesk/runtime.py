@@ -414,6 +414,44 @@ def _project_create(rt: Runtime, cmd: Command) -> Any:
     ).to_manifest()
 
 
+def _preflight(
+    project_id: str, tools: tuple[str, ...], requires: tuple[str, ...]
+) -> dict[str, Any] | None:
+    """Is this round even possible? Asked before anything is spawned.
+
+    Only what the caller declared. If the task says it needs a capability and
+    was not granted one, that is set arithmetic and code settles it, and the
+    round is refused before a process exists rather than after one has run out
+    of ways to write a file.
+
+    What the caller did not declare is not guessed at. A slice that quietly
+    needs a file is a slice whose requirements were not written down, and
+    refusing it on a model's guess would refuse work that was fine -- which is
+    worse than letting it fail, because the failure is now handled properly: the
+    round runs, the builder says what it could not do, and SHARPENER turns that
+    into a VISP about the missing declaration. The preflight is the exact
+    check; the exception path is the general one.
+    """
+    if not requires:
+        return None
+    missing = [item for item in requires if item not in tools]
+    if not missing:
+        return None
+    return {
+        "projectId": project_id,
+        "status": "not-dispatched",
+        "delivered": False,
+        "detail": (
+            "not dispatched: this task declares that it needs "
+            + ", ".join(missing)
+            + " and was granted "
+            + (", ".join(tools) or "no tools")
+            + ". Nothing was started."
+        ),
+        "missing": missing,
+        "granted": list(tools),
+    }
+
 def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
     """Run one round. The only door onto a role.
 
@@ -429,6 +467,14 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
     # shell has nothing between it and the machine. The safety default is
     # deliberate, and this is how a caller chooses otherwise on purpose.
     tools = tuple(str(item) for item in cmd.get("tools", ()))
+    # Declared requirements are arithmetic: granted must cover required, and
+    # code can settle that without a model. When nothing is declared the task
+    # may still be impossible, and only reading the slice can tell -- so that is
+    # the part CLEANING_LAYA is asked about.
+    requires = tuple(str(item) for item in cmd.get("requires", ()))
+    refusal = _preflight(project_id, tools, requires)
+    if refusal is not None:
+        return refusal
 
     packet = TaskPacket(
         task_id=f"{project_id}:{len(slice_text)}",
