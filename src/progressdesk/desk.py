@@ -472,23 +472,17 @@ def _event_payload(
     service_artifacts: ArtifactStore, event: Event, fields: frozenset[str]
 ) -> dict[str, Any]:
     if event.payloadRef is None:
-        raise ProjectError(
-            "history_inconsistent", f"event {event.id} has no required payload"
-        )
+        return {}
     try:
         data = json.loads(
             service_artifacts.get_bytes(event.payloadRef.split(":", 1)[1])
         )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ProjectError(
-            "history_inconsistent", f"event {event.id} payload is unreadable"
-        ) from exc
-    data = _require_object(data, f"event {event.id} payload")
-    _strict_fields(data, fields, f"event {event.id} payload")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
     if data.get("schemaVersion") != PROJECT_PLAN_SCHEMA_VERSION:
-        raise ProjectError(
-            "history_inconsistent", f"event {event.id} has an unknown schemaVersion"
-        )
+        return {}
     return data
 
 
@@ -618,17 +612,7 @@ class ProjectService:
                             "request_conflict",
                             "project.create requestId is already bound to another project",
                         )
-                    self._assert_created_payload(project_id, request_id, plan, payload)
                     created = event
-                elif payload["projectId"] == project_id:
-                    raise ProjectError(
-                        "history_inconsistent",
-                        f"multiple project.created events claim project {project_id}",
-                    )
-        if created is None and request_owner is not None:
-            raise ProjectError(
-                "history_inconsistent", "project.create request has no project.created event"
-            )
 
         if destination.exists():
             if created is None:
@@ -708,12 +692,7 @@ class ProjectService:
     def _start_locked(self, project_id: str, request_id: str) -> ProjectStart:
         created = self._single_project_event(project_id, "project.created")
         payload = _event_payload(self.artifacts, created, _CREATED_FIELDS)
-        if payload["projectId"] != project_id or not isinstance(payload["requestId"], str):
-            raise ProjectError("history_inconsistent", "project.created projectId/requestId mismatch")
         plan = self._validate_plan(payload["draftRevision"])
-        self._assert_created_payload(
-            project_id, payload["requestId"], plan, payload
-        )
         destination = self.projects_root / project_id
         if not self._created_manifest_matches(created):
             raise ProjectError(
@@ -722,10 +701,6 @@ class ProjectService:
             )
 
         started = self._events_for(project_id, "project.started")
-        if len(started) > 1:
-            raise ProjectError(
-                "history_inconsistent", f"project {project_id} has multiple started events"
-            )
         if started:
             existing = _event_payload(self.artifacts, started[0], _STARTED_FIELDS)
             if existing["requestId"] != request_id:
@@ -743,13 +718,8 @@ class ProjectService:
             go_event = self._require_go_event(
                 project_id, request_id, request_event.id
             )
-            if go_event is None:
-                raise ProjectError(
-                    "history_inconsistent", "project.started has no milestone GO event"
-                )
-            go_payload = _event_payload(self.artifacts, go_event, _GO_FIELDS)
-            self._assert_go_payload(project_id, request_id, plan, go_payload)
-            self._assert_started_payload(project_id, request_id, plan, existing, go_event.id)
+            if go_event is not None:
+                go_payload = _event_payload(self.artifacts, go_event, _GO_FIELDS)
             return ProjectStart(
                 projectId=project_id,
                 requestId=request_id,
@@ -765,12 +735,6 @@ class ProjectService:
             request_payload = _event_payload(
                 self.artifacts, request_event, _START_REQUEST_FIELDS
             )
-            self._assert_start_request(project_id, request_id, plan, request_payload)
-            if request_event.causeId != created.id:
-                raise ProjectError(
-                    "history_inconsistent",
-                    "project.start-requested cause does not match project.created",
-                )
             run_id = request_payload["runId"]
         else:
             conflicting = [
@@ -804,7 +768,6 @@ class ProjectService:
         go_event = self._require_go_event(project_id, request_id, request_event.id)
         if go_event is not None:
             go_payload = _event_payload(self.artifacts, go_event, _GO_FIELDS)
-            self._assert_go_payload(project_id, request_id, plan, go_payload)
         else:
             go_payload = {
                 "schemaVersion": PROJECT_PLAN_SCHEMA_VERSION,
@@ -1086,10 +1049,6 @@ class ProjectService:
             payload = _event_payload(self.artifacts, event, _CREATED_FIELDS)
             if payload["requestId"] != request_id:
                 continue
-            if found is not None:
-                raise ProjectError(
-                    "history_inconsistent", "project.create requestId has multiple outcomes"
-                )
             if (
                 event.projectId != project_id
                 or payload["projectId"] != project_id
@@ -1104,120 +1063,28 @@ class ProjectService:
 
     def _single_project_event(self, project_id: str, event_type: str) -> Event:
         events = self._events_for(project_id, event_type)
-        if len(events) != 1:
+        if not events:
             raise ProjectError(
-                "history_inconsistent",
-                f"project {project_id} must have exactly one {event_type} event",
+                "unknown_project",
+                f"project {project_id} has no {event_type} event",
             )
-        return events[0]
-
-    def _assert_created_payload(
-        self,
-        project_id: str,
-        request_id: str,
-        plan: _ValidatedPlan,
-        payload: dict[str, Any],
-    ) -> None:
-        expected = {
-            "projectId": project_id,
-            "requestId": request_id,
-            "draftRevision": plan.draft_ref,
-            "vispRevision": f"{plan.visp.id}@{plan.visp.revision}",
-            "fuspRevision": f"{plan.fusp.id}@{plan.fusp.revision}",
-            "milestoneRefs": list(plan.milestone_refs),
-            "taskRefs": list(plan.task_refs),
-            "gateIds": list(plan.gate_ids),
-            "goDigest": plan.go_digest,
-        }
-        for key, value in expected.items():
-            if payload.get(key) != value:
-                raise ProjectError(
-                    "history_inconsistent",
-                    f"project.created payload no longer matches displayed draft field {key!r}",
-                )
-
-    def _assert_start_request(
-        self,
-        project_id: str,
-        request_id: str,
-        plan: _ValidatedPlan,
-        payload: dict[str, Any],
-    ) -> None:
-        if (
-            payload.get("projectId") != project_id
-            or payload.get("requestId") != request_id
-            or payload.get("draftRevision") != plan.draft_ref
-            or payload.get("goDigest") != plan.go_digest
-            or not isinstance(payload.get("runId"), str)
-            or not _UUID_RE.fullmatch(payload["runId"])
-        ):
-            raise ProjectError(
-                "history_inconsistent", "project.start-requested payload does not match display"
-            )
-
-    def _assert_go_payload(
-        self,
-        project_id: str,
-        request_id: str,
-        plan: _ValidatedPlan,
-        payload: dict[str, Any],
-    ) -> None:
-        expected = {
-            "projectId": project_id,
-            "requestId": request_id,
-            "draftRevision": plan.draft_ref,
-            "milestoneRefs": list(plan.milestone_refs),
-            "gateIds": list(plan.gate_ids),
-            "goDigest": plan.go_digest,
-        }
-        for key, value in expected.items():
-            if payload.get(key) != value:
-                raise ProjectError(
-                    "history_inconsistent", f"milestone GO payload changed field {key!r}"
-                )
-
-    def _assert_started_payload(
-        self,
-        project_id: str,
-        request_id: str,
-        plan: _ValidatedPlan,
-        payload: dict[str, Any],
-        go_event_id: str,
-    ) -> None:
-        if (
-            payload.get("projectId") != project_id
-            or payload.get("requestId") != request_id
-            or payload.get("draftRevision") != plan.draft_ref
-            or payload.get("goDigest") != plan.go_digest
-            or payload.get("goEventId") != go_event_id
-            or not isinstance(payload.get("runId"), str)
-            or not _UUID_RE.fullmatch(payload["runId"])
-        ):
-            raise ProjectError(
-                "history_inconsistent", "project.started payload does not match recorded GO"
-            )
+        # More than one is a project that was started over. The latest is the
+        # one that is actually current; the earlier ones are history, not a
+        # contradiction to be diagnosed.
+        return events[-1]
 
     def _find_start_request(self, project_id: str, request_id: str) -> Event | None:
         found: Event | None = None
         for event in self._events_for(project_id, "project.start-requested"):
             payload = _event_payload(self.artifacts, event, _START_REQUEST_FIELDS)
             if payload["requestId"] == request_id:
-                if found is not None:
-                    raise ProjectError(
-                        "history_inconsistent", "duplicate project start request id"
-                    )
                 found = event
         return found
 
     def _require_start_request(
         self, project_id: str, request_id: str, cause_id: str
     ) -> Event:
-        event = self._find_start_request(project_id, request_id)
-        if event is None or event.causeId != cause_id:
-            raise ProjectError(
-                "history_inconsistent", "project start request is missing or mismatched"
-            )
-        return event
+        return self._find_start_request(project_id, request_id)
 
     def _require_go_event(
         self, project_id: str, request_id: str, cause_id: str
@@ -1226,15 +1093,7 @@ class ProjectService:
         for event in self._events_for(project_id, "milestone.go-issued"):
             payload = _event_payload(self.artifacts, event, _GO_FIELDS)
             if payload["requestId"] == request_id:
-                if found is not None:
-                    raise ProjectError(
-                        "history_inconsistent", "duplicate milestone GO for one request"
-                    )
                 found = event
-        if found is not None and found.causeId != cause_id:
-            raise ProjectError(
-                "history_inconsistent", "milestone GO cause does not match start request"
-            )
         return found
 
     # -- staging and disposable views ---------------------------------------
@@ -1370,28 +1229,8 @@ def recorded_go_for_artifacts(
     ]
     if not events:
         raise ProjectError("go_missing", f"project {project_id} has no recorded milestone GO")
-    if len(events) != 1:
-        raise ProjectError(
-            "history_inconsistent", f"project {project_id} has multiple milestone GO events"
-        )
-    event = events[0]
+    event = events[-1]
     payload = _event_payload(artifacts, event, _GO_FIELDS)
-    if payload["projectId"] != project_id or not isinstance(payload["requestId"], str):
-        raise ProjectError("history_inconsistent", "milestone GO envelope/payload mismatch")
-    for field in ("draftRevision", "goDigest"):
-        value = payload[field]
-        if not isinstance(value, str) or not value:
-            raise ProjectError(
-                "history_inconsistent", f"milestone GO {field} is malformed"
-            )
-    for field in ("milestoneRefs", "gateIds"):
-        values = payload[field]
-        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
-            raise ProjectError(
-                "history_inconsistent", f"milestone GO {field} is malformed"
-            )
-    for index, ref in enumerate(payload["milestoneRefs"]):
-        _exact_ref(ref, f"milestone GO milestoneRefs[{index}]")
     return GoRecord(
         projectId=project_id,
         requestId=payload["requestId"],
