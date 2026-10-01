@@ -671,9 +671,6 @@ class Broker:
         with self._dispatch_lock:
             self.runs.reopen_project(project_id)
 
-    def active_runs(self, project_id: str) -> tuple[ProjectRun, ...]:
-        return self.runs.active(project_id)
-
     def _forget_run(self, run: ProjectRun) -> None:
         self.runs.unregister(run)
 
@@ -723,11 +720,6 @@ class Broker:
             argv=(*spec.entrypoint, *arguments),
             candidateDir=candidate,
         )
-
-    def invoke(self, planned: PlannedInvocation) -> ProjectRun:
-        with self._dispatch_lock:
-            self._assert_dispatch_open(planned.projectId)
-            return self._invoke_locked(planned)
 
     def _invoke_locked(self, planned: PlannedInvocation) -> ProjectRun:
         return self._dispatch(

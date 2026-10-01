@@ -276,26 +276,6 @@ class ToolCenter:
         self._record_verification(reference, verification)
         return self._registered(reference)
 
-    def activate(self, reference: str) -> RegisteredTool:
-        reference = _parse_reference(reference)
-        tool = self._registered(reference)
-        if tool.active:
-            return tool
-        if not tool.verification.passed:
-            raise ToolError("tool activation requires a passing sandbox verification")
-        self.log.record(
-            "tool.activated",
-            producer="manager",
-            payload=_canonical(
-                {
-                    "schemaVersion": 1,
-                    "toolRef": reference,
-                    "verificationId": tool.verification.verification_id,
-                }
-            ),
-        )
-        return self._registered(reference)
-
     def get(self, reference: str, *, active_only: bool = True) -> RegisteredTool:
         tool = self._registered(_parse_reference(reference))
         if active_only and not tool.active:

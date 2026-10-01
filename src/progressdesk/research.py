@@ -87,7 +87,7 @@ class ResearchService:
         self.artifacts = artifacts
         self.log = log
 
-    def generate_visp_draft(
+    def _gone(
         self,
         finding: ResearchFinding,
         *,

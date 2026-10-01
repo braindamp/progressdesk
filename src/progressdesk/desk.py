@@ -277,12 +277,6 @@ def _nonempty_string(value: Any, context: str) -> str:
     return value
 
 
-def _positive_int(value: Any, context: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ProjectError("draft_invalid", f"{context} must be a positive integer")
-    return value
-
-
 def _exact_ref(value: Any, context: str) -> str:
     if not isinstance(value, str) or not _REF_RE.fullmatch(value):
         raise ProjectError(
@@ -292,55 +286,11 @@ def _exact_ref(value: Any, context: str) -> str:
     return value
 
 
-def _ref_parts(value: str) -> tuple[str, int]:
-    identifier, revision = value.rsplit("@", 1)
-    return identifier, int(revision)
-
-
 def _request_id(value: Any) -> str:
     request_id = _nonempty_string(value, "requestId")
     if len(request_id) > 200:
         raise ProjectError("bad_request", "requestId must not exceed 200 characters")
     return request_id
-
-
-def _normalize_port(value: Any, context: str) -> dict[str, Any]:
-    data = _require_object(value, context)
-    _strict_fields(data, _PORT_FIELDS, context)
-    question_kind = data["questionKind"]
-    if question_kind not in {"scope", "judgment", "other"}:
-        raise ProjectError(
-            "draft_invalid", f"{context}.questionKind is not supported"
-        )
-    if not isinstance(data["blocksCreation"], bool):
-        raise ProjectError(
-            "draft_invalid", f"{context}.blocksCreation must be a boolean"
-        )
-    if not isinstance(data["resolved"], bool):
-        raise ProjectError("draft_invalid", f"{context}.resolved must be a boolean")
-    port = {
-        "portId": _nonempty_string(data["portId"], f"{context}.portId"),
-        "question": _nonempty_string(data["question"], f"{context}.question"),
-        "questionKind": question_kind,
-        "blocksCreation": data["blocksCreation"],
-        "resolved": data["resolved"],
-    }
-    if not port["resolved"] and port["blocksCreation"]:
-        raise ProjectError(
-            "creation_blocked",
-            f"unresolved decision port {port['portId']!r} blocks project creation",
-        )
-    if port["resolved"] and port["blocksCreation"]:
-        raise ProjectError(
-            "draft_invalid",
-            f"resolved decision port {port['portId']!r} cannot block creation",
-        )
-    if question_kind == "scope" and not port["resolved"] and not port["blocksCreation"]:
-        raise ProjectError(
-            "creation_blocked",
-            f"unresolved scope question {port['portId']!r} must block creation",
-        )
-    return port
 
 
 def _atomic_bytes(path: Path, data: bytes) -> None:
@@ -574,17 +524,6 @@ class ProjectService:
             found = event
         return found
 
-    def _latest_event(self, project_id: str, event_type: str) -> Event | None:
-        """The most recent event of this type, or None if there has never been one.
-
-        More than one is a project that was started over: the latest is the one
-        that is current and the earlier ones are history. It used to insist on
-        exactly one and refuse otherwise, which made a retry something to
-        diagnose rather than something to have done.
-        """
-        events = self._events_for(project_id, event_type)
-        return events[-1] if events else None
-
     def _find_start_request(self, project_id: str, request_id: str) -> Event | None:
         found: Event | None = None
         for event in self._events_for(project_id, "project.start-requested"):
@@ -592,23 +531,6 @@ class ProjectService:
             if payload["requestId"] == request_id:
                 found = event
         return found
-
-    def _require_start_request(
-        self, project_id: str, request_id: str, cause_id: str
-    ) -> Event:
-        return self._find_start_request(project_id, request_id)
-
-    def _require_go_event(
-        self, project_id: str, request_id: str, cause_id: str
-    ) -> Event | None:
-        found: Event | None = None
-        for event in self._events_for(project_id, "milestone.go-issued"):
-            payload = _event_payload(self.artifacts, event, _GO_FIELDS)
-            if payload["requestId"] == request_id:
-                found = event
-        return found
-
-    # -- staging and disposable views ---------------------------------------
 
     def _new_stage(self, project_id: str) -> Path:
         self.projects_root.mkdir(parents=True, exist_ok=True)
@@ -710,30 +632,6 @@ def _fsync_directory(path: Path) -> None:
             os.close(descriptor)
 
 
-def recorded_go_for_artifacts(
-    log: EventLog, artifacts: ArtifactStore, project_id: str
-) -> GoRecord:
-    """Artifact-backed GO projection consumed by the installed kernel."""
-    events = [
-        event
-        for event in log.read_all()
-        if event.type == "milestone.go-issued" and event.projectId == project_id
-    ]
-    if not events:
-        raise ProjectError("go_missing", f"project {project_id} has no recorded milestone GO")
-    event = events[-1]
-    payload = _event_payload(artifacts, event, _GO_FIELDS)
-    return GoRecord(
-        projectId=project_id,
-        requestId=payload["requestId"],
-        draftRevision=payload["draftRevision"],
-        milestoneRefs=tuple(payload["milestoneRefs"]),
-        gateIds=tuple(payload["gateIds"]),
-        goDigest=payload["goDigest"],
-        event=event,
-    )
-
-
 class ProgressDeskOperations:
     """The §16.1 operation subset delivered by MS1.4.
 
@@ -749,44 +647,8 @@ class ProgressDeskOperations:
         self.definitions = definitions
         self.projects = projects
 
-    def definition_create(
-        self,
-        *,
-        kind: str,
-        content: bytes,
-        parent_refs: tuple[str, ...] | list[str] = (),
-    ) -> Definition:
-        return self.definitions.create(
-            kind=kind, content=content, parent_refs=parent_refs, producer="desk"
-        )
-
-    def definition_revise(
-        self,
-        definition_id: str,
-        *,
-        content: bytes,
-        expected_revision: int,
-    ) -> Definition:
-        return self.definitions.revise(
-            definition_id,
-            content=content,
-            expected_revision=expected_revision,
-            producer="desk",
-        )
-
-    def definition_read(self, definition_id: str, *, revision: int) -> Definition:
-        return self.definitions.get(definition_id, revision)
-
-    def definition_signoff(self, definition_id: str, *, revision: int) -> Event:
-        return self.definitions.signoff(
-            definition_id, revision=revision, producer="desk"
-        )
-
     def project_create(
         self, draft_revision: str, *, request_id: str
     ) -> ProjectCreation:
         return self.projects.create(draft_revision, request_id=request_id)
-
-    def project_start(self, project_id: str, *, request_id: str) -> ProjectStart:
-        return self.projects.start(project_id, request_id=request_id)
 

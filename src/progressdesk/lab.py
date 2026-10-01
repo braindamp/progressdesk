@@ -170,16 +170,6 @@ class LabReferralService:
         self.log = log
         self.artifacts = artifacts
 
-    def determine(self, determination: LabNeedDetermination) -> Event:
-        determination.validate()
-        return self.log.record(
-            "lab.need-determined",
-            producer="planning",
-            payload=json.dumps(
-                determination.to_dict(), sort_keys=True, separators=(",", ":")
-            ).encode("utf-8"),
-        )
-
     def create_request(
         self,
         determination: LabNeedDetermination,

@@ -55,37 +55,11 @@ def _validate_structure(state: dict[str, Any]) -> None:
         raise ValueError("State must carry a non-empty string 'schemaVersion'")
 
 
-def _validate_against_schema_file(state: dict[str, Any], path: Path) -> None:
-    schema_path = path.parent / SCHEMA_FILENAME
-    if not schema_path.exists():
-        _validate_structure(state)
-        return
-    schema = read_json(schema_path)
-    required = schema.get("required", [])
-    missing = [key for key in required if key not in state]
-    if missing:
-        raise ValueError(
-            "Invalid state: missing required property '" + missing[0] + "'"
-        )
+def _validate_against_schema_file(
 
 
-def load_state(path: Path) -> dict[str, Any]:
-    """Load and verify state. Tampered payloads raise; legacy files load unchanged."""
-    state = read_json(path)
-    _validate_against_schema_file(state, path)
-    integrity = state.get(_INTEGRITY_KEY, {})
-    if integrity is None:
-        integrity = {}
-    digest = payload_digest(state)
-    recorded = integrity.get("payloadSha256") if isinstance(integrity, dict) else None
-    if recorded not in (None, digest):
-        raise ValueError(
-            f"State integrity mismatch: expected {recorded}, got {digest}"
-        )
-    return state
 
-
-def write_state(state: dict[str, Any], path: Path) -> None:
+state: dict[str, Any], path: Path) -> None:
     """Write state atomically: updatedAt + integrity hash, temp file, os.replace."""
     state = dict(state)
     state["updatedAt"] = utc_now()
