@@ -136,19 +136,33 @@ CHUNK = 4_000
 # so this asks whether it restates something already in ProgressDesk, not whether
 # the same idea lives in something she has not been given.
 #
-# There is deliberately no "is this about something else" verdict. A researcher
-# exists to bring in what is happening elsewhere, and a proposal that does not fit
-# the current shape is exactly the one worth reading. Asking whether it deviates
-# would filter out the useful ones.
+#
+# Deviating asks whether the change is about ProgressDesk at all -- not about
+# what it currently is, and not about what it could become. It is answerable
+# because the state carries what ProgressDesk is, which is the referent it needs.
 GATE_QUESTIONS = {
     "real": "Did this change come from something that actually happened?",
     "cosmetic": "Does this change rearrange wording without changing what the system does?",
     "invented": "Is any part of this record filled in for something that did not happen?",
+    "deviating": (
+        "Is this about something other than what ProgressDesk is, "
+        "or what it can become?"
+    ),
     "duplicate": "Has this already been done, somewhere in ProgressDesk?",
 }
 # Below this nothing counts as `real`, including a set of lukewarm answers. An
 # unclear verdict is not a pass.
 GATE_FLOOR = 0.5
+
+# What ProgressDesk is, and what it is for. Present so the deviating verdict has
+# its referent in the state rather than in the model's head. It is a workshop
+# that builds software and media through a loop of briefed roles, and the owner
+# ratifies every change to it.
+PROGRESSDESK_IS = (
+    "a workshop that builds projects through a loop of briefed roles -- a builder, "
+    "housekeeping, forensics, a splitter, a researcher -- where the owner signs off "
+    "every change to the framework itself"
+)
 
 
 def _chunks(text: str, size: int = CHUNK) -> list[str]:
@@ -596,7 +610,8 @@ class RoundDispatcher:
                 f"component: {payload.get('componentId', '')}",
                 f"was: {payload.get('previousVersionOrCondition', '')}",
                 f"now: {payload.get('applicationOperation', '')}",
-            ])[:1_500]
+                f"progressdesk is: {PROGRESSDESK_IS}",
+            ])[:2_000]
             try:
                 scores = {
                     verdict: self._ask_noul(project_id, shown, question).probability
