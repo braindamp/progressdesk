@@ -3,13 +3,7 @@
   "identity": {
     "name": "progressDesk workshop",
     "targetRepo": "D:\\Coding\\progressDesk",
-    "builderRepo": "D:\\Coding\\progressDesk4-build\\builder",
-    "gospel": {
-      "tesp": "TESP v1.1",
-      "fusp": "FUSP v1.1",
-      "visp": "VISP v1.0",
-      "folder": "D:\\Coding\\progressDesk4-build\\ProgressDesk project definition"
-    }
+    "builderRepo": "D:\\Coding\\progressDesk4-build\\builder"
   },
   "paths": {
     "config": "config",
