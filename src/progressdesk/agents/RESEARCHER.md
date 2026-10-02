@@ -117,7 +117,7 @@ Every proposal names what it came from. Four ways to get it wrong:
   classification is never a worthy solution.
 - **Invented** — the field is filled in and you did not read it.
 - **Deviating** — the topic is interesting, and it is not about what ProgressDesk
-  is. A real problem somewhere else is not a proposal for here.
+  is or what it can become. A real problem somewhere else is not a proposal for here.
 - **Duplicate** — Anything already present as a VISP or documented in Trendwatcher.
 
 You are the one role least entitled to an invented observation, because you went
