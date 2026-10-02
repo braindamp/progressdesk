@@ -317,6 +317,11 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    "visp.gated": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
     "police.observation": {
         "producers": frozenset({"police"}),
         "payload_required": True,
@@ -506,7 +511,7 @@ def _event_file_lock(path: Path) -> Iterator[None]:
 
 
 class EventLog:
-    """Append-only events.jsonl surface. One control-host writer per event file.
+    """One control-host writer per event file.
 
     `record()` assigns id/sequence/timestamp itself (control host authority,
     §4.2); flushes+fsyncs the append before acknowledging (§4.3 step 4); orders
@@ -615,7 +620,7 @@ class EventLog:
         return event
 
     def recover_incomplete_tail(self) -> dict[str, Any]:
-        """Recover only an incomplete final append, preserving its bytes.
+        """Interior corruption is never repaired here.
 
         Interior corruption is never repaired here. Recovery is serialized by
         the same cross-process lock used for writes and appends a durable
@@ -683,7 +688,7 @@ class EventLog:
         run_id: str | None = None,
         cause_id: str | None = None,
     ) -> Event:
-        """Append one event; returns the acknowledged (durably flushed) event.
+        """Callers cannot submit id, sequence or timestamp.
 
         Callers cannot submit id/sequence/timestamp — the control host assigns
         them (§4.2). payload bytes go to the artifact store FIRST (§4.3 steps

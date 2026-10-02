@@ -27,7 +27,7 @@ from .harness import HarnessConfig, HarnessError, TaskPacket
 from .floor_sweep import Cleaner, Sweep
 from .spawn import Budget, ContextPack, ContextSection, ModelSpec, SpawnRequest
 from .lab import LabNeedDetermination, LabReferralService, SimulatedLabReferral
-from .loop import dispatcher_for
+from .loop import GATE_FLOOR, PROGRESSDESK_IS, dispatcher_for, judge_change
 from .police import FailureClassification, Observation, PoliceService
 from .planning import PlanningSession
 from .spawn import ExecutorRegistry, ManualExecutor, SpawnError, Spawner
@@ -46,11 +46,7 @@ class CommandError(ValueError):
 
 
 class DomainFailure(Exception):
-    """A typed refusal from a domain service.
-
-    The services raise their own error types rather than a CommandError, so both
-    transports need one place to recognise them. A refusal is a normal reply, not
-    a crash.
+    """Services raise their own types; both transports recognise them here.
     """
 
 
@@ -101,6 +97,9 @@ class Command:
     def get(self, name: str, default: Any = None) -> Any:
         value = self.params.get(name, default)
         return default if value is None else value
+
+
+WORKSHOP = "workshop"
 
 
 @dataclass
@@ -180,13 +179,8 @@ class Runtime:
 
     # -- the spawn seam ---------------------------------------------------
     def spawner_for(self, project_id: str, *, require: tuple[str, ...] = ()) -> Spawner:
-        """The seam for one project, assembled once and reused.
-
-        `require` names adapters the caller will not do without. Without it an
-        unavailable harness is simply absent from the registry and the caller
-        sees the kinds it got; with it, a missing adapter is an error rather
-        than a silent downgrade to the manual adapter.
-        """
+        """The seam for one project
+    """
         with self._spawner_lock:
             spawner = self._spawners.get(project_id)
             if spawner is None:
@@ -221,13 +215,8 @@ class Runtime:
 
     # -- asking a role ----------------------------------------------------
     def _adapter(self, project_id: str, role: str, *, expecting: str) -> tuple[Any, Any]:
-        """Resolve a role to its adapter, refusing a caller that wants the wrong thing.
-
-        `expecting` is what the caller is going to do with the answer: read
-        words, or read a probability. An adapter that cannot produce that is
-        refused here rather than accommodated, because the failure this
-        prevents is a number formatted as a sentence and handed back as prose.
-        """
+        """Resolve a role to its adapter
+    """
         if self.harness is None:
             raise RuntimeError("no role table configured")
         definition = self.harness.definition_for(role)
@@ -257,12 +246,8 @@ class Runtime:
         wall_seconds: int = 180,
         question: str | None = None,
     ) -> Any:
-        """Put one role's context in front of its adapter and return the envelope.
-
-        The adapter is not chosen here. It comes from the role table, so a role
-        served by a decision service and a role served by a gateway are reached
-        the same way and differ only in configuration.
-        """
+        """Put one role's context in front
+    """
         adapter, definition = self._adapter(project_id, role, expecting=expecting)
         sections = []
         if brief_budget:
@@ -296,13 +281,8 @@ class Runtime:
         cast: bool = False,
         tools: tuple[str, ...] = (),
     ) -> str:
-        """Ask a role that answers in words, and return what it said.
-
-        Refused for a role reached by a decision model. That role has no words;
-        it has a distribution, and formatting one as a sentence and calling it
-        an answer is precisely the substitution this seam exists to stop. Use
-        `decide_in_room`, or read the envelope.
-        """
+        """Ask a role that answers in words
+    """
         return self._dispatch(
             project_id, role, state=context, expecting="prose", cast=cast, tools=tools
         ).output or ""
@@ -310,48 +290,62 @@ class Runtime:
     def decide_in_room(self, project_id: str, state: str) -> Decision:
         """CLEANING_LAYA's answer to one room, as a value.
 
-        Raises `Unreachable` when the decision service did not answer, so the
-        caller can hold "no" and "nobody answered" apart. A dead service must
-        never read as a clean room.
+        Project-scoped: two projects running at once have two rooms.
         """
-        envelope = self._dispatch(
-            project_id, "CLEANING_LAYA", state=state, expecting="distribution",
-            brief_budget=0,
-        )
-        if envelope.status != "completed" or "probability" not in envelope.watch:
-            raise Unreachable(
-                envelope.watch.get("reason")
-                or f"decision run ended {envelope.status!r} without a probability"
-            )
-        return Decision(
-            probability=float(envelope.watch["probability"]),
-            threshold=float(envelope.watch.get("threshold", 0.5)),
-            detail=str(envelope.watch.get("detail") or envelope.output),
-        )
+        return self.noul_in(project_id, state, READS_AS_PROBLEM)
 
-    def propose_visp(self, project_id: str, title: str, content: str) -> str:
-        """File what a role proposed as a VISP draft, for a human to sign.
+    def propose_visp(self, title: str, content: str) -> dict[str, Any]:
+        """File what a role proposed as a VISP draft, and put it past the gate.
 
-        Not applied, not scheduled, not treated as doctrine. A definition of
-        kind VISP carrying the words, and the owner signs it or does not. That
-        is the whole of how a framework change happens here.
-        """
+Returns the verdict, not a reference. A reject is still filed; only a `real`
+    verdict surfaces.
+"""
+        text = "\n".join(["# " + title, "", content.strip(), ""])
         definition = self.definitions.create(
-            kind="VISP",
-            content=("# " + title + "\n\n" + content.strip() + "\n").encode("utf-8"),
-            producer="sharpener",
+            kind="VISP", content=text.encode("utf-8"), producer="sharpener",
         )
-        return f"{definition.id}@{definition.revision}"
+        reference = f"{definition.id}@{definition.revision}"
+        record = "\n".join([
+            title, "", content.strip(), "", "progressdesk is: " + PROGRESSDESK_IS,
+        ])
+        try:
+            verdict, score = judge_change(self.noul, record)
+        except Exception:  # noqa: BLE001 - nobody answered
+            verdict, score = "undecided", 0.0
+        accepted = verdict == "real" and score >= GATE_FLOOR
+        self.log.record(
+            "visp.gated",
+            producer="manager",
+            payload=json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "vispRef": reference,
+                    "verdict": verdict,
+                    "probability": round(score, 4),
+                    "accepted": accepted,
+                },
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+        return {
+            "verdict": verdict,
+            "probability": round(score, 4),
+            "accepted": accepted,
+            "visp": reference if accepted else None,
+        }
 
-    def noul(self, project_id: str, state: str, question: str) -> Decision:
+    def noul(self, state: str, question: str) -> Decision:
         """Put one yes/no question to the decision model, get a probability.
 
-        `decide_in_room` is this with the room question already chosen; the
-        boundary needs to ask something else.
+        Workshop-scoped: a question about the framework belongs to no project.
         """
+        return self.noul_in(WORKSHOP, state, question)
+
+    def noul_in(self, project_id: str, state: str, question: str) -> Decision:
+        """Project-scoped. Two projects running at once have two rooms."""
         envelope = self._dispatch(
             project_id, "CLEANING_LAYA", state=state, expecting="distribution",
-            brief_budget=0, question=question or READS_AS_PROBLEM,
+            brief_budget=0, question=question,
         )
         if envelope.status != "completed" or "probability" not in envelope.watch:
             raise Unreachable(
@@ -402,11 +396,7 @@ def _definition_signoff(rt: Runtime, cmd: Command) -> Any:
 
 
 def _project_create(rt: Runtime, cmd: Command) -> Any:
-    """A project is a name and a spec. The spec is the text you were given.
-
-    It is no longer a reference to a stored TESP definition, so there is no
-    revision to pin, no definition to create first, and nothing to validate the
-    draft against. The bytes are hashed and kept; the words are the project.
+    """The bytes are hashed and kept; the words are the project.
     """
     return rt.operations.project_create(
         str(cmd.require("spec")),
@@ -417,20 +407,7 @@ def _project_create(rt: Runtime, cmd: Command) -> Any:
 def _preflight(
     project_id: str, tools: tuple[str, ...], requires: tuple[str, ...]
 ) -> dict[str, Any] | None:
-    """Is this round even possible? Asked before anything is spawned.
-
-    Only what the caller declared. If the task says it needs a capability and
-    was not granted one, that is set arithmetic and code settles it, and the
-    round is refused before a process exists rather than after one has run out
-    of ways to write a file.
-
-    What the caller did not declare is not guessed at. A slice that quietly
-    needs a file is a slice whose requirements were not written down, and
-    refusing it on a model's guess would refuse work that was fine -- which is
-    worse than letting it fail, because the failure is now handled properly: the
-    round runs, the builder says what it could not do, and SHARPENER turns that
-    into a VISP about the missing declaration. The preflight is the exact
-    check; the exception path is the general one.
+    """Is this round even possible?
     """
     if not requires:
         return None
@@ -453,12 +430,7 @@ def _preflight(
     }
 
 def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
-    """Run one round. The only door onto a role.
-
-    The slice arrives as text and is the whole of what the builder is given. It
-    used to be a reference to a stored Task definition, resolved through the
-    definition chain, which meant nothing could be built until a four-document
-    hierarchy had been stood up around it. The slice is the work.
+    """The slice arrives as text and is the whole of what the builder is given.
     """
     project_id = cmd.require("project_id")
     slice_text = str(cmd.require("slice"))
@@ -647,11 +619,7 @@ AGENTS = Path(__file__).resolve().parent / "agents"
 
 
 def read_brief(role: str) -> str:
-    """One role's brief, as text.
-
-    Named rather than inlined because two callers need it and because a role
-    with no brief on disk is a configuration error worth naming plainly, not an
-    empty section that quietly reaches a model as no context at all.
+    """A role with no brief on disk is a configuration error, not empty context.
     """
     path = AGENTS / f"{role}.md"
     try:
@@ -663,11 +631,7 @@ def read_brief(role: str) -> str:
 
 
 def _cast_briefs(exclude: str) -> str:
-    """Every other role's brief, as one section.
-
-    Only SHARPENER gets this. He is the one role whose job is the other roles:
-    at the end of a project he proposes VISPs from how they actually behaved,
-    and he cannot do that from his own brief alone.
+    """Only SHARPENER: his job is the other roles.
     """
     parts = []
     for path in sorted(AGENTS.glob("*.md")):
@@ -679,11 +643,7 @@ def _cast_briefs(exclude: str) -> str:
 
 def ask_role(root: Path, project_id: str, role: str, context: str, *, cast: bool = False,
              tools: tuple[str, ...] = ()) -> str:
-    """Ask a role from outside a Runtime, for a caller that has none.
-
-    A thin wrapper. Everything it used to do — building a Runtime, resolving a
-    role, choosing an adapter, assembling the pack — now lives on Runtime, so
-    this path and the one inside a running workshop cannot drift apart.
+    """A caller with no Runtime. Delegates to Runtime.ask_role.
     """
     return Runtime.create(Path(root)).ask_role(
         project_id, role, context, cast=cast, tools=tools
@@ -691,11 +651,7 @@ def ask_role(root: Path, project_id: str, role: str, context: str, *, cast: bool
 
 
 def split_task(definitions: Definitions, log: EventLog):  # noqa: ARG001 - one log, one Definitions
-    """Write both halves back into the source, as one step.
-
-    Bound to the Runtime's own Definitions and EventLog. Building a second pair
-    here would give the split a different view of the log than the round that
-    asked for it, and the two would disagree the moment either failed.
+    """Bound to the Runtime's own Definitions and EventLog.
     """
 
     def apply(task_ref: str, first: str, second: str) -> tuple[str, str]:
@@ -722,13 +678,8 @@ def split_task(definitions: Definitions, log: EventLog):  # noqa: ARG001 - one l
 
 
 def raise_red_light(rt: "Runtime", project_id: str, reason: str) -> dict[str, Any]:
-    """Put the red light up.
-
-    A SCHOTTY towel is a verdict; this is the state. The light itself already
-    exists and needs no new type: `recovery.blocked` is registered, the manager
-    is a permitted producer, and status derives redLight from
-    {"aborted","blocked"}. Per VISP section 1C a towel ends at the red light,
-    so the caller that holds the verdict is what raises it.
+    """A towel is a verdict; this is the state. No new type: recovery.blocked is
+    registered and redLight derives from {"aborted","blocked"}.
     """
     rt.log.record(
         "recovery.blocked",
@@ -819,11 +770,7 @@ def serve_http(runtime: Runtime) -> None:  # pragma: no cover - presentation
 
 
 def _load_harness(root: Path) -> HarnessConfig | None:
-    """Model assignment is external to the kernel (TESP §6.2).
-
-    `config/assignments.json` ships as a placeholder, so an absent or
-    placeholder config yields None and the loop halts when no model is
-    available. A populated but malformed config is a real error, not swallowed.
+    """A placeholder config yields None; a malformed one is a real error.
     """
     path = root / "config" / "assignments.json"
     if not path.exists():

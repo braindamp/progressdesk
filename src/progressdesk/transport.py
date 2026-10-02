@@ -114,7 +114,7 @@ def pi_argv(
     session_id: str,
     resume: bool,
 ) -> tuple[str, ...]:
-    """Build the argv for one harness run.
+    """`executable` may carry a launcher prefix.
 
     `executable` may carry a launcher prefix (an interpreter, a shim), because
     a harness is not always a single native binary and pretending otherwise
@@ -152,7 +152,7 @@ def _looks_like_transport_fault(text: str) -> bool:
 
 
 class CommandTransport:
-    """An agent harness driven as a broker-owned process.
+    """`kind` and `sandbox` are declarations, never requests.
 
     `kind` and `sandbox` are declarations, not requests: the orchestrator reads
     them and never asks for a tier this adapter cannot provide. A harness
@@ -198,7 +198,7 @@ class CommandTransport:
 
     # -- the seam contract -----------------------------------------------
     def cancel(self, run_id: str) -> None:
-        """Ask the termination authority to stop this run.
+        """This never terminates anything itself.
 
         This never terminates anything itself. §7.2 gives the job-object
         teardown to one owner, and an adapter with its own would be a second
@@ -347,7 +347,7 @@ class CommandTransport:
 
 
 def _read(path: Path) -> tuple[str, str | None]:
-    """Read a capture file strictly.
+    """A capture that will not decode is a fault, not replacement characters.
 
     Returns ``(text, fault)``. A capture that will not decode is reported as a
     fault rather than returned full of replacement characters: a transcript that
@@ -372,7 +372,7 @@ def pi_transport(
     executable: str | tuple[str, ...] | None = None,
     sandbox: str = "none",
 ) -> CommandTransport:
-    """Configure the harness that is installed today.
+    """One instance; nothing above this line knows the vendor.
 
     One instance, no vendor knowledge above this line. The harness in use now
     and the modelrouter planned for it are the same class with a different

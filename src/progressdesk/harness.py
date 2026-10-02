@@ -143,7 +143,7 @@ class HarnessConfig:
         return definition.provider, definition.model_id
 
     def definition_for(self, role: str) -> ModelDefinition:
-        """The whole definition, including which adapter reaches it.
+        """`for_role` dropped the transport, which is how the role is reached.
 
         `for_role` answers "which model" and drops the transport, which left the
         one field that says *how the role is reached* unreadable by anything. A

@@ -217,7 +217,7 @@ class GoRecord:
 
 @dataclass(frozen=True)
 class _ValidatedPlan:
-    """A project is a name and a spec.
+    """The bytes are hashed and kept; the words are the project.
 
     It used to be nine fields deep: a task list, a dependency DAG, a model per
     task, gates with milestone bindings, a signoff policy and decision ports --
@@ -349,7 +349,7 @@ class ProjectService:
             return lock
 
     def create(self, spec: str, *, request_id: str) -> ProjectCreation:
-        """Validate, stage, record, and atomically publish one project.
+        """The request id is the idempotency key.
 
         The exact request id is the idempotency key. A retry returns the original
         project.created event and repairs a crash between that durable append and
@@ -553,7 +553,7 @@ class ProjectService:
         )
 
     def _created_manifest_matches(self, created: Event) -> bool:
-        """Is the materialised project the one this event says was created?
+        """The manifest is the project, so this checks the workspace.
 
         The manifest is the project itself -- the definition it was built from --
         so checking it against the event is checking the workspace, not a cache

@@ -271,7 +271,7 @@ class FloorSweep:
 
     # -- the strong pass --------------------------------------------------
     def _reset_environment(self, report: SweepReport) -> None:
-        """Restore the environment to the latest version, and say whether we could.
+        """Refused on a dirty tree rather than discarding work.
 
         Pulling is refused on a dirty tree rather than discarding whatever is
         there. A reset that throws away work to look tidy is the opposite of one.
@@ -396,7 +396,7 @@ class Clearance:
 
 
 def describe(report: SweepReport) -> str:
-    """The sweep, said rather than dumped.
+    """Prose, because JSON measured near-flat and prose separated.
 
     This is the state CLEANING_LAYA is given, and it is prose on purpose. The
     same reports as `json.dumps(report.to_dict())` were measured against the
@@ -428,7 +428,7 @@ def describe(report: SweepReport) -> str:
 
 
 def parse_laya(text: str, allowed: frozenset[str]) -> tuple[str, str]:
-    """Read a fixed-token answer out of generated text.
+    """Only the dead sites in loop.py still need this.
 
     Retained only for the sites in `loop.py` that still ask a language model
     for one token. The room verdict no longer comes through here: it is asked as

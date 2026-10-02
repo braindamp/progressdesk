@@ -98,7 +98,7 @@ def _identifier(value: Any, field_name: str) -> str:
 
 @dataclass(frozen=True)
 class Budget:
-    """Bounded values for one attempt (§10.2).
+    """Watch signals, not kills: only a deadline, crash or stop ends a run.
 
     These are watch signals, not kills. A run that exceeds one is recorded and
     escalated; only a wall-clock deadline, a crash or an owner stop ends it.
@@ -247,7 +247,7 @@ class SpawnRequest:
         }
 
     def with_nudge(self, message: str) -> SpawnRequest:
-        """The same session, the same budget, one continuation appended (§10.2a).
+        """A nudge is a section, so it pays for its own budget.
 
         The nudge is a section like any other, so it pays for its own budget
         rather than riding in off the top.
@@ -318,7 +318,7 @@ class Executor(Protocol):
 
 @dataclass(frozen=True)
 class ParityRecord:
-    """Measured evidence for retiring an adapter (F-N6).
+    """Not which is better, but whether the new path is not worse.
 
     The question is never which adapter is better. It is whether the new path is
     not worse, on the same real slices.
@@ -391,7 +391,7 @@ class ExecutorRegistry:
 
 
 class Spawner:
-    """Validates and dispatches.
+    """The registry is injected, so the seam has no opinion.
 
     The registry is injected, so the seam has no opinion about which
     transports exist.
@@ -419,7 +419,7 @@ class Spawner:
         self._probation: set[str] = set()
 
     def spawn(self, req: SpawnRequest, *, kind: str) -> ResultEnvelope:
-        """Run one dispatch, nudging through a transport fault at a bounded rate.
+        """An interruption is nudged rather than returned.
 
         §10.2a: a nudge costs one message, a wrong failure costs the whole
         session. So an interruption is nudged rather than returned.
@@ -475,7 +475,7 @@ class Spawner:
         return adapter.spawn(req)
 
     def nudge(self, req: SpawnRequest, envelope: ResultEnvelope, *, kind: str) -> ResultEnvelope:
-        """Re-inject one continuation into the same session.
+        """Costs one message and never an attempt.
 
         Costs one message and never an attempt. The count is carried forward so
         a session nudged repeatedly over its life shows that in the record —
@@ -499,7 +499,7 @@ class Spawner:
 
 
 class ManualExecutor:
-    """A human pastes the pack and returns the result. Zero API cost.
+    """Proves the interface at zero spend; first-class, not a script.
 
     It proves the interface at zero spend and is the fallback when nothing else
     is available, which is why it is a first-class adapter rather than a script.

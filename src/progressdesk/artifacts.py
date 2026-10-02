@@ -32,7 +32,7 @@ class ArtifactStore:
         return self.root / "sha256" / digest
 
     def put(self, data: bytes) -> str:
-        """Store bytes under their digest; returns the hex digest.
+        """Idempotent: an installed digest is not rewritten.
 
         Idempotent: an already-installed digest is not rewritten (bytes are stored
         once, §4.1). Install is atomic: temp file + flush + os.replace, with temp

@@ -95,7 +95,7 @@ class Definition:
 
     @classmethod
     def from_dict(cls, data: Any) -> "Definition":
-        """Strict, fail-closed: missing OR unknown keys raise (tamper-visible).
+        """Stricter than the envelope: payloads are typed content.
 
         Stricter than the §4.2 envelope on purpose — payloads are typed content;
         an edited/unknown field must never load silently.
@@ -148,7 +148,7 @@ class Definitions:
         parent_refs: tuple[str, ...] | list[str] = (),
         producer: str = "desk",
     ) -> Definition:
-        """Install content, assign id, record definition.created (revision 1).
+        """Validated before anything touches disk.
 
         The structural contract is validated BEFORE anything touches disk:
         a rejected create leaves no orphan content artifact and no event.
@@ -215,7 +215,7 @@ class Definitions:
         expected_revision: int,
         producer: str = "desk",
     ) -> tuple[Definition, Definition]:
-        """One task becomes two: this one keeps the first half, a new one keeps the second.
+        """Both halves land together or it is not honest.
 
         The inverse of obtaining a task. A split is only honest if both halves
         land together — the original revised to `first`, and a sibling created for
@@ -263,7 +263,7 @@ class Definitions:
         revision: int,
         producer: str = "desk",
     ) -> Event:
-        """Owner signoff of the EXACT displayed revision, as an event (§5.1/§16.1).
+        """The payload pins {id, kind, revision}; a later revision is unsigned.
 
         The payload pins {id, kind, revision}; a later revision is unsigned by
         construction. The signed revision must exist in the history — one
@@ -314,7 +314,7 @@ class Definitions:
         return revisions[revision]
 
     def is_signed_off(self, definition: Definition) -> bool:
-        """True only if a signed-off event pins this EXACT (id, revision).
+        """A later revision is unsigned by construction.
 
         A later revision (or a forged identity match on a different definition)
         is unsigned by construction: the signed identity payload must equal the

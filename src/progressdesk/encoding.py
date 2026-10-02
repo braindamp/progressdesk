@@ -27,7 +27,7 @@ BOM: Final = b"\xef\xbb\xbf"
 
 
 class EncodingFault(RuntimeError):
-    """A byte/text boundary could not be crossed cleanly.
+    """An environment fault, never the worker's fault.
 
     An environment fault, not the worker's fault, and never a reason to
     substitute something plausible.
@@ -82,7 +82,7 @@ def argv_for(family: str | None) -> tuple[str, ...]:
 
 
 def decode(data: bytes, *, what: str = "input") -> str:
-    """Bytes to text, strictly.
+    """A byte-order mark is consumed rather than decoded.
 
     A byte-order mark is consumed rather than decoded. Anything else that is not
     valid UTF-8 raises: a caller that substitutes a replacement character is
@@ -99,7 +99,7 @@ def decode(data: bytes, *, what: str = "input") -> str:
 
 
 def read_bytes_with_spec(path) -> tuple[bytes, dict[str, object]]:
-    """Raw bytes plus what they say about themselves.
+    """The declared shape travels with the bytes, so nobody infers it.
 
     Returns the bytes untouched alongside the declared shape, so the caller
     records the encoding rather than inferring it later.

@@ -190,7 +190,7 @@ class PlanningSession:
         topic_refs: tuple[str, ...] | list[str] | None = None,
         producer: str = "desk",
     ) -> PlanningItem:
-        """Edit: full new snapshot event (edits are events, §5.2).
+        """attachments and affinities arrive via attach and relate only
 
         attachmentRefs/affinityRefs are NOT editable here: attachments arrive
         via `attach` (bytes, digest recorded, never silently dropped) and
@@ -310,7 +310,7 @@ class PlanningSession:
     # -- disposable projection --------------------------------------------------
 
     def board(self) -> dict[str, PlanningItem]:
-        """Rebuild the item model from planning.* events, in event order.
+        """Fail-closed: an unknown item is inconsistent history.
 
         Fail-closed: every payload must parse strictly; an event referencing
         an unknown item is an inconsistent history (raise, never skip).

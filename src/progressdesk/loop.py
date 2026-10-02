@@ -141,9 +141,9 @@ CHUNK = 4_000
 # what it currently is, and not about what it could become. It is answerable
 # because the state carries what ProgressDesk is, which is the referent it needs.
 GATE_QUESTIONS = {
-    "real": "Did this change come from something that actually happened?",
-    "cosmetic": "Does this change rearrange wording without changing what the system does?",
-    "invented": "Is any part of this record filled in for something that did not happen?",
+    "real": "Is this traced to an outcome that actually happened?",
+    "cosmetic": "Is this a change in wording only, leaving behaviour as it was?",
+    "invented": "Does this have no real observation behind it?",
     "deviating": (
         "Is this about something other than what ProgressDesk is, "
         "or what it can become?"
@@ -166,7 +166,7 @@ PROGRESSDESK_IS = (
 
 
 def _chunks(text: str, size: int = CHUNK) -> list[str]:
-    """Split so nothing is dropped and nothing is silently shortened.
+    """A [:6000] slice hides the interesting call behind the cut.
 
     A slice written as [:6000] is the exact failure this gate exists to catch:
     the interesting call is the one after the cut. Every line is asked about,
@@ -185,7 +185,7 @@ def _chunks(text: str, size: int = CHUNK) -> list[str]:
 
 
 def _police_says(text: str) -> str:
-    """What POLICE reported, which is never the verdict token he was given.
+    """His sentence is the report; the token only says he answered.
 
     He is handed a finding and a transcript, and his answer has a line that
     says what is actually wrong in a sentence. That line is the report; the
@@ -216,6 +216,21 @@ def _with(outcome: "DispatchOutcome", **changes: Any) -> "DispatchOutcome":
     return dataclasses.replace(outcome, **changes)
 
 
+def judge_change(ask_noul: Any, record: str) -> tuple[str, float]:
+    """One copy, because two copies of five questions drift apart.
+
+    One place, because the gate on a mid-run change and the gate on a proposed
+    VISP are the same judgement about different records, and two copies of five
+    questions would drift apart within a week.
+    """
+    scores = {
+        verdict: ask_noul(record, question).probability
+        for verdict, question in GATE_QUESTIONS.items()
+    }
+    verdict = max(scores, key=lambda name: scores[name])
+    return verdict, scores[verdict]
+
+
 class RoundDispatcher:
     """Dispatch one round through the seam and record what came back."""
 
@@ -231,7 +246,7 @@ class RoundDispatcher:
         ask: Callable[..., str] | None = None,
         ask_noul: Callable[[str, str, str], Any] | None = None,
         read_brief: Callable[[str], str] | None = None,
-        propose_visp: Callable[[str, str, str], str] | None = None,
+        propose_visp: Callable[[str, str], dict[str, Any]] | None = None,
         split_task: Callable[[str, str, str], tuple[str, str]] | None = None,
         research_tools: tuple[str, ...] = (),
     ) -> None:
@@ -360,7 +375,8 @@ class RoundDispatcher:
         self, project_id: str, task_ref: str, outcome: DispatchOutcome,
         tools: tuple[str, ...], role: str,
     ) -> DispatchOutcome:
-        """A round that produced nothing: what is it, and what now?
+        """She reads what the builder said: could not do it is SHARPENER's, too big is
+        JACK's, anything else is a towel.
 
         She reads what the builder said. A builder that reported it could not do
         the work is a fact about the framework and goes to SHARPENER; work that
@@ -426,31 +442,30 @@ class RoundDispatcher:
         # and answers, the way she answers everything. Filing a refusal as a VISP
         # is how a towel becomes doctrine, and it is the one thing this path must
         # not do.
-        try:
-            verdict = self._ask_noul(
-                project_id, answer,
-                "Does this text propose a specific change, or does it decline to answer?",
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _with(outcome, status="towel", detail=f"not decided: {exc}")
-        if not verdict.above:
-            return _with(outcome, status="towel", detail=f"SHARPENER did not propose: {answer[:200]}")
+        # One gate, not two. Whether what he wrote is worth landing is a
+        # judgement about the record, and propose_visp is where that happens --
+        # filing a refusal as a VISP is how a towel becomes doctrine, and doing
+        # it once, in one place, is how that stays impossible.
         if self._propose_visp is None:
             return _with(outcome, status="routed", detail="proposed, no VISP seam")
         try:
-            ref = self._propose_visp(
-                project_id, "a builder could not do its work", answer
-            )
+            result = self._propose_visp("a builder could not do its work", answer)
         except Exception as exc:  # noqa: BLE001
             return _with(outcome, status="routed", detail=f"proposed, VISP failed: {exc}")
+        if not result.get("accepted"):
+            return _with(
+                outcome, status="towel",
+                detail=f"gated {result.get('verdict')} ({result.get('probability')}): "
+                        f"{answer[:160]}",
+            )
         return _with(
             outcome, status="proposed",
-            detail=f"VISP draft {ref} awaiting signoff",
+            detail=f"VISP draft {result['visp']} awaiting signoff",
         )
 
     # -- helpers ----------------------------------------------------------
     def _clear(self, project_id: str) -> Clearance | None:
-        """After every slice: the sweep runs, then CLEANING_LAYA decides.
+        """Nothing persists her verdict, so there is no flag to go stale.
 
         Her verdict is what authorises the next round. Nothing persists it — the
         decision is made here and acted on here, so there is no flag to go stale.
@@ -492,7 +507,8 @@ class RoundDispatcher:
         return _with(outcome, status="started", detail=_first_line(answer))
 
     def end_of_project(self, project_id: str, history: str = "") -> DispatchOutcome:
-        """End of the project: SHARPENER proposes, CLEANING_LAYA judges it.
+        """He is the only role that goes looking outward and holds the other briefs,
+        which is also why his output needs reading.
 
         He is the only role that goes looking — outward, for whatever the
         framework needs next — and the only one holding the other briefs. Both
@@ -535,7 +551,7 @@ class RoundDispatcher:
         return _with(outcome, status="drafted", detail=f"{room_why}; evidence {why}")
 
     def _trace_gate(self, project_id: str) -> tuple[bool, str]:
-        """Read what SHARPENER actually did, not what he says he did.
+        """The transcript exists already; the question is not where to find it.
 
         Every run leaves its own transcript: projects/<id>/rounds/<run>/agent.jsonl,
         a line per event including every tool call. That file is the thinking
@@ -578,8 +594,7 @@ class RoundDispatcher:
         return True, f"{len(calls)} calls in {len(parts)} part(s)"
 
     def _fix_gate(self, project_id: str) -> tuple[bool, str]:
-        """The gate on what SHARPENER changed. He sharpens; Laya says whether
-        it was a real sharpening.
+        """Five questions and an argmax, so exclusivity is arithmetic.
 
         He is not a suggester. Sharpening the other roles is the whole point of
         the role, so the question is not whether he acted. It is whether what
@@ -613,19 +628,15 @@ class RoundDispatcher:
                 f"progressdesk is: {PROGRESSDESK_IS}",
             ])[:2_000]
             try:
-                scores = {
-                    verdict: self._ask_noul(project_id, shown, question).probability
-                    for verdict, question in GATE_QUESTIONS.items()
-                }
+                verdict, score = judge_change(self.noul, shown)
             except Exception as exc:  # noqa: BLE001
                 return False, f"LAYA unavailable: {exc}"
-            verdict = max(scores, key=lambda name: scores[name])
-            if verdict != "real" or scores[verdict] < GATE_FLOOR:
-                return False, f"{fix_id}: {verdict} ({scores[verdict]:.2f})"
+            if verdict != "real" or score < GATE_FLOOR:
+                return False, f"{fix_id}: {verdict} ({score:.2f})"
         return True, f"{len(fixes)} changes gated, all real"
 
     def _evidence_ok(self, project_id: str, draft: str) -> tuple[bool, str]:
-        """Laya reads the evidence, not the reference to it.
+        """A digest that resolves proves presence, not evidence.
 
         research.py proves a digest resolves. That is presence, not evidence:
         a blank artifact, a screenshot of nothing, or one SHARPENER wrote
@@ -660,8 +671,7 @@ class RoundDispatcher:
         return verdict == "holds", why or "unreadable"
 
     def _police(self, project_id: str, detail: str, *, trace: str = "") -> DispatchOutcome:
-        """The only rung that stops anything. Reached from SCHOTTY, from a
-        milestone whose installed version did not verify, or from a gate.
+        """The only authority on a log.
 
         He is the only authority on a log, so he is the one who decides what in
         it matters. Code chunks the transcript because a question has a size,
@@ -777,7 +787,7 @@ class RoundDispatcher:
         return outcome
 
     def _collect(self, project_id: str, run: str) -> tuple[dict[str, bytes], dict[str, Any]]:
-        """Read back whatever the round actually produced.
+        """Bytes come from the round directory, so a claim is re-derived.
 
         The bytes are read from the round directory, so a claim of what changed
         is re-derived rather than believed (C12). Each file's declared encoding
@@ -826,7 +836,8 @@ class RoundDispatcher:
         )
 
     def _adapter_for(self, role: str) -> str:
-        """The adapter kind that reaches this role, from the role table.
+        """Named, not defaulted: guessing would send a decision-model role to a
+        gateway, which looks like a very slow outage.
 
         Named, not defaulted. A dispatch that guessed `pi` would send a
         decision-model role to a gateway and a gateway role to a classifier,
@@ -856,7 +867,7 @@ class RoundDispatcher:
 
     @staticmethod
     def _pack(packet: Any) -> ContextPack:
-        """The slice, and nothing else.
+        """A builder reads its task once.
 
         This used to emit four sections -- outcome, scope, interfaces,
         acceptance -- and the dispatcher filled the first two with the same text
@@ -895,7 +906,7 @@ def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
         sweep=runtime.sweep,
         cleaner=runtime.cleaner,
         ask=getattr(runtime, "ask", None),
-        ask_noul=getattr(runtime, "noul", None),
+        ask_noul=getattr(runtime, "noul_in", None),
         propose_visp=getattr(runtime, "propose_visp", None),
         split_task=getattr(runtime, "split_task", None),
     )

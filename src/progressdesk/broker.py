@@ -94,7 +94,7 @@ class PlannedInvocation:
 
 @dataclass(frozen=True)
 class PlannedTransport:
-    """A model transport launch (TESP §7.5).
+    """Deliberately not a ToolSpec: it has no entrypoint or version to declare.
 
     Deliberately not a ToolSpec. A transport has no published entrypoint, no
     version and no sandbox-verification record to declare — inventing one to
@@ -156,7 +156,7 @@ class _StartupInfo(ctypes.Structure):
 
 
 class _PinnedHandleList(NamedTuple):
-    """The child's handle list and every allocation that backs it.
+    """All three must outlive CreateProcessW; ctypes does not copy them.
 
     All three fields must outlive the CreateProcessW call. ctypes does not copy
     the handle array for us, and the attribute list is itself a pointer into
@@ -182,7 +182,7 @@ class _SECURITY_ATTRIBUTES(ctypes.Structure):
 
 
 class _STARTUPINFOEXW(ctypes.Structure):
-    """STARTUPINFO plus the attribute list.
+    """`cb` is what tells CreateProcessW to read the extended form.
 
     STARTUPINFO is the first member, so `&ex.StartupInfo == &ex`: one byref
     serves both forms, and `cb` is what tells CreateProcessW to read the
@@ -740,7 +740,7 @@ class Broker:
     def spawn_transport(
         self, planned: PlannedTransport, runtime_family: str = "unknown"
     ) -> ProjectRun:
-        """Launch a model transport inside the project job.
+        """The loop calls this and never spawns (TESP §7.1).
 
         The loop is a caller of the broker and never a spawner (TESP §7.1).
         This is the door for §7.5 model invocation; it shares the spawn path,

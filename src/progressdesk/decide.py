@@ -63,7 +63,7 @@ READS_AS_PROBLEM = "Does this report describe at least one problem?"
 
 
 class Unreachable(RuntimeError):
-    """The decision service did not answer.
+    """Distinct from a low probability: that is an answer.
 
     Distinct from a low probability. A low probability is an answer; this is
     the absence of one, and the caller is required to treat it as the worse of
@@ -105,7 +105,7 @@ def endpoint() -> str:
 
 def noul(state: str, instructions: str, *, name: str = "decision",
          endpoint_url: str | None = None) -> Decision:
-    """Ask one yes/no question about a state. One forward pass, no generation.
+    """Raises rather than returning a default.
 
     Raises `Unreachable` rather than returning a default. A caller that cannot
     distinguish "no" from "nobody answered" will eventually read a dead service
@@ -146,7 +146,7 @@ def reads_as_problem(state: str) -> Decision:
 
 
 class SystemOneExecutor:
-    """The decision model, as an adapter like any other.
+    """Reached through the ordinary seam, by transport.
 
     Every other role in this workshop is reached through the same seam: a
     `SpawnRequest` goes to `Spawner.spawn`, which looks the adapter up by kind
@@ -227,7 +227,7 @@ class SystemOneExecutor:
         )
 
     def cancel(self, run_id: str) -> None:
-        """Nothing to cancel. One forward pass has no session to lose.
+        """Declared rather than omitted; there is genuinely nothing to lose.
 
         Declared rather than omitted: a role that cannot be cancelled is not an
         adapter this framework can use, and this one genuinely has nothing
@@ -237,7 +237,7 @@ class SystemOneExecutor:
     # -- helpers ----------------------------------------------------------
     @staticmethod
     def _state(req: SpawnRequest) -> str:
-        """The state is the last section of the pack.
+        """A position, not a name: packs are ordered and never appended to.
 
         A context pack is an ordered contract and nothing is appended to it, so
         "the last section" is a position and not a name. For this adapter the
