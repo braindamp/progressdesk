@@ -129,17 +129,21 @@ def _payload_of(event, artifacts: ArtifactStore) -> dict:
 
 CHUNK = 4_000
 
-# The gate asks five questions, one per verdict, and takes the highest. Each is
-# a plain presence check about one thing, so no two can sensibly be true of the
-# same change -- which is what makes the verdicts exclusive without asking her to
-# be careful. `duplicate` is bounded to what she can see: she is handed one
-# record, so this asks whether it restates something already in ProgressDesk, not
-# whether the same idea lives in something she has not been given.
+# The gate asks one question per verdict and takes the highest. Each is a plain
+# presence check about one thing, so no two can sensibly be true of the same
+# change -- which is what makes the verdicts exclusive without asking her to be
+# careful. `duplicate` is bounded to what she can see: she is handed one record,
+# so this asks whether it restates something already in ProgressDesk, not whether
+# the same idea lives in something she has not been given.
+#
+# There is deliberately no "is this about something else" verdict. A researcher
+# exists to bring in what is happening elsewhere, and a proposal that does not fit
+# the current shape is exactly the one worth reading. Asking whether it deviates
+# would filter out the useful ones.
 GATE_QUESTIONS = {
     "real": "Did this change come from something that actually happened?",
     "cosmetic": "Does this change rearrange wording without changing what the system does?",
     "invented": "Is any part of this record filled in for something that did not happen?",
-    "deviating": "Is this about something other than what this framework is for?",
     "duplicate": "Has this already been done, somewhere in ProgressDesk?",
 }
 # Below this nothing counts as `real`, including a set of lukewarm answers. An
