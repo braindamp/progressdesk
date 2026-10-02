@@ -26,10 +26,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import paths
 from .artifacts import ArtifactStore
 from .broker import Broker
 from .encoding import read_bytes_with_spec
-from .floor_sweep import Clearance, Cleaner, Sweep, parse_laya
+from .floor_sweep import Clearance, Cleaner, Sweep
 from .spawn import (
     Budget,
     ContextPack,
@@ -104,7 +105,7 @@ SHARPENER_CHECKS = (
 
 def _thinking_file(root: Path, project_id: str) -> str:
     """The run's own transcript: one line per event, every tool call included."""
-    trace = root / "projects" / project_id / "rounds" / "ask-sharpener" / "agent.jsonl"
+    trace = paths.projects(root) / project_id / "rounds" / "ask-sharpener" / "agent.jsonl"
     if not trace.exists():
         return ""
     raw = trace.read_text(encoding="utf-8", errors="replace")
@@ -551,125 +552,6 @@ class RoundDispatcher:
             return None
         return self.cleaner.run(project_id, strength="light")
 
-    def milestone(self, project_id: str, milestone: str = "-") -> DispatchOutcome:
-        """Start of a milestone, in the order doctrine fixes.
-
-        SHARPENER has his say *before* the strong sweep, because the sweep
-        restores the floor and would take the evidence of what the milestone
-        actually did. Then the sweep pulls, then POLICE judges the result:
-        restoring the floor and judging it are different acts.
-        """
-        outcome = DispatchOutcome(run_id="-", project_id=project_id, task_ref="milestone",
-                                  status="started")
-        if self.sweep is None or self._ask_role is None:
-            return outcome
-        # He speaks first. The strong sweep restores the floor, and the floor
-        # would take with it the evidence of what this milestone actually did.
-        # He does not block the boundary: a lesson is not worth a stopped run.
-        try:
-            self._ask_role(project_id, "SHARPENER",
-                           "\n".join(["milestone ended:", milestone, "learnings:"])[:6_000])
-        except Exception:  # noqa: BLE001
-            pass
-        report = self.sweep.script.run(project_id, strength="strong")
-        context = "\n".join(
-            ["strong sweep:", json.dumps(report.to_dict(), sort_keys=True)]
-        )[:6_000]
-        try:
-            answer = self._ask_role(project_id, "POLICE", context)
-        except Exception as exc:  # noqa: BLE001
-            return _with(outcome, status="blocked", detail=f"POLICE unavailable: {exc}")
-        if _says_violation(answer):
-            return _with(outcome, status="violation", detail=_first_line(answer))
-        return _with(outcome, status="started", detail=_first_line(answer))
-
-    def end_of_project(self, project_id: str, history: str = "") -> DispatchOutcome:
-        """He is the only role that goes looking outward and holds the other briefs,
-        which is also why his output needs reading.
-
-        He is the only role that goes looking — outward, for whatever the
-        framework needs next — and the only one holding the other briefs. Both
-        of those make him the one role that can wander, so Laya reads what he
-        brought back before any of it is allowed near the source. She is not
-        asked whether it is a good proposal. She is asked whether he stayed
-        inside the room.
-        """
-        outcome = DispatchOutcome(run_id="-", project_id=project_id, task_ref="project",
-                                  status="drafted")
-        if self._ask_role is None:
-            return outcome
-        try:
-            draft = self._ask_role(project_id, "SHARPENER", history[:6_000],
-                                   cast=True, tools=self._research_tools)
-        except Exception as exc:  # noqa: BLE001
-            return _with(outcome, status="blocked", detail=f"SHARPENER unavailable: {exc}")
-        if not draft.strip():
-            return _with(outcome, status="towel", detail="SHARPENER returned nothing")
-        try:
-            verdict, _ = parse_laya(
-                self._ask_role(
-                    project_id, "CLEANING_LAYA",
-                    "decision: in-room | out-of-room\nDid SHARPENER stay inside the project?"),
-                frozenset({"in-room", "out-of-room"}))
-        except Exception as exc:  # noqa: BLE001
-            return _with(outcome, status="blocked", detail=f"LAYA unavailable: {exc}")
-        traced, trace_why = self._trace_gate(project_id)
-        if not traced:
-            return self._police(project_id, f"out of task: {trace_why}",
-                                trace=_thinking_file(Path(self.root), project_id))
-        gated, room_why = self._fix_gate(project_id)
-        if not gated or verdict == "out-of-room":
-            return self._police(project_id, f"not a real change: {room_why} / {verdict or 'unreadable'}",
-                                trace=_thinking_file(Path(self.root), project_id))
-        holds, why = self._evidence_ok(project_id, draft)
-        if not holds:
-            return self._police(project_id, f"evidence did not hold: {why}",
-                                trace=_thinking_file(Path(self.root), project_id))
-        return _with(outcome, status="drafted", detail=f"{room_why}; evidence {why}")
-
-    def _trace_gate(self, project_id: str) -> tuple[bool, str]:
-        """The transcript exists already; the question is not where to find it.
-
-        Every run leaves its own transcript: projects/<id>/rounds/<run>/agent.jsonl,
-        a line per event including every tool call. That file is the thinking
-        file, and it already exists. So the question stops being a judgement
-        about a room nobody can name, and becomes a question about a list of
-        things he did — which she has to quote one of to answer.
-
-        She is not judging quality. She is answering one thing: was any of this
-        outside the task he was given?
-        """
-        trace = (Path(self.root) / "projects" / project_id / "rounds"
-                 / "ask-sharpener" / "agent.jsonl")
-        if not trace.exists():
-            return True, "no trace to read"
-        raw = trace.read_text(encoding="utf-8", errors="replace")
-        # The tool calls are the only part of a transcript that is a fact
-        # rather than a claim about what he meant to do.
-        calls = [ln for ln in raw.splitlines() if '"tool_call"' in ln or '"toolResult"' in ln]
-        if not calls:
-            return True, "he called nothing"
-        parts = _chunks("\n".join(calls))
-        # Every call is asked about, in pieces small enough to be read whole. A
-        # part she cannot answer is not a pass: an unread chunk is an unread
-        # run, and a run nobody read is the thing this gate exists to catch.
-        for n, part in enumerate(parts, 1):
-            try:
-                token, why = parse_laya(
-                    self._ask_role(
-                        project_id, "CLEANING_LAYA",
-                        "decision: in-task | out-of-task\n"
-                        f"These are calls {n} of {len(parts)} from one run. Read every one. "
-                        "For each of these, did it happen?\n"
-                        + "\n".join(SHARPENER_CHECKS)
-                        + f"\nCALLS:\n{part}"),
-                    frozenset({"in-task", "out-of-task"}))
-            except Exception as exc:  # noqa: BLE001
-                return False, f"LAYA unavailable: {exc}"
-            if token != "in-task":
-                return False, f"out of task (part {n}/{len(parts)})"
-        return True, f"{len(calls)} calls in {len(parts)} part(s)"
-
     def _fix_gate(self, project_id: str) -> tuple[bool, str]:
         """Five questions and an argmax, so exclusivity is arithmetic.
 
@@ -711,41 +593,6 @@ class RoundDispatcher:
             if verdict != "real" or score < GATE_FLOOR:
                 return False, f"{fix_id}: {verdict} ({score:.2f})"
         return True, f"{len(fixes)} changes gated, all real"
-
-    def _evidence_ok(self, project_id: str, draft: str) -> tuple[bool, str]:
-        """A digest that resolves proves presence, not evidence.
-
-        research.py proves a digest resolves. That is presence, not evidence:
-        a blank artifact, a screenshot of nothing, or one SHARPENER wrote
-        himself and stored all resolve perfectly and support nothing. So the
-        bytes go in front of Laya next to the claim they are cited for, and she
-        says whether they actually carry it.
-        """
-        refs = sorted(set(re.findall(r"sha256:[0-9a-f]{64}", draft)))
-        if not refs:
-            return False, "no evidence reference to check"
-        shown, missing = [], []
-        for ref in refs:
-            digest = ref.split(":", 1)[1]
-            if not self.artifacts.exists(digest):
-                missing.append(ref)
-                continue
-            shown.append(f"{ref}\n{self.artifacts.get_bytes(digest).decode('utf-8', 'replace')}")
-        if not shown:
-            return False, f"no evidence artifact resolves: {missing[:3]}"
-        question = "\n".join(
-            ["decision: holds | does-not-hold",
-             "does this evidence support the claim it is cited for?",
-             f"(unresolved: {missing})" if missing else "",
-             f"CLAIM:\n{draft[:2_000]}", "EVIDENCE:", *shown]
-        )[:8_000]
-        try:
-            verdict, why = parse_laya(
-                self._ask_role(project_id, "CLEANING_LAYA", question),
-                frozenset({"holds", "does-not-hold"}))
-        except Exception as exc:  # noqa: BLE001
-            return False, f"LAYA unavailable: {exc}"
-        return verdict == "holds", why or "unreadable"
 
     def _police(self, project_id: str, detail: str, *, trace: str = "") -> DispatchOutcome:
         """The only authority on a log.
@@ -883,7 +730,7 @@ class RoundDispatcher:
         is re-derived rather than believed (C12). Each file's declared encoding
         is returned with it, so a reader never has to infer one (TESP §4.8).
         """
-        directory = self.broker.workspace_root / "projects" / project_id / "rounds" / run
+        directory = self.broker.workspace_paths.projects(root) / project_id / "rounds" / run
         if not directory.is_dir():
             return {}, {}
         captured: dict[str, bytes] = {}

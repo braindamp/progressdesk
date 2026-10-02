@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from . import paths
 from .artifacts import ArtifactStore
 from .events import EventLog
 
@@ -360,8 +361,8 @@ def _git(repo: Path, *args: str) -> str:
 def run_for_project(root: Path, project_id: str, *, strength: str = LIGHT, **kwargs: Any) -> dict[str, Any]:
     """Compose and run one sweep, the way the slice and milestone boundaries will."""
     root = Path(root)
-    artifacts = ArtifactStore(root / "artifacts")
-    log = EventLog(root / "events" / "events.jsonl", artifacts)
+    artifacts = ArtifactStore(paths.artifacts(root))
+    log = EventLog(paths.event_log(root), artifacts)
     return FloorSweep(log, artifacts, workspace=root, **kwargs).run(project_id, strength=strength).to_dict()
 
 
@@ -426,21 +427,6 @@ def describe(report: SweepReport) -> str:
         lines.append("The sweep found nothing. Every step passed.")
     return "\n".join(lines)
 
-
-def parse_laya(text: str, allowed: frozenset[str]) -> tuple[str, str]:
-    """Only the dead sites in loop.py still need this.
-
-    Retained only for the sites in `loop.py` that still ask a language model
-    for one token. The room verdict no longer comes through here: it is asked as
-    a typed question and answered with a probability, so there is no text to
-    read. Every caller of this should be on its way to the decision seam.
-    """
-    for line in (text or "").splitlines():
-        low = line.strip().lower()
-        if low.startswith("decision:"):
-            token = line.split(":", 1)[1].strip().lower()
-            return (token, "") if token in allowed else ("", "")
-    return "", ""
 
 
 class Cleaner:

@@ -212,7 +212,7 @@ class CommandTransport:
     def spawn(self, req: SpawnRequest) -> ResultEnvelope:
         started = time.monotonic()
         directory = (
-            self._broker.workspace_root / "projects" / self._project_id / "rounds" / req.run_id
+            self._broker.workspace_paths.projects(root) / self._project_id / "rounds" / req.run_id
         )
         directory.mkdir(parents=True, exist_ok=True)
         pack = directory / "context-pack.md"

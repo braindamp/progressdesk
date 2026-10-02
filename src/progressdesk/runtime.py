@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from . import paths
 from .artifacts import ArtifactStore
 from .broker import Broker, PoliceTerminationAuthority
 from .definitions import Definitions
@@ -144,8 +145,8 @@ class Runtime:
     @classmethod
     def create(cls, root: Path) -> "Runtime":
         root = Path(root).resolve()
-        artifacts = ArtifactStore(root / "artifacts")
-        log = EventLog(root / "events" / "events.jsonl", artifacts)
+        artifacts = ArtifactStore(paths.artifacts(root))
+        log = EventLog(paths.event_log(root), artifacts)
         definitions = Definitions(log, artifacts)
         broker = Broker(root, event_log=log)
         tools = ToolCenter(log, artifacts, broker)
@@ -153,7 +154,7 @@ class Runtime:
         # POLICE's RecoveryManager is a Protocol; nothing concrete is bound
         # here. Recovery belongs inside the start chain (MS4.2), not beside it.
         police = PoliceService(log, artifacts, broker, authority=authority)
-        projects = ProjectService(root / "projects", log, artifacts, definitions)
+        projects = ProjectService(paths.projects(root), log, artifacts, definitions)
         sweep = Sweep(log, artifacts, root)
         operations = ProgressDeskOperations(definitions, projects)
         planning = PlanningSession(log, artifacts)
@@ -198,7 +199,7 @@ class Runtime:
             spawner = self._spawners.get(project_id)
             if spawner is None:
                 registry = ExecutorRegistry()
-                registry.register(ManualExecutor(self.root / "projects" / project_id / "manual"))
+                registry.register(ManualExecutor(paths.projects(self.root) / project_id / "manual"))
                 try:
                     from .transport import pi_transport
 
@@ -936,7 +937,7 @@ def serve_http(runtime: Runtime) -> None:  # pragma: no cover - presentation
 def _load_harness(root: Path) -> HarnessConfig | None:
     """A placeholder config yields None; a malformed one is a real error.
     """
-    path = root / "config" / "assignments.json"
+    path = paths.config(root) / "assignments.json"
     if not path.exists():
         return None
     try:
