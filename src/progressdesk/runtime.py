@@ -27,7 +27,8 @@ from .harness import HarnessConfig, HarnessError, TaskPacket
 from .floor_sweep import Cleaner, Sweep
 from .spawn import Budget, ContextPack, ContextSection, ModelSpec, SpawnRequest
 from .lab import LabNeedDetermination, LabReferralService, SimulatedLabReferral
-from .loop import GATE_FLOOR, PROGRESSDESK_IS, dispatcher_for, judge_change
+from .loop import (AGENTS, GATE_FLOOR, PROGRESSDESK_IS, dispatcher_for,
+                     judge_change, read_brief)
 from .police import FailureClassification, Observation, PoliceService
 from .planning import PlanningSession
 from .spawn import ExecutorRegistry, ManualExecutor, SpawnError, Spawner
@@ -100,6 +101,18 @@ class Command:
 
 
 WORKSHOP = "workshop"
+
+# The three things a builder can say. Terminal ones close the session: the work
+# has declared itself done, which is a round finishing and not a project abort.
+# report_problem is the early warning -- appended, and the session carries on.
+# needs_text on failure and problem, not on success: a builder must not be able
+# to give up without saying why, and must not have to write an essay to say it
+# went well.
+REPORTS = {
+    "report_problem": {"terminal": False, "needs_text": True},
+    "report_success": {"terminal": True, "needs_text": False},
+    "report_failure": {"terminal": True, "needs_text": True},
+}
 
 
 @dataclass
@@ -293,6 +306,82 @@ class Runtime:
         Project-scoped: two projects running at once have two rooms.
         """
         return self.noul_in(project_id, state, READS_AS_PROBLEM)
+
+    # -- the builder's report ------------------------------------------
+    def file_report(
+        self, run_id: str, token: str, kind: str, description: str
+    ) -> dict[str, Any]:
+        """A builder saying what happened. This is a *request*, not a write.
+
+        The worker never touches the event file: the control host assigns the
+        identity and appends, then answers. That is the whole reason a round can
+        trust its own record -- the builder cannot be the author of its evidence.
+
+        A malformed call is answered with the error and nothing is written, so
+        the model can try again. A good one is appended and fsynced *before* the
+        reply, so "recorded" means recorded even if the process dies next tick.
+        """
+        if kind not in REPORTS:
+            raise CommandError(
+                "unknown_report",
+                f"report must be one of {sorted(REPORTS)}, not {kind!r}. Try again.",
+            )
+        terminal = REPORTS[kind]["terminal"]
+        needs_text = REPORTS[kind]["needs_text"]
+        if needs_text and (not isinstance(description, str) or not description.strip()):
+            raise CommandError(
+                "no_description",
+                f"{kind} needs a description saying what happened. Try again.",
+            )
+        # The project comes from the run, not from the caller. A worker asserting
+        # which project it is in would be asserting its own authority.
+        project = next(
+            (e.projectId for e in self.log.read_all() if e.runId == run_id), None
+        )
+        if project is None:
+            raise CommandError(
+                "unknown_run", f"no run {run_id!r} here. Start a round first."
+            )
+        event = self.log.record(
+            "builder.reported",
+            producer="manager",
+            payload=json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "runId": run_id,
+                    "kind": kind,
+                    "description": description.strip()[:4_000],
+                    "terminal": terminal,
+                    "token": token,
+                },
+                sort_keys=True,
+            ).encode("utf-8"),
+            run_id=run_id,
+            project_id=project,
+        )
+        return {
+            "recorded": event.id,
+            "kind": kind,
+            "terminal": terminal,
+            "message": "recorded." + (" This session is now closed." if terminal else ""),
+        }
+
+    def reports_for(self, run_id: str) -> list[dict[str, Any]]:
+        """Everything this round reported, in order. Read from the log, not a queue."""
+        out = []
+        for event in self.log.read_all():
+            if event.type != "builder.reported" or event.runId != run_id:
+                continue
+            ref = event.payloadRef
+            if ref is None:
+                continue
+            try:
+                out.append(json.loads(
+                    self.artifacts.get_bytes(ref.split(":", 1)[1]).decode("utf-8")
+                ))
+            except (OSError, ValueError, IndexError, UnicodeDecodeError):
+                continue
+        return out
 
     def propose_visp(self, title: str, content: str) -> dict[str, Any]:
         """File what a role proposed as a VISP draft, and put it past the gate.
@@ -615,39 +704,7 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
 }
 
 
-AGENTS = Path(__file__).resolve().parent / "agents"
 
-
-def read_brief(role: str) -> str:
-    """A role with no brief on disk is a configuration error, not empty context.
-    """
-    path = AGENTS / f"{role}.md"
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise HarnessError(
-            "brief_missing", f"no brief for role {role!r} at {path.name}: {exc}"
-        ) from exc
-
-
-def _cast_briefs(exclude: str) -> str:
-    """Only SHARPENER: his job is the other roles.
-    """
-    parts = []
-    for path in sorted(AGENTS.glob("*.md")):
-        if path.stem == exclude:
-            continue
-        parts.append(f"## {path.stem}\n{path.read_text(encoding='utf-8')}")
-    return "\n\n".join(parts)
-
-
-def ask_role(root: Path, project_id: str, role: str, context: str, *, cast: bool = False,
-             tools: tuple[str, ...] = ()) -> str:
-    """A caller with no Runtime. Delegates to Runtime.ask_role.
-    """
-    return Runtime.create(Path(root)).ask_role(
-        project_id, role, context, cast=cast, tools=tools
-    )
 
 
 def split_task(definitions: Definitions, log: EventLog):  # noqa: ARG001 - one log, one Definitions
@@ -737,6 +794,7 @@ def main(argv: list[str] | None = None) -> int:
 def serve_http(runtime: Runtime) -> None:  # pragma: no cover - presentation
     """Local HTTP transport over the same `route`. Standard library only."""
     import http.server
+    from urllib.parse import urlparse as urlparse_path
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def _reply(self, payload: Any, code: int = 200) -> None:
@@ -746,6 +804,26 @@ def serve_http(runtime: Runtime) -> None:  # pragma: no cover - presentation
             self.send_header("content-length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def do_POST(self) -> None:  # noqa: N802
+            """POST /builder/report -- the only way a worker reaches the log."""
+            if urlparse_path(self.path).rstrip("/") != "/builder/report":
+                self._reply({"error": "not_found", "message": "no such endpoint"}, 404)
+                return
+            length = int(self.headers.get("content-length", 0))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                self._reply(runtime.file_report(
+                    str(body["runId"]), str(body.get("token", "")),
+                    str(body["kind"]), str(body.get("description", "")),
+                ))
+            except KeyError as exc:
+                self._reply({"error": "missing_field",
+                             "message": f"{exc} is required. Send it again."}, 400)
+            except CommandError as exc:
+                self._reply({"error": exc.code, "message": str(exc)}, 400)
+            except ValueError as exc:
+                self._reply({"error": "unreadable", "message": str(exc)}, 400)
 
         def do_GET(self) -> None:  # noqa: N802
             from urllib.parse import parse_qs, urlparse

@@ -129,6 +129,44 @@ def _payload_of(event, artifacts: ArtifactStore) -> dict:
 
 CHUNK = 4_000
 
+# Where the role briefs live.
+AGENTS = Path(__file__).resolve().parent / "agents"
+
+# A role brief, prose model. Same ceiling ask_role uses.
+ROLE_BRIEF_BUDGET = 24_000
+
+def read_brief(role: str) -> str:
+    """A role with no brief on disk is a configuration error, not empty context.
+    """
+    path = AGENTS / f"{role}.md"
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HarnessError(
+            "brief_missing", f"no brief for role {role!r} at {path.name}: {exc}"
+        ) from exc
+
+
+def _cast_briefs(exclude: str) -> str:
+    """Only SHARPENER: his job is the other roles.
+    """
+    parts = []
+    for path in sorted(AGENTS.glob("*.md")):
+        if path.stem == exclude:
+            continue
+        parts.append(f"## {path.stem}\n{path.read_text(encoding='utf-8')}")
+    return "\n\n".join(parts)
+
+
+def ask_role(root: Path, project_id: str, role: str, context: str, *, cast: bool = False,
+             tools: tuple[str, ...] = ()) -> str:
+    """A caller with no Runtime. Delegates to Runtime.ask_role.
+    """
+    return Runtime.create(Path(root)).ask_role(
+        project_id, role, context, cast=cast, tools=tools
+    )
+
+
 # The gate asks one question per verdict and takes the highest. Each is a plain
 # presence check about one thing, so no two can sensibly be true of the same
 # change -- which is what makes the verdicts exclusive without asking her to be
@@ -247,6 +285,8 @@ class RoundDispatcher:
         ask_noul: Callable[[str, str, str], Any] | None = None,
         read_brief: Callable[[str], str] | None = None,
         propose_visp: Callable[[str, str], dict[str, Any]] | None = None,
+        reports_for: Callable[[str], list] | None = None,
+        finish_round: Callable[[str], None] | None = None,
         split_task: Callable[[str, str, str], tuple[str, str]] | None = None,
         research_tools: tuple[str, ...] = (),
     ) -> None:
@@ -275,6 +315,8 @@ class RoundDispatcher:
         self._ask_noul = ask_noul
         self._read_brief = read_brief
         self._propose_visp = propose_visp
+        self._reports_for = reports_for
+        self._finish_round = finish_round
         self._split_task = split_task
 
     # -- the one operation -----------------------------------------------
@@ -331,6 +373,14 @@ class RoundDispatcher:
                 status="infra-fault", detail=f"seam refused the dispatch: {exc}",
             )
 
+        # What the builder said while it worked, read back from the log. It is
+        # here, not in the envelope, because he may have said it long before the
+        # round ended -- including a round that never ended.
+        said_while_working = self._reports_for(run) if self._reports_for else []
+        terminal = next(
+            (r for r in reversed(said_while_working) if r.get("terminal")), None
+        )
+
         # A transport fault is nudged inside the seam, not here: the seam owns
         # the budget so no caller can quietly reduce it to one. That was the
         # defect — the loop nudged once and then declared the round undelivered.
@@ -348,9 +398,20 @@ class RoundDispatcher:
         # that no longer existed. Recording the candidate first is what makes
         # the round look delivered, which is the only thing the debris pass
         # looks at.
-        outcome = self._settle(project_id, task_ref, run, envelope, actual_role)
+        outcome = self._settle(
+            project_id, task_ref, run, envelope, actual_role,
+            terminal=terminal, earlier=said_while_working,
+        )
         if not outcome.delivered:
-            outcome = self._route(project_id, task_ref, outcome, tools, actual_role)
+            # He said it, in a field, so nobody has to read it. Laya is only
+            # asked about a builder who never picked up the channel at all --
+            # and that is a fallback, not the path.
+            if terminal is not None:
+                outcome = self._hand_to(
+                    "SHARPENER", project_id, outcome.detail, outcome, tools, actual_role,
+                )
+            else:
+                outcome = self._route(project_id, task_ref, outcome, tools, actual_role)
 
         clearance = self._clear(project_id)
         if clearance is not None and not clearance.restartable:
@@ -735,6 +796,8 @@ class RoundDispatcher:
     def _settle(
         self, project_id: str, task_ref: str, run: str,
         envelope: ResultEnvelope, role: str = "DEXTER",
+        terminal: dict[str, Any] | None = None,
+        earlier: list[dict[str, Any]] | None = None,
     ) -> DispatchOutcome:
         produced, specs = self._collect(project_id, run)
         outcome = DispatchOutcome(
@@ -758,6 +821,17 @@ class RoundDispatcher:
             # a candidate would count a review as a delivery and quietly inflate
             # every number built on deliveries.
             return outcome
+        if terminal is not None and role == "DEXTER":
+            # He said how it went. That is the answer, and it was given before
+            # the session ended rather than parsed out of a final message, so it
+            # survives a round that never finished.
+            outcome.detail = "\n\n".join(
+                [terminal["description"]] + [r["description"] for r in (earlier or [])]
+            ).strip()
+            if terminal["kind"] == "report_success":
+                return outcome
+            return _with(outcome, delivered=False, status="failed",
+                         detail=f"builder reported failure: {outcome.detail}")
         if not produced:
             # It finished and left nothing. Why is the one thing worth knowing,
             # and the builder said it: "no filesystem or shell tool is
@@ -865,24 +939,28 @@ class RoundDispatcher:
         except Exception as exc:  # noqa: BLE001 - a bad table is a refusal, not a crash
             raise SpawnError("no_assignment", f"role {role!r} is not configured: {exc}") from exc
 
-    @staticmethod
-    def _pack(packet: Any) -> ContextPack:
-        """A builder reads its task once.
+    def _pack(self, packet: Any) -> ContextPack:
+        """A builder's pack: the slice, and the brief that says what this is.
 
-        This used to emit four sections -- outcome, scope, interfaces,
-        acceptance -- and the dispatcher filled the first two with the same text
-        and left the other two empty. So a builder read its task twice and was
-        handed two headings with nothing under them.
+        The brief was missing for a long time because this path builds the pack
+        itself and never went near read_brief -- every other role gets one
+        through _dispatch. A builder with no brief does not know what workshop he
+        is building in, what his constraints are, or that nobody is grading him
+        between milestones.
 
-        A slice is one document and it carries its own scope, its interfaces and
-        what done means. Splitting it across fields would be a structure
-        invented here and honoured nowhere, and the writer of a slice is the
-        only one who knows where those things belong in it. DoD and interfaces
-        can come back as sections when there is something to put in them.
+        The slice stays one section. It carries its own scope, its interfaces and
+        what done means; splitting it across fields would be a structure invented
+        here and honoured nowhere.
         """
-        return ContextPack((
-            ContextSection("the slice", _text(getattr(packet, "outcome", "")), TASK_SECTION_BUDGET),
+        sections = []
+        if self._read_brief is not None:
+            sections.append(ContextSection(
+                "your brief", self._read_brief("DEXTER"), ROLE_BRIEF_BUDGET,
+            ))
+        sections.append(ContextSection(
+            "the slice", _text(getattr(packet, "outcome", "")), TASK_SECTION_BUDGET,
         ))
+        return ContextPack(tuple(sections))
 
 def _text(value: Any) -> str:
     if isinstance(value, str):
@@ -908,5 +986,6 @@ def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
         ask=getattr(runtime, "ask", None),
         ask_noul=getattr(runtime, "noul_in", None),
         propose_visp=getattr(runtime, "propose_visp", None),
+        read_brief=read_brief,
         split_task=getattr(runtime, "split_task", None),
     )
