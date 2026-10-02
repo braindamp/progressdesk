@@ -10,7 +10,7 @@
 - Amendment note (1.2 → 1.8): parent authority to VISP v1.8 and FUSP v1.8. **No verification runs between build steps** — a builder's completion claim is recorded as given and the item completes (§10.3, §10.4, §12.1). **Advisory sparring round** added at the round boundary: cast model, three fixed questions, never blocking, verdict recorded for the milestone gate and Sharpener (§10.4). **No supervisor role**; the exception path mechanism is specified here — HOUSEKEEPING, JACK_THE_SPLITTER, SCHOTTY (§10.6) — with both ladders terminating in a red-light state. **One gateway, one event store, one entry point** (§16.1). **Per-execution attribution** specified (§4.5) as the precondition for cheapest-best assignment.
 - Amendment note (1.9 → 1.10): §9 tightened. Recovery is owned by the start chain and nothing composed beside `start` may start a project; the prose that restated §4.4 replay and §7.1 spawn identity was removed rather than repeated. No requirement changed.
 - Amendment note (1.0 → 1.1): gate model aligned to FUSP v1.1 (VISP/FUSP signoffs recorded separately; GO after milestone definitions; optional per-milestone signoff); planning surface expanded with the card/item model, meetings, topics, and session-leader modes (§5.2); milestone GO operation (§5.4); `definition.signoff` operation and GUI-ready projections for signoff and image evidence (§16); fix supersession + `fix superseded` event (§14.1, §4.5); crash-injection authority rule (§12.3); failure-escalation ladder removed to the future modelPool TESP.
-- Amendment note (1.10 → 1.11): makes the FUSP v1.11 additions executable. `answers_in` joins the adapter contract (§10.0); the builder's rationale becomes a required shape with three distinct states (§10.3); the round boundary reads that state and routes absence to SHARPENER (FUSP F-S8, §10.4); HOUSEKEEPING is resolved into a deterministic script and a decision-model judgement with an agreed order of operations (§1.3, §10.6); the decision seam is a module (§3); and a round becomes reachable through a verb (§16.1). No new actor, no new gate, and nothing added to the build plane. Aligned to VISP v1.11 and FUSP v1.11; the three move together.
+- Amendment note (1.10 → 1.11): makes the FUSP v1.11 additions executable. `answers_in` joins the adapter contract (§10.0); the builder's rationale becomes a required shape with three distinct states (§10.3); the round boundary reads that state and routes absence to SHARPENER (FUSP F-S8, §10.4); HOUSEKEEPING is resolved into a deterministic script and a decision-model judgement with an agreed order of operations (§1.3, §10.6); the decision seam is a module (§3); and a round becomes reachable through a verb (§16.1). No new actor, no new gate, and nothing added to the build plane. Aligned to VISP v1.11 and FUSP v1.11; the three move together. Also corrected section 4.1: it listed `config/workshop.json`, a file that was never read and that described the storage paths as configuration when they are in fact relative to the root and hardcoded in the product. The layout now lists only the file that exists.
 
 ---
 
@@ -224,7 +224,6 @@ Logical ownership is fixed; exact file subdivision may remain small.
 ```text
 workshop/
   config/
-    workshop.json
     assignments.json
   installed/
     kernel/
