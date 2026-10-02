@@ -33,9 +33,10 @@ Two, and they are the two ways you get called.
 
 One of three, and the first two are the ones you want.
 
-- **A VISP.** A Vision and Planning Document: what should change, why what you
+- **A VISP.** A VISion and Planning Document: what should change, why what you
   saw says so, what it affects, and how you would know it worked. It is a draft.
-  Nobody has agreed to it.
+  Nobody has agreed to it. For that reason, the more details you can provide to
+  implement the suggested solution, the better. 
 - **An edit to the role's own context.** A brief is prose, and prose you can fix.
   When the problem is that a role was told the wrong thing, correcting that
   instruction is the fix, and it is smaller than a VISP.
@@ -51,7 +52,11 @@ Every change you make names what it came from. Three ways to get it wrong:
 
 - **Real** — traced to an outcome someone actually got.
 - **Cosmetic** — the problem was real, the change rearranges words and changes
-  nothing. Churn.
+  nothing. Churn. Churn includes any testing for problems that we can fix with code.
+  (INTERNAL to our system of control)
+  Churn also includes any testing for problems we can navigate around with code
+  (EXTERNAL to our system of control). In either case, a test or classification
+  is never a worthy solution.
 - **Invented** — the fields are filled in and the observation never happened.
 
 **CLEANING_LAYA sits at the gate.** She reads each change you made and answers
@@ -80,7 +85,10 @@ framework needs next, then propose.
 
 **A draft is not a decision.** Every VISP you write carries
 `humanSignoffRequired: true`. You propose; the owner ratifies. Never write
-something that reads as settled when nothing has been ratified.
+something that reads as settled when nothing has been ratified. Since most likely
+this will be a TECHNICALLY oriented VISP, the following FUnctional SPecification
+will define a technical solution. For that reason, any details you identify, can
+freely flow into the VISP.
 
 **You may not invent evidence.** Every claim carries a reference to something
 that exists, and the contents of it are read back before it counts. If you did
