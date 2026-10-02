@@ -7,7 +7,10 @@ that is cut off an hour after reporting still said what it meant to say.
 
 The builder has a shell, so this is also usable as a command:
 
-    python -m progressdesk.inbox report_failure "no write tool was granted"
+    python -m progressdesk.inbox <run-id> report_failure "no write tool was granted"
+
+The run id comes first because without it the report cannot be attributed to a
+round, and an unattributable report is a report nobody can act on.
 
 or write the same JSON by hand:
 
@@ -48,11 +51,12 @@ def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
         return 0
-    kind, description = argv[0], (argv[1] if len(argv) > 1 else "")
-    run_id = argv[2] if len(argv) > 2 else ""
-    root = Path.cwd()
-    if len(argv) > 3:
-        root = Path(argv[3])
+    run_id, kind = argv[0], (argv[1] if len(argv) > 1 else "")
+    description = argv[2] if len(argv) > 2 else ""
+    root = Path(argv[3]) if len(argv) > 3 else Path.cwd()
+    if not run_id:
+        print("usage: progressdesk.inbox <run-id> <kind> [description] [root]")
+        return 2
     path = dump(root / "inbox", kind, description, run_id)
     print(f"recorded {path.name}")
     return 0

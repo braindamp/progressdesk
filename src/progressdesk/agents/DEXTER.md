@@ -43,12 +43,16 @@ changes its output or its quality.
 listening — the control host reads the folder. You have a shell, so:
 
 ```
-python -m progressdesk.inbox report_problem "the slice gave no acceptance"
-python -m progressdesk.inbox report_success
-python -m progressdesk.inbox report_failure "no write tool was granted"
-python -m progressdesk.inbox suggest_code_improvement "this parser rewrites
-    the whole file to change one branch; a read-and-patch would do" --run-id <run>
+python -m progressdesk.inbox <run-id> report_problem "the slice gave no acceptance"
+python -m progressdesk.inbox <run-id> report_success
+python -m progressdesk.inbox <run-id> report_failure "no write tool was granted"
+python -m progressdesk.inbox <run-id> suggest_code_improvement "this parser
+    rewrites the whole file to change one branch"
 ```
+
+**Your run id comes first**, because a report nobody can attribute is a report
+nobody can act on. Your run id is in your prompt pack and in the round directory
+path you are given.
 
 **A file outlives you.** If you are cut off an hour after writing it, the report
 is still there. That is the whole reason it is a file.
