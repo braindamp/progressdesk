@@ -295,7 +295,7 @@ class RoundDispatcher:
         ask: Callable[..., str] | None = None,
         ask_noul: Callable[[str, str, str], Any] | None = None,
         read_brief: Callable[[str], str] | None = None,
-        propose_visp: Callable[[str, str], dict[str, Any]] | None = None,
+        propose_intent: Callable[[str, str, str], dict[str, Any]] | None = None,
         reports_for: Callable[[str], list] | None = None,
         finish_round: Callable[[str], None] | None = None,
         split_task: Callable[[str, str, str], tuple[str, str]] | None = None,
@@ -325,7 +325,7 @@ class RoundDispatcher:
         self._ask_role = ask
         self._ask_noul = ask_noul
         self._read_brief = read_brief
-        self._propose_visp = propose_visp
+        self._propose_intent = propose_intent
         self._reports_for = reports_for
         self._finish_round = finish_round
         self._split_task = split_task
@@ -443,6 +443,11 @@ class RoundDispatcher:
             )
         return outcome
 
+    def _proposal_count(self) -> int:
+        if self._log is None:
+            return 0
+        return sum(1 for e in self._log.read_all() if e.type == "proposal.intent")
+
     def _route(
         self, project_id: str, task_ref: str, outcome: DispatchOutcome,
         tools: tuple[str, ...], role: str,
@@ -515,20 +520,20 @@ class RoundDispatcher:
         # is how a towel becomes doctrine, and it is the one thing this path must
         # not do.
         # One gate, not two. Whether what he wrote is worth landing is a
-        # judgement about the record, and propose_visp is where that happens --
-        # filing a refusal as a VISP is how a towel becomes doctrine, and doing
-        # it once, in one place, is how that stays impossible.
-        if self._propose_visp is None:
-            return _with(outcome, status="routed", detail="proposed, no VISP seam")
+        # He proposes through the endpoint, with his own intent and his own
+        # document, or he does not propose at all. Nothing is fabricated from the
+        # answer he gave to the question -- that is how a refusal becomes a
+        # proposal. Whether he called it is read back off the log, which is where
+        # every other channel lands.
+        before = self._proposal_count()
         try:
-            result = self._propose_visp("a builder could not do its work", answer)
+            self._ask_role(project_id, role, said)
         except Exception as exc:  # noqa: BLE001
-            return _with(outcome, status="routed", detail=f"proposed, VISP failed: {exc}")
-        if not result.get("accepted"):
+            return _with(outcome, status="towel", detail=f"{role} unavailable: {exc}")
+        if self._proposal_count() == before:
             return _with(
                 outcome, status="towel",
-                detail=f"gated {result.get('verdict')} ({result.get('probability')}): "
-                        f"{answer[:160]}",
+                detail=f"{role} did not propose anything",
             )
         return _with(
             outcome, status="proposed",
@@ -996,7 +1001,7 @@ def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
         cleaner=runtime.cleaner,
         ask=getattr(runtime, "ask", None),
         ask_noul=getattr(runtime, "noul_in", None),
-        propose_visp=getattr(runtime, "propose_visp", None),
+        propose_intent=getattr(runtime, "propose_intent", None),
         read_brief=read_brief,
         split_task=getattr(runtime, "split_task", None),
     )
