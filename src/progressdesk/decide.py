@@ -192,7 +192,8 @@ class SystemOneExecutor:
         state = self._state(req)
         began = time.monotonic()
         try:
-            decision = noul(state, self.question, endpoint_url=self._endpoint)
+            decision = noul(state, req.question or self.question,
+                           endpoint_url=self._endpoint)
         except Unreachable as exc:
             # A service that is not answering is an infrastructure fault, not a
             # failed decision and not a wrong one. The status says so, and the

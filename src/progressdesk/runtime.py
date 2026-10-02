@@ -27,8 +27,8 @@ from .harness import HarnessConfig, HarnessError, TaskPacket
 from .floor_sweep import Cleaner, Sweep
 from .spawn import Budget, ContextPack, ContextSection, ModelSpec, SpawnRequest
 from .lab import LabNeedDetermination, LabReferralService, SimulatedLabReferral
-from .loop import (AGENTS, GATE_FLOOR, PROGRESSDESK_IS, dispatcher_for,
-                     judge_change, read_brief)
+from .loop import (AGENTS, GATE_FLOOR, PROPOSES, PROGRESSDESK_IS,
+                     dispatcher_for, judge_change, read_brief)
 from .police import FailureClassification, Observation, PoliceService
 from .planning import PlanningSession
 from .spawn import ExecutorRegistry, ManualExecutor, SpawnError, Spawner
@@ -282,6 +282,7 @@ class Runtime:
             # The adapter's own declaration is what is recorded; asking for
             # anything else is refused rather than quietly downgraded.
             sandbox=adapter.sandbox,
+            question=question or READS_AS_PROBLEM,
         )
         return self.spawner_for(project_id).spawn(request, kind=definition.transport)
 
@@ -382,6 +383,84 @@ class Runtime:
             except (OSError, ValueError, IndexError, UnicodeDecodeError):
                 continue
         return out
+
+    # -- proposing a change ---------------------------------------------
+    INTENT_WORDS = 80
+
+    def propose_intent(self, intent: str, document: str, title: str = "") -> dict[str, Any]:
+        """A role saying what should change, and the document that says it.
+
+        Two fields, one call, so the thing that was judged and the thing that
+        gets filed cannot come apart. `intent` is capped because the judge is a
+        decision model with a small room and a long argument is not what she
+        reads: she separates facts cleanly to a few hundred tokens and never
+        recognises a long one. Eighty words is a starting point, not a
+        measurement.
+
+        A request, like every report: the host validates, appends and fsyncs,
+        then answers. The words are already on the log whether she says yes or
+        no, so a refused proposal is still there to be read later.
+        """
+        if not isinstance(intent, str) or not intent.strip():
+            raise CommandError(
+                "no_intent",
+                "an intent is required: state what should change, in one line.",
+            )
+        if len(intent.split()) > self.INTENT_WORDS:
+            raise CommandError(
+                "intent_too_long",
+                f"the intent is capped at {self.INTENT_WORDS} words; "
+                f"yours was {len(intent.split())}. Say it shorter and send it again.",
+            )
+        if not isinstance(document, str) or not document.strip():
+            raise CommandError(
+                "no_document", "the document is required: say what you propose, in full."
+            )
+        self.log.record(
+            "proposal.intent",
+            producer="manager",
+            payload=json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "title": title.strip()[:200],
+                    "intent": intent.strip(),
+                    "words": len(intent.split()),
+                    "document": document.strip()[:200_000],
+                },
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+        # She is asked about the intent, not the document. That is the whole
+        # point of the cap.
+        score = self.noul(intent.strip(), PROPOSES).probability
+        accepted = score >= GATE_FLOOR
+        reference = None
+        if accepted:
+            # Already judged, on the intent. Judging the same text again through
+            # the change gate would ask a proposal whether it already happened.
+            reference = self._file_visp(title or intent.split(".")[0], document)
+        return {
+            "recorded": True,
+            "words": len(intent.split()),
+            "score": round(score, 4),
+            "accepted": accepted,
+            "verdict": "proposes" if accepted else "not-a-change",
+            "visp": reference,
+            "message": (
+                "recorded, and filed as a draft for the owner."
+                if accepted else
+                "recorded, but this does not read as a change to the software. "
+                "It stays on the log."
+            ),
+        }
+
+    def _file_visp(self, title: str, content: str) -> str:
+        """Put a VISP in the store, ungated. The caller has already judged it."""
+        text = "\n".join(["# " + title, "", content.strip(), ""])
+        definition = self.definitions.create(
+            kind="VISP", content=text.encode("utf-8"), producer="sharpener",
+        )
+        return f"{definition.id}@{definition.revision}"
 
     def propose_visp(self, title: str, content: str) -> dict[str, Any]:
         """File what a role proposed as a VISP draft, and put it past the gate.
@@ -807,16 +886,23 @@ def serve_http(runtime: Runtime) -> None:  # pragma: no cover - presentation
 
         def do_POST(self) -> None:  # noqa: N802
             """POST /builder/report -- the only way a worker reaches the log."""
-            if urlparse_path(self.path).rstrip("/") != "/builder/report":
+            path = urlparse_path(self.path).rstrip("/")
+            if path not in ("/builder/report", "/proposal/intent"):
                 self._reply({"error": "not_found", "message": "no such endpoint"}, 404)
                 return
             length = int(self.headers.get("content-length", 0))
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
-                self._reply(runtime.file_report(
-                    str(body["runId"]), str(body.get("token", "")),
-                    str(body["kind"]), str(body.get("description", "")),
-                ))
+                if path == "/proposal/intent":
+                    self._reply(runtime.propose_intent(
+                        str(body.get("intent", "")), str(body.get("document", "")),
+                        str(body.get("title", "")),
+                    ))
+                else:
+                    self._reply(runtime.file_report(
+                        str(body["runId"]), str(body.get("token", "")),
+                        str(body["kind"]), str(body.get("description", "")),
+                    ))
             except KeyError as exc:
                 self._reply({"error": "missing_field",
                              "message": f"{exc} is required. Send it again."}, 400)

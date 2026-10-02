@@ -203,6 +203,7 @@ class SpawnRequest:
     budget: Budget
     model_spec: ModelSpec
     sandbox: str
+    question: str = ""
 
     def __post_init__(self) -> None:
         _identifier(self.run_id, "run_id")

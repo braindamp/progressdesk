@@ -322,6 +322,11 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": False,
     },
+    "proposal.intent": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
     "builder.reported": {
         "producers": frozenset({"manager"}),
         "payload_required": True,

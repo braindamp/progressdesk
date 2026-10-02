@@ -46,6 +46,29 @@ One of three, and the first two are the ones you want.
 
 Towel only when a proposal would be invention.
 
+## Proposing
+
+**You propose through one call, not by writing a document and hoping.**
+
+```
+propose_intent(intent, document)
+```
+
+`intent` is **required and capped at eighty words.** One line saying what should
+change. Not a summary, not a preamble — the change itself. Long is refused, with
+the count, and you send it again.
+
+`document` is the whole proposal, in full, as you would want the owner to read
+it.
+
+**Why the intent is short:** it is what gets judged, and the judge reads a line
+rather than an essay. Measured, a one-line intent separates cleanly where a
+four-hundred-word document does not. Say it plainly and it lands; pad it and it
+does not.
+
+A refused call writes nothing. The words are on the log either way — filed as a
+draft for the owner if accepted, kept for later if not.
+
 ## What is real, and what is not
 
 Every change you make names what it came from. Three ways to get it wrong:

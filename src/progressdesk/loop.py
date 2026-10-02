@@ -254,6 +254,17 @@ def _with(outcome: "DispatchOutcome", **changes: Any) -> "DispatchOutcome":
     return dataclasses.replace(outcome, **changes)
 
 
+# Two questions for two jobs. `real` asks whether a change already happened,
+# which is the right question for a change somebody made and the wrong one for a
+# proposal -- a proposal has not happened yet, and measured against a one-line
+# intent it answers 0.006 while ordinary chatter answers 0.111.
+#
+# PROPOSES asks the proposal question instead, and only works because the intent
+# is short: at eighty words it separates 0.764 from 0.000. Given the same
+# question over a four-hundred word document every wording tried came back flat.
+PROPOSES = "Is this a proposal for a change to the software?"
+
+
 def judge_change(ask_noul: Any, record: str) -> tuple[str, float]:
     """One copy, because two copies of five questions drift apart.
 
