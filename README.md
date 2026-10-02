@@ -25,11 +25,11 @@ redesign around a conflict.
 
 ## Layout
 
-Per TESP §4.1, this repo root is the workshop root. Paths are configuration
-(`config/workshop.json`), not hardcoded drive names:
+Per TESP §4.1, this repo root is the workshop root. Paths are relative to it,
+not drive names:
 
 ```
-config/          workshop.json, assignments.json
+config/          assignments.json
 events/          events.jsonl (append-only logical history; authoritative)
 artifacts/       sha256/<digest> (bytes stored once, referenced by digest)
 projects/        <project-id>/ checkpoints, views, workspace, planning, rounds
