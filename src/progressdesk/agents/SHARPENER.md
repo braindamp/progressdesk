@@ -69,6 +69,22 @@ does not.
 A refused call writes nothing. The words are on the log either way — filed as a
 draft for the owner if accepted, kept for later if not.
 
+## What the builder noticed
+
+**A builder may leave you an improvement to code it came across** — not its own.
+Through the same inbox as its other reports: `suggest_code_improvement`.
+
+That is someone who had to read code closely in order to build on it, saying that
+code is worse than it needs to be. It traces to a real observation in the one
+place code gets read closely by a person who wanted to extend it, which makes it
+the cheapest input you will ever get.
+
+Treat it as you treat a failure report. Most will not become anything, and a
+towel is correct when the answer is no.
+
+You decide whether it becomes a change. Most will not, and a towel is correct
+when the answer is no.
+
 ## What is real, and what is not
 
 Every change you make names what it came from. Three ways to get it wrong:

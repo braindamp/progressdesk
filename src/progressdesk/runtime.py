@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -113,6 +114,10 @@ REPORTS = {
     "report_problem": {"terminal": False, "needs_text": True},
     "report_success": {"terminal": True, "needs_text": False},
     "report_failure": {"terminal": True, "needs_text": True},
+    # Not a terminal verdict: the round is fine. It is an improvement to the code
+    # this slice is building, offered by the person reading it, and it goes to
+    # SHARPENER when the slice closes.
+    "suggest_code_improvement": {"terminal": False, "needs_text": True},
 }
 
 
@@ -311,7 +316,8 @@ class Runtime:
 
     # -- the builder's report ------------------------------------------
     def file_report(
-        self, run_id: str, token: str, kind: str, description: str
+        self, run_id: str, token: str, kind: str, description: str, *,
+        title: str = "",
     ) -> dict[str, Any]:
         """A builder saying what happened. This is a *request*, not a write.
 
@@ -340,10 +346,11 @@ class Runtime:
         project = next(
             (e.projectId for e in self.log.read_all() if e.runId == run_id), None
         )
-        if project is None:
+        if project is None and run_id:
             raise CommandError(
                 "unknown_run", f"no run {run_id!r} here. Start a round first."
             )
+        project = project or None
         event = self.log.record(
             "builder.reported",
             producer="manager",
@@ -352,6 +359,7 @@ class Runtime:
                     "schemaVersion": 1,
                     "runId": run_id,
                     "kind": kind,
+                    "title": title.strip()[:200],
                     "description": description.strip()[:4_000],
                     "terminal": terminal,
                     "token": token,
@@ -367,6 +375,37 @@ class Runtime:
             "terminal": terminal,
             "message": "recorded." + (" This session is now closed." if terminal else ""),
         }
+
+    def drain_inbox(self) -> int:
+        """Move whatever the builders left into the event log. Returns the count.
+
+        Runs on a timer and at round boundaries, so a report is journalled
+        whether the round finished, was cut off, or never came back.
+        """
+        inbox = paths.inbox(self.root)
+        if not inbox.is_dir():
+            return 0
+        taken = 0
+        for path in sorted(inbox.glob("*.json")):
+            try:
+                request = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeDecodeError):
+                path.unlink(missing_ok=True)      # unreadable is not worth keeping
+                continue
+            path.unlink(missing_ok=True)
+            kind = str(request.get("kind", ""))
+            if kind not in REPORTS:
+                continue
+            try:
+                self.file_report(
+                    str(request.get("runId", "")), "", kind,
+                    str(request.get("description", "")),
+                    title=str(request.get("title", "")),
+                )
+                taken += 1
+            except CommandError:
+                continue                          # refused: the builder sees it next time
+        return taken
 
     def reports_for(self, run_id: str) -> list[dict[str, Any]]:
         """Everything this round reported, in order. Read from the log, not a queue."""
@@ -832,6 +871,26 @@ def raise_red_light(rt: "Runtime", project_id: str, reason: str) -> dict[str, An
     return {"projectId": project_id, "redLightRaised": True}
 
 
+def _drain_in_background(runtime: Runtime, interval: float = 2.0) -> None:
+    """Drain the inbox on a timer, so a report lands while the round is still going.
+
+    A round that never returns must still be able to have said something. This is
+    the only part of the machine that runs without being asked.
+    """
+    import threading
+
+    def pump() -> None:
+        while True:
+            time.sleep(interval)
+            try:
+                runtime.drain_inbox()
+            except Exception:  # noqa: BLE001 - a pump must not die on one bad file
+                pass
+
+    thread = threading.Thread(target=pump, name="inbox", daemon=True)
+    thread.start()
+
+
 def route(runtime: Runtime, verb: str, params: Mapping[str, Any] | None = None) -> Any:
     """The single dispatch point. Both transports call this."""
     return runtime.route(Command(verb, dict(params or {})))
@@ -884,33 +943,6 @@ def serve_http(runtime: Runtime) -> None:  # pragma: no cover - presentation
             self.send_header("content-length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-
-        def do_POST(self) -> None:  # noqa: N802
-            """POST /builder/report -- the only way a worker reaches the log."""
-            path = urlparse_path(self.path).rstrip("/")
-            if path not in ("/builder/report", "/proposal/intent"):
-                self._reply({"error": "not_found", "message": "no such endpoint"}, 404)
-                return
-            length = int(self.headers.get("content-length", 0))
-            try:
-                body = json.loads(self.rfile.read(length) or b"{}")
-                if path == "/proposal/intent":
-                    self._reply(runtime.propose_intent(
-                        str(body.get("intent", "")), str(body.get("document", "")),
-                        str(body.get("title", "")),
-                    ))
-                else:
-                    self._reply(runtime.file_report(
-                        str(body["runId"]), str(body.get("token", "")),
-                        str(body["kind"]), str(body.get("description", "")),
-                    ))
-            except KeyError as exc:
-                self._reply({"error": "missing_field",
-                             "message": f"{exc} is required. Send it again."}, 400)
-            except CommandError as exc:
-                self._reply({"error": exc.code, "message": str(exc)}, 400)
-            except ValueError as exc:
-                self._reply({"error": "unreadable", "message": str(exc)}, 400)
 
         def do_GET(self) -> None:  # noqa: N802
             from urllib.parse import parse_qs, urlparse

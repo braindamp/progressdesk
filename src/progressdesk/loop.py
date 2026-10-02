@@ -298,6 +298,7 @@ class RoundDispatcher:
         read_brief: Callable[[str], str] | None = None,
         propose_intent: Callable[[str, str, str], dict[str, Any]] | None = None,
         reports_for: Callable[[str], list] | None = None,
+        drain: Callable[[], int] | None = None,
         finish_round: Callable[[str], None] | None = None,
         split_task: Callable[[str, str, str], tuple[str, str]] | None = None,
         research_tools: tuple[str, ...] = (),
@@ -328,6 +329,7 @@ class RoundDispatcher:
         self._read_brief = read_brief
         self._propose_intent = propose_intent
         self._reports_for = reports_for
+        self._drain = drain
         self._finish_round = finish_round
         self._split_task = split_task
 
@@ -388,6 +390,8 @@ class RoundDispatcher:
         # What the builder said while it worked, read back from the log. It is
         # here, not in the envelope, because he may have said it long before the
         # round ended -- including a round that never ended.
+        if self._drain is not None:
+            self._drain()          # anything the builder left, before we look
         said_while_working = self._reports_for(run) if self._reports_for else []
         terminal = next(
             (r for r in reversed(said_while_working) if r.get("terminal")), None
@@ -526,6 +530,20 @@ class RoundDispatcher:
         # answer he gave to the question -- that is how a refusal becomes a
         # proposal. Whether he called it is read back off the log, which is where
         # every other channel lands.
+        # What the builder noticed about the code it was building. Not a verdict
+        # on the round -- the round may have been perfectly fine -- so it rides
+        # along rather than deciding anything.
+        noticed = [
+            r["description"] for r in said_while_working
+            if r.get("kind") == "suggest_code_improvement"
+        ]
+        if noticed and self._ask_role is not None:
+            try:
+                self._ask_role(project_id, "SHARPENER",
+                                "\n".join(noticed)[:6_000])
+            except Exception:  # noqa: BLE001 - a missed improvement is not a failed round
+                pass
+
         before = self._proposal_count()
         try:
             self._ask_role(project_id, role, said)
@@ -730,7 +748,7 @@ class RoundDispatcher:
         is re-derived rather than believed (C12). Each file's declared encoding
         is returned with it, so a reader never has to infer one (TESP §4.8).
         """
-        directory = self.broker.workspace_paths.projects(root) / project_id / "rounds" / run
+        directory = paths.projects(self.broker.workspace_root) / project_id / "rounds" / run
         if not directory.is_dir():
             return {}, {}
         captured: dict[str, bytes] = {}

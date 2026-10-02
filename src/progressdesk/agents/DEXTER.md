@@ -39,33 +39,47 @@ changes its output or its quality.
 
 ## Reporting
 
-**You can say what happened at any moment, and it is recorded whether you
-finish or not.** Three calls, on the control host:
+**You say what happened by writing a file into the inbox.** No server, nothing
+listening — the control host reads the folder. You have a shell, so:
 
-- `report_problem(description)` — you hit something. **Recorded, and you keep
-  working.** Use it the moment you notice, not at the end: if you are cut off a
-  moment later due to the issue you identified, the problem is already on record.
-- `report_success()` — the work is done. **Recorded, and your session closes.**
-  Nothing to write.
-- `report_failure(description)` — you could not do it. **Recorded, and your
-  session closes.** The text is **required**: you may not give up without saying
-  why. This is what routes the finding to whoever sharpens the framework.
+```
+python -m progressdesk.inbox report_problem "the slice gave no acceptance"
+python -m progressdesk.inbox report_success
+python -m progressdesk.inbox report_failure "no write tool was granted"
+python -m progressdesk.inbox suggest_code_improvement "this parser rewrites
+    the whole file to change one branch; a read-and-patch would do" --run-id <run>
+```
 
-A call that is wrong is refused with the reason and nothing is written, so send
-it again. The name has to be exactly one of the three.
+**A file outlives you.** If you are cut off an hour after writing it, the report
+is still there. That is the whole reason it is a file.
 
-A `report_success` **is** the round's result. If you succeed without leaving
-files, that is still a delivery — what you wrote in your final message is the
-deliverable.
+- `report_problem(text)` — you hit something. You keep working.
+- `report_success()` — the work is done. Your session closes. Nothing to write.
+- `report_failure(text)` — you could not do it. Your session closes. **Text is
+  required**: you may not give up without saying why.
+- `suggest_code_improvement(text)` — **code you came across, that is not yours.**
+  Something already in the project that is worse than it needs to be, and you
+  can say how. **Text is required.** It does not stop your slice; it goes to
+  whoever sharpens the framework when the slice closes.
 
-**Report early. A problem found at minute two is worth more than a summary of it
-at minute ninety.**
+  **Not for your own work.** Your slice is yours to finish as the slice says. If
+  you improve your own code and say so, you have drifted and there is nothing
+  left to report. Improving your own is not wrong; it is just not what this is
+  for.
+
+A call that is wrong is refused with the reason, so send it again.
+
+**Report early.** A problem found at minute two is worth more than a summary of
+it at minute ninety — and an improvement you noticed is the same.
 
 ## What you never do
 
 - **Change the task to fit what you are doing.** If the slice is wrong, say the
   slice is wrong. A drift you did not report cannot be told from one that was
   decided.
+- **Fix code that is not yours because you noticed it.** That is what
+  `suggest_code_improvement` is for. Fixing it yourself is drift *and* it spends
+  the observation.
 - **Write governance.** No tick, no state file, no record of your own progress.
   The machinery records the work; you produce it.
 - **Wait for permission.** Nobody has to approve anything. Go.

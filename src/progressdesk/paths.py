@@ -20,9 +20,15 @@ DOMAIN_PACKS = "domain-packs"
 
 EVENT_LOG = "events.jsonl"
 
+# Where a builder leaves a request. He writes here; the control host drains it into
+# the event log. No listener, and nothing is lost: the file survives the process
+# that wrote it, so a round that is cut off still said what it meant to say.
+INBOX = "inbox"
+
 
 def config(root: Path) -> Path:      return root / CONFIG
 def artifacts(root: Path) -> Path:   return root / ARTIFACTS
 def event_log(root: Path) -> Path:   return root / EVENTS / EVENT_LOG
 def events_dir(root: Path) -> Path:  return root / EVENTS
 def projects(root: Path) -> Path:    return root / PROJECTS
+def inbox(root: Path) -> Path:      return root / INBOX

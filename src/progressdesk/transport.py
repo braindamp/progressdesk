@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import paths
 from .broker import Broker, BrokerError, PlannedTransport, ProjectRun
 from .encoding import EncodingFault, argv_for, decode
 from .spawn import ANSWERS, ResultEnvelope, SpawnError, SpawnRequest
@@ -212,7 +213,7 @@ class CommandTransport:
     def spawn(self, req: SpawnRequest) -> ResultEnvelope:
         started = time.monotonic()
         directory = (
-            self._broker.workspace_paths.projects(root) / self._project_id / "rounds" / req.run_id
+            paths.projects(self._broker.workspace_root) / self._project_id / "rounds" / req.run_id
         )
         directory.mkdir(parents=True, exist_ok=True)
         pack = directory / "context-pack.md"
