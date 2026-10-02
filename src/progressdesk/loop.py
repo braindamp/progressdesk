@@ -129,6 +129,23 @@ def _payload_of(event, artifacts: ArtifactStore) -> dict:
 
 CHUNK = 4_000
 
+# The gate asks five questions, one per verdict, and takes the highest. Each is
+# a plain presence check about one thing, so no two can sensibly be true of the
+# same change -- which is what makes the verdicts exclusive without asking her to
+# be careful. `duplicate` is bounded to what she can see: she is handed one
+# record, so this asks whether it restates something already in ProgressDesk, not
+# whether the same idea lives in something she has not been given.
+GATE_QUESTIONS = {
+    "real": "Did this change come from something that actually happened?",
+    "cosmetic": "Does this change rearrange wording without changing what the system does?",
+    "invented": "Is any part of this record filled in for something that did not happen?",
+    "deviating": "Is this about something other than what this framework is for?",
+    "duplicate": "Has this already been done, somewhere in ProgressDesk?",
+}
+# Below this nothing counts as `real`, including a set of lukewarm answers. An
+# unclear verdict is not a pass.
+GATE_FLOOR = 0.5
+
 
 def _chunks(text: str, size: int = CHUNK) -> list[str]:
     """Split so nothing is dropped and nothing is silently shortened.
@@ -554,6 +571,13 @@ class RoundDispatcher:
         Code enumerates the fixes, because he cannot misreport which ones he
         made. Laya judges, because that is what she is for. Code applies her
         verdict, because she is not the one whose answer becomes the system.
+
+        The five verdicts are five separate yes/no questions, never one question
+        with five answers. Asked as a choice she returns the same option whatever
+        the input and whichever order the options are in, so the categories are
+        exclusive by arithmetic rather than by anyone being careful: whichever
+        scores highest is the verdict, and nothing lands unless that verdict is
+        `real` and is clearly `real`. Five lukewarm answers are not a pass.
         """
         fixes = [e for e in self._log.read_all() if e.type == "fix.recorded"]
         if not fixes:
@@ -570,18 +594,15 @@ class RoundDispatcher:
                 f"now: {payload.get('applicationOperation', '')}",
             ])[:1_500]
             try:
-                token, why = parse_laya(
-                    self._ask_role(
-                        project_id, "CLEANING_LAYA",
-                        "decision: real | cosmetic | invented\n"
-                        "Is this a real change - traced to an outcome that actually happened, "
-                        "or is it churn? A fix with no real observation behind it is invented.\n"
-                        f"FIX:\n{shown}"),
-                    frozenset({"real", "cosmetic", "invented"}))
+                scores = {
+                    verdict: self._ask_noul(project_id, shown, question).probability
+                    for verdict, question in GATE_QUESTIONS.items()
+                }
             except Exception as exc:  # noqa: BLE001
                 return False, f"LAYA unavailable: {exc}"
-            if token != "real":
-                return False, f"{fix_id}: {token or 'unreadable'}"
+            verdict = max(scores, key=lambda name: scores[name])
+            if verdict != "real" or scores[verdict] < GATE_FLOOR:
+                return False, f"{fix_id}: {verdict} ({scores[verdict]:.2f})"
         return True, f"{len(fixes)} changes gated, all real"
 
     def _evidence_ok(self, project_id: str, draft: str) -> tuple[bool, str]:
