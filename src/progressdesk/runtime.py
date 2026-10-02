@@ -11,6 +11,7 @@ MS-A scope: composition, the §16.1 verbs, and owner/POLICE termination.
 from __future__ import annotations
 
 import importlib
+import uuid
 import json
 import threading
 import time
@@ -657,7 +658,10 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         return refusal
 
     packet = TaskPacket(
-        task_id=f"{project_id}:{len(slice_text)}",
+        # Opaque, minted here, never derived from the text it describes:
+        # a content-derived id changes when the content is edited and two
+        # tasks of the same length collide.
+        task_id=str(uuid.uuid4()),
         task_revision=1,
         milestone_id=project_id,
         parent_definition_refs=(),
@@ -682,7 +686,7 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         "runId": outcome.run_id,
         "projectId": outcome.project_id,
         "status": outcome.status,
-        "delivered": outcome.delivered,
+        "hasCandidate": outcome.has_candidate,
         "candidateId": outcome.candidate_id,
         "wallMs": outcome.wall_ms,
         "nudges": outcome.nudges,

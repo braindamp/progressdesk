@@ -66,7 +66,8 @@ class DispatchOutcome:
     halves: list[str] | None = None
 
     @property
-    def delivered(self) -> bool:
+    def has_candidate(self) -> bool:
+        # A round produced an artifact. Not the same as task delivery.
         return self.candidate_id is not None
 
     def to_dict(self) -> dict[str, Any]:
@@ -75,7 +76,7 @@ class DispatchOutcome:
             "projectId": self.project_id,
             "taskRef": self.task_ref,
             "status": self.status,
-            "delivered": self.delivered,
+            "hasCandidate": self.has_candidate,
             "candidateId": self.candidate_id,
             "files": dict(self.files),
             "fileSpecs": dict(self.file_specs),
@@ -418,7 +419,7 @@ class RoundDispatcher:
             project_id, task_ref, run, envelope, actual_role,
             terminal=terminal, earlier=said_while_working,
         )
-        if not outcome.delivered:
+        if not outcome.has_candidate:
             # He said it, in a field, so nobody has to read it. Laya is only
             # asked about a builder who never picked up the channel at all --
             # and that is a fallback, not the path.
@@ -783,7 +784,7 @@ class RoundDispatcher:
             run_id=run,
             task_ref=f"{project_id}:{task_ref}",
             role=role,
-            context_pack=self._pack(packet),
+            context_pack=self._pack(packet, run),
             tool_allowlist=tools,
             budget=budget or Budget(),
             model_spec=ModelSpec(provider=provider, model=model),
@@ -820,7 +821,7 @@ class RoundDispatcher:
         except Exception as exc:  # noqa: BLE001 - a bad table is a refusal, not a crash
             raise SpawnError("no_assignment", f"role {role!r} is not configured: {exc}") from exc
 
-    def _pack(self, packet: Any) -> ContextPack:
+    def _pack(self, packet: Any, run: str = "") -> ContextPack:
         """A builder's pack: the slice, and the brief that says what this is.
 
         The brief was missing for a long time because this path builds the pack
@@ -834,6 +835,10 @@ class RoundDispatcher:
         here and honoured nowhere.
         """
         sections = []
+        if run:
+            # The run id is how a builder files its own report (see DEXTER.md
+            # Reporting); without it here the reporting channel has no handle.
+            sections.append(ContextSection("your run", run, 64))
         if self._read_brief is not None:
             sections.append(ContextSection(
                 "your brief", self._read_brief("DEXTER"), ROLE_BRIEF_BUDGET,
