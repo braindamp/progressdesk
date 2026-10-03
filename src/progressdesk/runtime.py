@@ -11,10 +11,11 @@ MS-A scope: composition, the §16.1 verbs, and owner/POLICE termination.
 from __future__ import annotations
 
 import importlib
-import uuid
 import json
+import os
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -107,18 +108,22 @@ WORKSHOP = "workshop"
 
 # The three things a builder can say. Terminal ones close the session: the work
 # has declared itself done, which is a round finishing and not a project abort.
-# report_problem is the early warning -- appended, and the session carries on.
+# problem is the early warning -- appended, and the session carries on.
 # needs_text on failure and problem, not on success: a builder must not be able
 # to give up without saying why, and must not have to write an essay to say it
 # went well.
 REPORTS = {
-    "report_problem": {"terminal": False, "needs_text": True},
-    "report_success": {"terminal": True, "needs_text": False},
-    "report_failure": {"terminal": True, "needs_text": True},
+    "issue": {"terminal": False, "needs_text": True},
+      "success": {"terminal": True, "needs_text": False},
+    "aborted": {"terminal": True, "needs_text": True},
     # Not a terminal verdict: the round is fine. It is an improvement to the code
     # this slice is building, offered by the person reading it, and it goes to
     # SHARPENER when the slice closes.
-    "suggest_code_improvement": {"terminal": False, "needs_text": True},
+    "suggestion": {"terminal": False, "needs_text": True},
+      # A lesson is a fix the role already made and logged, offered so the next
+      # round does not pay for it again. It is a queue, not a write: SHARPENER
+      # reads these and decides whether a lesson belongs in a brief at all.
+      "lesson": {"terminal": False, "needs_text": True},
 }
 
 
@@ -275,6 +280,16 @@ class Runtime:
             # is not given one; asking it to obey prose is the mistake this seam
             # was built to remove.
             sections.append(ContextSection("your brief", read_brief(role), brief_budget))
+            # Lessons, below the brief and fenced so they are not read as tasks.
+            # The same injection the round path does, because a role consulted
+            # rather than dispatched used to never see a lesson at all.
+            from .loop import _lessons_for, LESSON_BUDGET
+            lessons = _lessons_for(role)
+            if lessons:
+                sections.append(ContextSection(
+                    "lessons (not tasks)",
+                    "\n---\n" + lessons + "\n---", LESSON_BUDGET,
+                ))
         if cast:
             sections.append(ContextSection("the other roles", _cast_briefs(role), 40_000))
         sections.append(ContextSection("what you are looking at", state, state_budget))
@@ -318,7 +333,7 @@ class Runtime:
     # -- the builder's report ------------------------------------------
     def file_report(
         self, run_id: str, token: str, kind: str, description: str, *,
-        title: str = "",
+        title: str = "", task_id: str = "",
     ) -> dict[str, Any]:
         """A builder saying what happened. This is a *request*, not a write.
 
@@ -352,6 +367,23 @@ class Runtime:
                 "unknown_run", f"no run {run_id!r} here. Start a round first."
             )
         project = project or None
+        # The task identity is a host fact read off the dispatch, like the
+        # project. A claim that contradicts the dispatch is refused.
+        dispatched = next(
+            (json.loads(self.artifacts.get_bytes(
+                e.payloadRef.split(":", 1)[1]).decode("utf-8"))
+             for e in self.log.read_all()
+             if e.type == "round.dispatched" and e.runId == run_id
+             and e.payloadRef and self.artifacts.exists(e.payloadRef.split(":", 1)[1])),
+            None,
+        )
+        bound_task = str((dispatched or {}).get("taskId", ""))
+        bound_milestone = str((dispatched or {}).get("milestoneId", ""))
+        if task_id and bound_task and task_id != bound_task:
+            raise CommandError(
+                "task_mismatch",
+                f"run {run_id} is bound to task {bound_task}, not {task_id}.",
+            )
         event = self.log.record(
             "builder.reported",
             producer="manager",
@@ -359,6 +391,8 @@ class Runtime:
                 {
                     "schemaVersion": 1,
                     "runId": run_id,
+                    "taskId": bound_task,
+                    "milestoneId": bound_milestone,
                     "kind": kind,
                     "title": title.strip()[:200],
                     "description": description.strip()[:4_000],
@@ -381,12 +415,10 @@ class Runtime:
         """Move whatever the builders left into the event log. Returns the count.
 
         Runs on a timer and at round boundaries, so a report is journalled
-        whether the round finished, was cut off, or never came back. The run is
-        taken from the round directory the request was found in, never from the
-        request body.
+        whether the round finished, was cut off, or never came back. The run comes
+        from the round directory the request was found in, never from the body.
         """
         from .report import pending
-        from .inbox import pending
 
         taken = 0
         for round_dir, path in pending(self._round_dirs()):
@@ -399,10 +431,9 @@ class Runtime:
             kind = str(request.get("kind", ""))
             if kind not in REPORTS:
                 continue
-            run_id = round_dir.name
             try:
                 self.file_report(
-                    run_id, "", kind,
+                    round_dir.name, "", kind,
                     str(request.get("description", "")),
                     title=str(request.get("title", "")),
                 )
@@ -437,6 +468,60 @@ class Runtime:
 
     # -- proposing a change ---------------------------------------------
     INTENT_WORDS = 80
+
+    def teach(self, role: str, lesson: str, *, from_role: str = "") -> dict[str, Any]:
+        """Keep a lesson for one role. SHARPENER decides which; code only writes."""
+        role = str(role or "").strip()
+        if not role:
+            raise CommandError("no_role", "a lesson needs a role to be kept for.")
+        if not isinstance(lesson, str) or not lesson.strip():
+            raise CommandError(
+                "no_lesson", "a lesson needs its text: what the next round should know."
+            )
+        self.log.record(
+            "lesson.taught",
+            producer="manager",
+            payload=json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "role": role,
+                    "lesson": lesson.strip()[:4_000],
+                    "fromRole": str(from_role or "").strip(),
+                },
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+        return self.rebuild_lessons()
+
+    def rebuild_lessons(self, root: Path | None = None) -> dict[str, Any]:
+        """Rebuild every lessons/<ROLE>.md from the log. The files are a view."""
+        base = Path(root or os.environ.get("PROGRESSDESK_ROOT", "."))
+        taught: dict[str, list[str]] = {}
+        for event in self.log.read_all():
+            if getattr(event, "type", "") != "lesson.taught":
+                continue
+            payload = {}
+            try:
+                ref = getattr(event, "payloadRef", "") or ""
+                payload = json.loads(
+                    self.artifacts.get_bytes(ref.split(":", 1)[1]).decode("utf-8")
+                )
+            except (OSError, ValueError, IndexError, UnicodeDecodeError):
+                continue
+            role, lesson = str(payload.get("role", "")), str(payload.get("lesson", ""))
+            if role and lesson:
+                taught.setdefault(role, []).append(lesson)
+        directory = base / paths.LESSONS
+        directory.mkdir(parents=True, exist_ok=True)
+        for role, lines in taught.items():
+            seen: list[str] = []
+            for line in lines:
+                if line not in seen:
+                    seen.append(line)
+            (directory / f"{role}.md").write_text(
+                "\n".join(f"- {line}" for line in seen) + "\n", encoding="utf-8"
+            )
+        return {"roles": sorted(taught), "written": len(taught)}
 
     def propose_intent(self, intent: str, document: str, title: str = "") -> dict[str, Any]:
         """A role saying what should change, and the document that says it.
@@ -667,13 +752,20 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
     if refusal is not None:
         return refusal
 
+    # Named or absent, never looked up.
+    milestone_id = str(cmd.get("milestone_id", "") or "")
+    task_id = str(cmd.get("task_id", "") or "")
+    if not milestone_id or not task_id:
+        need = "a milestone and a task" if not task_id else "a milestone"
+        return {
+            "error": "ids_required",
+            "message": f"dispatch must name {need}; both are declared in the store",
+        }
+
     packet = TaskPacket(
-        # Opaque, minted here, never derived from the text it describes:
-        # a content-derived id changes when the content is edited and two
-        # tasks of the same length collide.
-        task_id=str(uuid.uuid4()),
+        task_id=task_id,
         task_revision=1,
-        milestone_id=project_id,
+        milestone_id=milestone_id,
         parent_definition_refs=(),
         outcome=slice_text,
         scope=slice_text,
@@ -690,6 +782,7 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         project_id=project_id,
         task_ref=slice_text[:80],
         packet=packet,
+        task_id=task_id,
         tools=tools,
     )
     return {

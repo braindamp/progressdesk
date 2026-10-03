@@ -75,6 +75,10 @@ from progressdesk.definitions import Definition, DefinitionError, Definitions
 from progressdesk.events import Event, EventLog
 
 PROJECT_PLAN_SCHEMA_VERSION = 1
+# A milestone declaration is its own shape, not a plan revision. It has to be
+# separate because a milestone can be declared again (a later slice subdividing
+# an existing project) without the plan changing.
+MILESTONE_SCHEMA_VERSION = 1
 PROJECT_MANIFEST_RELATIVE = Path("project.json")
 
 SUPPORTED_OPERATIONS = frozenset(
@@ -225,6 +229,11 @@ class _ValidatedPlan:
     need checking. But the TESP is a document, and a document is checked by
     being readable. Everything here that is not the name or the spec was
     bookkeeping for a structure the product does not have.
+
+    A milestone is likewise not a plan field. The project declares one at
+    formation and a dispatch binds to it; subdividing a project into several
+    milestones is a later decision, not a field that has to be invented here
+    before anything can be dispatched.
     """
 
     name: str
@@ -446,6 +455,7 @@ class ProjectService:
             except Exception:
                 shutil.rmtree(stage, ignore_errors=True)
                 raise
+            # The milestone id is its own and means nothing.
             # project.created is deliberately durable before the completion view
             # and directory publication (§5.3 steps 5-6).
             try:

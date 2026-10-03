@@ -26,7 +26,7 @@ import uuid
 from pathlib import Path
 
 # Same rules as the log: a worker may not ask for an event type it does not own.
-KINDS = ("problem", "success", "aborted", "improvement")
+KINDS = ("issue", "success", "aborted", "suggestion", "lesson")
 
 REPORT = "report"
 

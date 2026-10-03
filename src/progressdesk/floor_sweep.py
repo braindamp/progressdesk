@@ -147,6 +147,10 @@ class FloorSweep:
         self.log = log
         self.artifacts = artifacts
         self.workspace = Path(workspace)
+        # The briefs sit beside this module, so the check finds them without
+        # being told where the workshop is. They are not in the workspace on
+        # purpose: they are instructions, not a builder's output.
+        self.briefs_dir = Path(__file__).resolve().parent / "agents"
         self._is_alive = is_alive
         self._enumerator = enumerator
         self._git = git or _git
@@ -320,6 +324,27 @@ class FloorSweep:
             project_id=report.project_id,
         )
 
+    def check_briefs(self, report: SweepReport) -> None:
+        """An em dash in a brief stops the round. Blocked, never repaired: a human
+        looks at the file and signs it off."""
+        for path in sorted(self.briefs_dir.glob("*.md")) if self.briefs_dir else ():
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                self._record(report, "check_briefs", f"{path.name}: unreadable ({exc})", blocked=True)
+                continue
+            hits = [i + 1 for i, line in enumerate(text.split("\n")) if "\u2014" in line]
+            if hits:
+                self._record(
+                    report,
+                    "check_briefs",
+                    f"{path.name}: em dash on line(s) {', '.join(map(str, hits))} - "
+                    f"replace with a hyphen and have a human sign it off",
+                    blocked=True,
+                )
+            else:
+                self._record(report, "check_briefs", f"{path.name}: clean")
+
     def record(self, report: SweepReport, operation: str, detail: str, *, blocked: bool = False) -> None:
         """Journal one step. Same writer, same vocabulary, no second record."""
         self._record(report, operation, detail, blocked=blocked)
@@ -358,11 +383,39 @@ class Sweep:
     def __init__(self, log: EventLog, artifacts: ArtifactStore, workspace: Path) -> None:
         self.script = FloorSweep(log, artifacts, workspace=workspace)
 
+    def work_left(self, project_id: str) -> list[str]:
+        """Declared tasks that have not delivered. Read from the log, not the board."""
+        from .delivery import task_delivered
+
+        events = [e.to_dict() if hasattr(e, "to_dict") else e
+                  for e in self.script.log.read_all()]
+        declared: list[str] = []
+        for event in events:
+            if event.get("type") != "task.declared" or event.get("projectId") != project_id:
+                continue
+            ref = event.get("payloadRef")
+            if not ref:
+                continue
+            try:
+                payload = json.loads(
+                    self.script.artifacts.get_bytes(ref.split(":", 1)[1]).decode("utf-8")
+                )
+            except (OSError, ValueError, IndexError, UnicodeDecodeError):
+                continue
+            task_id = str(payload.get("taskId") or payload.get("taskDefinitionRef") or "")
+            if task_id:
+                declared.append(task_id)
+        return [t for t in dict.fromkeys(declared) if not task_delivered(events, project_id, t)]
+
     def after_slice(self, project_id: str) -> SweepReport:
-        return self.script.run(project_id, strength=LIGHT)
+        report = self.script.run(project_id, strength=LIGHT)
+        self.script.check_briefs(report)
+        return report
 
     def after_milestone(self, project_id: str) -> SweepReport:
-        return self.script.run(project_id, strength=STRONG)
+        report = self.script.run(project_id, strength=STRONG)
+        self.script.check_briefs(report)
+        return report
 
 
 @dataclass

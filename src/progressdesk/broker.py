@@ -22,6 +22,13 @@ WAIT_TIMEOUT = 0x00000102
 WAIT_FAILED = 0xFFFFFFFF
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+# The janitor is the one role that is meant to repair what containment left
+# behind. Fencing him would leave the mess unfenced, which is worse. What he may
+# not do is stated in his brief: move evidence, never destroy it.
+def _is_janitor(entrypoint) -> bool:
+    return any("SCHOTTY" in str(part).upper() for part in entrypoint)
+
+
 _BLOCKED_SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "bash", "sh"}
 # Capturing a child's output requires bInheritHandles=TRUE, and that flag hands
 # the child every inheritable handle in this process. The only way to hold the

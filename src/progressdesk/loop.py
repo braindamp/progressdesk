@@ -19,6 +19,7 @@ An infra-fault is not bad work; it burns budget and nothing else.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import uuid
@@ -67,7 +68,8 @@ class DispatchOutcome:
 
     @property
     def has_candidate(self) -> bool:
-        # A round produced an artifact. Not the same as task delivery.
+        # A round produced something. Not task delivery -- that is
+        # delivery.task_delivered, and it also needs the report.
         return self.candidate_id is not None
 
     def to_dict(self) -> dict[str, Any]:
@@ -113,6 +115,13 @@ def _thinking_file(root: Path, project_id: str) -> str:
     return "\n".join(
         ln for ln in raw.splitlines() if '"tool_call"' in ln or '"toolResult"' in ln
     )[:6_000]
+
+
+def _manifest_hash(files: dict[str, str]) -> str:
+    """One hash over the path/digest pairs a round produced. Host-computed."""
+    import hashlib
+    encoded = json.dumps(sorted(files.items()), separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _payload_of(event, artifacts: ArtifactStore) -> dict:
@@ -236,11 +245,24 @@ def _police_says(text: str) -> str:
     return " ".join(said)[:1_000] or _first_line(text)
 
 
-def _says_violation(text: str) -> bool:
+def _verdict(text: str) -> str | None:
+    """What POLICE decided, or None when he did not say.
+
+    Three answers, not two. A missing verdict used to read as "ok", which is
+    the one default the only role that can stop anything must never make: a
+    false alarm costs an hour, a missed breach costs the framework. Nothing
+    readable stops the round and asks the owner.
+    """
     for line in (text or "").splitlines():
-        if line.strip().lower().startswith("verdict:"):
-            return "violation" in line.lower()
-    return False
+        low = line.strip().lower()
+        if low.startswith("verdict:"):
+            said = low[len("verdict:"):].strip()
+            if "violation" in said:
+                return "violation"
+            if "ok" in said:
+                return "ok"
+            return None
+    return None
 
 
 def _says_police(text: str) -> bool:
@@ -280,6 +302,29 @@ def judge_change(ask_noul: Any, record: str) -> tuple[str, float]:
     }
     verdict = max(scores, key=lambda name: scores[name])
     return verdict, scores[verdict]
+
+
+# What SCHOTTY is dispatched with. No shell: inside a shell the boundary
+# between the room and the workshop files is a rule in his brief, and with read
+# and write it can be a real one instead.
+#
+# He cannot kill a process or restore a git ref. That is deliberate -- those are
+# named operations, added when he reports he needs one and SHARPENER proposes it.
+LESSON_BUDGET = 600
+LESSONS_DIR = paths.LESSONS
+
+
+def _lessons_for(role: str) -> str:
+    """The lessons kept for a role. Read-only here; only SHARPENER writes these."""
+    root = Path(os.environ.get("PROGRESSDESK_ROOT", "."))
+    path = root / LESSONS_DIR / f"{role}.md"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+JANITOR_TOOLS = ("read", "write", "glob", "grep")
 
 
 class RoundDispatcher:
@@ -341,6 +386,7 @@ class RoundDispatcher:
         project_id: str,
         task_ref: str,
         packet: Any,
+        task_id: str = "",
         run_id: str | None = None,
         adapter: str | None = None,
         round_kind: str = "worker",
@@ -352,6 +398,54 @@ class RoundDispatcher:
         # envelope identity the seam carries. They are different things and
         # conflating them makes every round unresolvable.
         run = run_id or str(uuid.uuid4())
+        # The run-to-task binding, and the milestone it belongs to, are settled
+        # before anything else happens. A dispatch that cannot name a declared
+        # milestone has no business choosing a transport or spending an attempt:
+        # it is refused, and visibly -- dispatch.rejected is a fact in the log,
+        # not a silent infra-fault that looks like a healthy loop which happened
+        # to do nothing.
+        milestone_id = str(getattr(packet, "milestone_id", "") or "")
+        task_id = str(getattr(packet, "task_id", "") or task_ref)
+        declared = False
+        go_issued = False
+        if milestone_id:
+            for e in self._log.read_all():
+                if e.type == "milestone.declared" and str(
+                    _payload_of(e, self.artifacts).get("milestoneId", "")
+                ) == milestone_id:
+                    declared = True
+                elif e.type == "milestone.go-issued" and str(
+                    _payload_of(e, self.artifacts).get("milestoneId", "")
+                ) == milestone_id:
+                    go_issued = True
+        # F-G7: dispatch stays blocked until the required definition and signoffs
+        # exist. Declaration alone is not the human gate -- otherwise a milestone
+        # created as a side effect of forming a project is dispatchable without
+        # anyone ever approving it, and the GO becomes decorative.
+        if not milestone_id or not declared or not go_issued:
+            reason = ("milestone_id_absent" if not milestone_id
+                      else "milestone_not_declared" if not declared
+                      else "milestone_not_go_issued")
+            self._log.record(
+                "dispatch.rejected",
+                producer="manager",
+                payload=json.dumps({
+                    "projectId": project_id, "runId": run,
+                    "milestoneId": milestone_id, "taskId": task_id,
+                    "reason": reason,
+                }).encode("utf-8"),
+                project_id=project_id,
+                run_id=run,
+            )
+            return DispatchOutcome(
+                run_id=run, project_id=project_id, task_ref=task_ref,
+                status="rejected",
+                detail=(
+                    "dispatch must name a milestone" if not milestone_id else
+                    "no such milestone" if not declared else
+                    "a go was not issued for this milestone"
+                ),
+            )
         if adapter is None:
             adapter = self._adapter_for(role)
         # The three-attempt budget in §10.2 bounds the *builder* trying to
@@ -372,6 +466,20 @@ class RoundDispatcher:
                 "runId": run,
                 "taskDefinitionRef": ledger_task_ref,
                 "kind": round_kind,
+            }).encode("utf-8"),
+            project_id=project_id,
+            run_id=run,
+        )
+        # The run-to-task binding was settled before the adapter was chosen.
+        # Recording it here, once the round has actually been dispatched, keeps
+        # "dispatched" meaning what it says: this run is going out.
+        self._log.record(
+            "round.dispatched",
+            producer="manager",
+            payload=json.dumps({
+                "taskId": task_id or str(getattr(packet, "task_id", "")),
+                "milestoneId": milestone_id,
+                "slice": str(getattr(packet, "outcome", ""))[:200],
             }).encode("utf-8"),
             project_id=project_id,
             run_id=run,
@@ -447,7 +555,36 @@ class RoundDispatcher:
                     f" | this round: {outcome.status} {outcome.detail}"
                 ).strip(),
             )
+        self._close_round(project_id, outcome, task_id, milestone_id)
         return outcome
+
+    def _close_round(self, project_id: str, outcome: DispatchOutcome,
+                     task_id: str, milestone_id: str) -> None:
+        """Every round ends, and the ending is recorded whether it delivered."""
+        files = dict(getattr(outcome, "files", {}) or {})
+        status = str(getattr(outcome, "status", "") or "")
+        if status in {"infra-fault", "blocked"}:
+            how = "killed"
+        elif getattr(outcome, "has_candidate", False):
+            how = "success"
+        else:
+            how = "failure"
+        try:
+            self._log.record(
+                "round.closed",
+                producer="manager",
+                payload=json.dumps({
+                    "taskId": task_id,
+                    "milestoneId": milestone_id,
+                    "outcome": how,
+                    "candidateHash": _manifest_hash(files) if files else None,
+                    "files": files,
+                }).encode("utf-8"),
+                project_id=project_id,
+                run_id=outcome.run_id,
+            )
+        except Exception:
+            pass
 
     def _proposal_count(self) -> int:
         if self._log is None:
@@ -531,18 +668,28 @@ class RoundDispatcher:
         # answer he gave to the question -- that is how a refusal becomes a
         # proposal. Whether he called it is read back off the log, which is where
         # every other channel lands.
-        # What the builder noticed about the code it was building. Not a verdict
-        # on the round -- the round may have been perfectly fine -- so it rides
-        # along rather than deciding anything.
-        noticed = [
-            r["description"] for r in said_while_working
-            if r.get("kind") == "improvement"
-        ]
-        if noticed and self._ask_role is not None:
+        # Suggestions ride along; they decide nothing. SHARPENER decides where a
+        # lesson lands and calls teach.
+        reports = self._reports_for(run_id) or []
+        noticed = [f"- {r['description']}" for r in reports
+                   if r.get("kind") == "suggestion" and r.get("description")]
+        lessons = [f"- from {r.get('role', 'unknown')}: {r['description']}"
+                   for r in reports
+                   if r.get("kind") == "lesson" and r.get("description")]
+        if (noticed or lessons) and self._ask_role is not None:
+            said_lessons = ""
+            if lessons:
+                said_lessons = (
+                    "\n\nLESSONS FILED THIS ROUND. Each is a fix already made. "
+                    "Decide which role would hit the same thing and keep it with "
+                    "teach(role, lesson). Keep none and that is a correct answer:\n"
+                    + "\n".join(lessons)
+                )
             try:
                 self._ask_role(project_id, "SHARPENER",
-                                "\n".join(noticed)[:6_000])
-            except Exception:  # noqa: BLE001 - a missed improvement is not a failed round
+                                ("SUGGESTIONS:\n" + "\n".join(noticed) if noticed else "")
+                                + said_lessons)
+            except Exception:  # noqa: BLE001 - a missed suggestion is not a failed round
                 pass
 
         before = self._proposal_count()
@@ -577,7 +724,7 @@ class RoundDispatcher:
         He is not a suggester. Sharpening the other roles is the whole point of
         the role, so the question is not whether he acted. It is whether what
         he did was *real*: traced to an outcome someone actually got, or churn
-        dressed up as improvement.
+        dressed up as a suggestion.
 
         Code enumerates the fixes, because he cannot misreport which ones he
         made. Laya judges, because that is what she is for. Code applies her
@@ -631,8 +778,8 @@ class RoundDispatcher:
         answer = ""
         for n, part in enumerate(parts, 1):
             context = "\n".join([
-                "verdict: violation | ok",
-                "report: <one line, in your own words: what is actually wrong>",
+                "verdict: ok | violation",
+                "action: <one line, in your own words: what is actually wrong>",
                 detail[:6_000],
                 f"TRANSCRIPT PART {n} OF {len(parts)}" if len(parts) > 1 else "",
                 f"WHAT HE ACTUALLY DID:\n{part}" if part else "",
@@ -641,9 +788,14 @@ class RoundDispatcher:
                 answer = self._ask_role(project_id, "POLICE", context)
             except Exception as exc:  # noqa: BLE001
                 return _with(outcome, detail=f"POLICE unavailable: {exc}")
-            if _says_violation(answer):
+            said = _verdict(answer)
+            if said == "violation":
                 return _with(outcome, status="violation",
                              detail=f"[part {n}/{len(parts)}] {_police_says(answer)}")
+            if said is None:
+                return _with(outcome, status="blocked",
+                             detail=f"[part {n}/{len(parts)}] POLICE returned no readable "
+                                    f"verdict, so nothing was cleared: {_police_says(answer)}")
         return _with(outcome, status="stopped",
                      detail=f"{len(parts)} part(s) read, no violation: {_police_says(answer)}")
 
@@ -653,10 +805,18 @@ class RoundDispatcher:
                                   status="blocked")
         if self._ask_role is None:
             return outcome
+        # He is the janitor and needs the mechanism, not a summary of it: which
+        # script ran, and what it recorded doing. Traces alone say "the tree is
+        # dirty"; the actions say which tree, what happened, and what was left.
+        _acts = (getattr(clearance.report, "actions", None) or []) if clearance.report else []
         context = "\n".join(
-            ["traces:", *(clearance.report.traces if clearance.report else []),
+            ["script:   src/progressdesk/floor_sweep.py",
+             "actions:  " + ("; ".join(
+                 f"{getattr(a, 'operation', '?')} | {getattr(a, 'detail', '')}"
+                 for a in _acts[:20]) or "none recorded"),
+             "traces:", *(clearance.report.traces if clearance.report else []),
              "decision:", clearance.rationale]
-        )[:6_000]
+        )[:9_000]
         # SHARPENER first: he notes it and can steer before SCHOTTY removes
         # evidence. SCHOTTY cleans; only POLICE stops anything.
         if self._ask_role is not None:
@@ -665,14 +825,20 @@ class RoundDispatcher:
             except Exception:  # noqa: BLE001 - a lesson is not worth stopping for
                 pass
         try:
-            answer = self._ask_role(project_id, "SCHOTTY", context)
+            # SCHOTTY is dispatched with the tools he needs to act. A brief that
+            # says clean, given a way only to talk, produces an assessment and
+            # nothing else -- which is how the room stayed dirty.
+            answer = self._ask_role(project_id, "SCHOTTY", context, tools=JANITOR_TOOLS)
         except Exception as exc:  # noqa: BLE001
             return _with(outcome, detail=f"SCHOTTY unavailable: {exc}")
         low = (answer or "").lower()
         if "police" in low:
             return _with(outcome, status="police", detail=_first_line(answer))
         if _says_police(answer):
-            return self._police(project_id, _first_line(answer))
+            # His whole account, not the first line. He spent a round working out
+            # what was wrong; a summary of it discards the only reasoning that
+            # exists before the decision.
+            return self._police(project_id, answer)
         return _with(outcome, status="cleaned", detail=_first_line(answer))
 
     def _settle(
@@ -784,7 +950,7 @@ class RoundDispatcher:
             run_id=run,
             task_ref=f"{project_id}:{task_ref}",
             role=role,
-            context_pack=self._pack(packet),
+            context_pack=self._pack(packet, run),
             tool_allowlist=tools,
             budget=budget or Budget(),
             model_spec=ModelSpec(provider=provider, model=model),
@@ -821,7 +987,7 @@ class RoundDispatcher:
         except Exception as exc:  # noqa: BLE001 - a bad table is a refusal, not a crash
             raise SpawnError("no_assignment", f"role {role!r} is not configured: {exc}") from exc
 
-    def _pack(self, packet: Any) -> ContextPack:
+    def _pack(self, packet: Any, run: str = "") -> ContextPack:
         """A builder's pack: the slice, and the brief that says what this is.
 
         The brief was missing for a long time because this path builds the pack
@@ -835,9 +1001,20 @@ class RoundDispatcher:
         here and honoured nowhere.
         """
         sections = []
+        if run:
+            sections.append(ContextSection("your run", run, 64))
         if self._read_brief is not None:
             sections.append(ContextSection(
                 "your brief", self._read_brief("DEXTER"), ROLE_BRIEF_BUDGET,
+            ))
+        # Lessons, below the brief and marked so they are not read as tasks. A fix
+        # one round paid for should not be paid for again.
+        lessons = _lessons_for("DEXTER")
+        if lessons:
+            sections.append(ContextSection(
+                "lessons (not tasks)",
+                  "\n---\n" + lessons + "\n---",
+                LESSON_BUDGET,
             ))
         sections.append(ContextSection(
             "the slice", _text(getattr(packet, "outcome", "")), TASK_SECTION_BUDGET,

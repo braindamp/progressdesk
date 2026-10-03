@@ -19,10 +19,12 @@ SKILLS = "skills"
 DOMAIN_PACKS = "domain-packs"
 
 EVENT_LOG = "events.jsonl"
+LESSONS = "lessons"
 
 # Where a builder leaves a request. He writes here; the control host drains it into
 # the event log. No listener, and nothing is lost: the file survives the process
 # that wrote it, so a round that is cut off still said what it meant to say.
+
 
 
 def config(root: Path) -> Path:      return root / CONFIG

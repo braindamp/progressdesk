@@ -312,6 +312,58 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    # A milestone is the unit a gate judges and a dispatch belongs to. A project
+    # declares one at formation, and when it does not name its own the
+    # milestone id IS the project id -- so a project that has never been
+    # subdivided behaves exactly as it did before milestones existed.
+    "milestone.declared": {
+        "producers": frozenset({"desk"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "round.dispatched": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    # F-G5: project creation materialises the definition into milestones and
+    # bounded tasks. A task is declared, not invented at dispatch -- otherwise a
+    # re-dispatch of the same work reads as a brand new task with its own id.
+    "task.declared": {
+        "producers": frozenset({"desk", "manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.tasks-added": {
+        "producers": frozenset({"desk", "manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.test_declared": {
+        "producers": frozenset({"desk", "manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.test_validated": {
+        "producers": frozenset({"desk", "manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.gate-attempt": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.evaluated": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "round.closed": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
     "candidate.submitted": {
         "producers": frozenset({"worker"}),
         "payload_required": True,
@@ -327,7 +379,12 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": False,
     },
-    "builder.reported": {
+    "lesson.taught": {
+          "producers": frozenset({"manager"}),
+          "payload_required": True,
+          "project_scoped": False,
+      },
+      "builder.reported": {
         "producers": frozenset({"manager"}),
         "payload_required": True,
         "project_scoped": True,
