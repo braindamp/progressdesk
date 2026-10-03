@@ -381,13 +381,14 @@ class Runtime:
         """Move whatever the builders left into the event log. Returns the count.
 
         Runs on a timer and at round boundaries, so a report is journalled
-        whether the round finished, was cut off, or never came back.
+        whether the round finished, was cut off, or never came back. The run is
+        taken from the round directory the request was found in, never from the
+        request body.
         """
-        inbox = paths.inbox(self.root)
-        if not inbox.is_dir():
-            return 0
+        from .inbox import pending
+
         taken = 0
-        for path in sorted(inbox.glob("*.json")):
+        for round_dir, path in pending(self._round_dirs()):
             try:
                 request = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError, UnicodeDecodeError):
@@ -397,9 +398,10 @@ class Runtime:
             kind = str(request.get("kind", ""))
             if kind not in REPORTS:
                 continue
+            run_id = round_dir.name
             try:
                 self.file_report(
-                    str(request.get("runId", "")), "", kind,
+                    run_id, "", kind,
                     str(request.get("description", "")),
                     title=str(request.get("title", "")),
                 )
@@ -407,6 +409,13 @@ class Runtime:
             except CommandError:
                 continue                          # refused: the builder sees it next time
         return taken
+
+    def _round_dirs(self) -> list[Path]:
+        """Every round that could hold a request."""
+        projects = paths.projects(self.root)
+        if not projects.is_dir():
+            return []
+        return [r for r in projects.glob("*/rounds/*") if r.is_dir()]
 
     def reports_for(self, run_id: str) -> list[dict[str, Any]]:
         """Everything this round reported, in order. Read from the log, not a queue."""

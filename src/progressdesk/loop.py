@@ -784,7 +784,7 @@ class RoundDispatcher:
             run_id=run,
             task_ref=f"{project_id}:{task_ref}",
             role=role,
-            context_pack=self._pack(packet, run),
+            context_pack=self._pack(packet),
             tool_allowlist=tools,
             budget=budget or Budget(),
             model_spec=ModelSpec(provider=provider, model=model),
@@ -821,7 +821,7 @@ class RoundDispatcher:
         except Exception as exc:  # noqa: BLE001 - a bad table is a refusal, not a crash
             raise SpawnError("no_assignment", f"role {role!r} is not configured: {exc}") from exc
 
-    def _pack(self, packet: Any, run: str = "") -> ContextPack:
+    def _pack(self, packet: Any) -> ContextPack:
         """A builder's pack: the slice, and the brief that says what this is.
 
         The brief was missing for a long time because this path builds the pack
@@ -835,10 +835,6 @@ class RoundDispatcher:
         here and honoured nowhere.
         """
         sections = []
-        if run:
-            # The run id is how a builder files its own report (see DEXTER.md
-            # Reporting); without it here the reporting channel has no handle.
-            sections.append(ContextSection("your run", run, 64))
         if self._read_brief is not None:
             sections.append(ContextSection(
                 "your brief", self._read_brief("DEXTER"), ROLE_BRIEF_BUDGET,
