@@ -377,7 +377,7 @@ class Runtime:
             "message": "recorded." + (" This session is now closed." if terminal else ""),
         }
 
-    def drain_inbox(self) -> int:
+    def drain_reports(self) -> int:
         """Move whatever the builders left into the event log. Returns the count.
 
         Runs on a timer and at round boundaries, so a report is journalled
@@ -385,6 +385,7 @@ class Runtime:
         taken from the round directory the request was found in, never from the
         request body.
         """
+        from .report import pending
         from .inbox import pending
 
         taken = 0
@@ -885,7 +886,7 @@ def raise_red_light(rt: "Runtime", project_id: str, reason: str) -> dict[str, An
 
 
 def _drain_in_background(runtime: Runtime, interval: float = 2.0) -> None:
-    """Drain the inbox on a timer, so a report lands while the round is still going.
+    """Drain the reports on a timer, so one lands while the round is still going.
 
     A round that never returns must still be able to have said something. This is
     the only part of the machine that runs without being asked.
@@ -896,11 +897,11 @@ def _drain_in_background(runtime: Runtime, interval: float = 2.0) -> None:
         while True:
             time.sleep(interval)
             try:
-                runtime.drain_inbox()
+                runtime.drain_reports()
             except Exception:  # noqa: BLE001 - a pump must not die on one bad file
                 pass
 
-    thread = threading.Thread(target=pump, name="inbox", daemon=True)
+    thread = threading.Thread(target=pump, name="report", daemon=True)
     thread.start()
 
 

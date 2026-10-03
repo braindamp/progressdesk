@@ -72,7 +72,7 @@ draft for the owner if accepted, kept for later if not.
 ## What the builder noticed
 
 **A builder may leave you an improvement to code it came across** — not its own.
-Through the same inbox as its other reports: `suggest_code_improvement`.
+Through the same report channel as its other reports: `suggest_code_improvement`.
 
 That is someone who had to read code closely in order to build on it, saying that
 code is worse than it needs to be. It traces to a real observation in the one

@@ -4,8 +4,8 @@ It is a floor sweep: it happens for every guest, and properly after the big
 ones. Two strengths, chosen by the role above it, never by this module.
 
     light   after every slice. Liveness, debris, escaped processes, torn tail.
-    strong  after every milestone. The light sweep, plus the environment reset:
-            pull the latest version and install it.
+    strong  after every milestone. The light sweep, plus a note of the
+            workspace's git state: what was uncommitted, and which HEAD.
 
 Two rules it obeys without exception.
 
@@ -272,47 +272,32 @@ class FloorSweep:
 
     # -- the strong pass --------------------------------------------------
     def _reset_environment(self, report: SweepReport) -> None:
-        """Refused on a dirty tree rather than discarding work.
+        """Note the git state of the workspace. It decides nothing.
 
-        Pulling is refused on a dirty tree rather than discarding whatever is
-        there. A reset that throws away work to look tidy is the opposite of one.
+        This used to pull the latest version and install it, and to refuse on a
+        dirty tree. There is no remote configured, so the pull had nothing to
+        fetch and blocked the sweep every milestone; and a dirty tree is not a
+        reason to stop — a run is a few rounds long and the next milestone wipes
+        over it. What is worth keeping is the fact: whether the builder started
+        on committed state, and what HEAD was, so a brief that moved underneath a
+        run is visible afterwards instead of invisible during it.
         """
         try:
             dirty = self._git(self.workspace, "status", "--porcelain").strip()
+            head = self._git(self.workspace, "rev-parse", "--short", "HEAD").strip()
         except Exception as exc:  # noqa: BLE001
+            # A workspace that is not a repo, or git that is not there, is a
+            # fact worth having and never a reason to fail a sweep.
             report.traces.append(f"git state unreadable: {exc}")
-            self._record(report, "reset", f"git unreadable: {exc}", blocked=True)
+            self._record(report, "reset", f"git unreadable: {exc}")
             return
 
         if dirty:
-            report.traces.append("working tree has uncommitted changes; reset refused")
-            self._record(report, "reset", "refused: tree is dirty", blocked=True)
-            return
-
-        head = self._git(self.workspace, "rev-parse", "--short", "HEAD").strip()
-        age_days = self._head_age_days(self.workspace)
-        if age_days is None:
-            report.traces.append("git history does not say when HEAD was committed")
-            self._record(report, "reset", f"head {head}: age unknown", blocked=True)
-            return
-
-        self._record(report, "reset", f"at {head}, {age_days} day(s) old")
-        if age_days < MINIMUM_HEAD_AGE_DAYS:
-            report.traces.append(
-                f"HEAD is only {age_days} day(s) old; not enough history behind it to restore to"
-            )
-            self._record(report, "reset", f"{age_days}d < {MINIMUM_HEAD_AGE_DAYS}d floor", blocked=True)
-            return
-
-        try:
-            before = self._git(self.workspace, "rev-parse", "--short", "HEAD").strip()
-            self._git(self.workspace, "pull", "--ff-only")
-            after = self._git(self.workspace, "rev-parse", "--short", "HEAD").strip()
-        except Exception as exc:  # noqa: BLE001
-            report.traces.append(f"reset failed: {exc}")
-            self._record(report, "reset", f"pull failed: {exc}", blocked=True)
-            return
-        self._record(report, "reset", f"{before} -> {after}")
+            names = ", ".join(line[3:] for line in dirty.splitlines()[:5])
+            report.traces.append(f"uncommitted at run start: {names}")
+            self._record(report, "reset", f"{head}: dirty: {names}")
+        else:
+            self._record(report, "reset", f"{head}: clean")
 
     def _head_age_days(self, repo: Path) -> int | None:
         try:

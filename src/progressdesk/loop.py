@@ -536,7 +536,7 @@ class RoundDispatcher:
         # along rather than deciding anything.
         noticed = [
             r["description"] for r in said_while_working
-            if r.get("kind") == "suggest_code_improvement"
+            if r.get("kind") == "improvement"
         ]
         if noticed and self._ask_role is not None:
             try:
@@ -710,7 +710,7 @@ class RoundDispatcher:
             outcome.detail = "\n\n".join(
                 [terminal["description"]] + [r["description"] for r in (earlier or [])]
             ).strip()
-            if terminal["kind"] == "report_success":
+            if terminal["kind"] == "success":
                 return outcome
             return _with(outcome, delivered=False, status="failed",
                          detail=f"builder reported failure: {outcome.detail}")

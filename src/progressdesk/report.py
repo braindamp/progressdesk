@@ -1,9 +1,9 @@
 """The channel a builder writes to. No listener, and no run id to remember.
 
-A worker cannot write the event file, so it writes a request into the inbox in
+A worker cannot write the event file, so it writes a request into a folder in
 its own round directory and the control host drains it into the log.
 
-The inbox sits at ``<round directory>/inbox`` and the round directory *is* the
+The folder sits at ``<round directory>/report`` and the round directory *is* the
 builder's working directory. So the run is implied by where the file is, never by
 what the file claims. A worker that lies about its identity is attributed to the
 directory it actually wrote in.
@@ -13,7 +13,7 @@ stamped from the dispatch record rather than believed from the worker's report.
 
 The builder has a shell, so this is also usable as a command:
 
-    python -m progressdesk.inbox report_failure "no write tool was granted"
+    python -m progressdesk.report aborted "no write tool was granted"
 
 Run it from your round directory; there is nothing else to pass.
 """
@@ -26,22 +26,22 @@ import uuid
 from pathlib import Path
 
 # Same rules as the log: a worker may not ask for an event type it does not own.
-KINDS = ("report_problem", "report_success", "report_failure", "suggest_code_improvement")
+KINDS = ("problem", "success", "aborted", "improvement")
 
-INBOX = "inbox"
+REPORT = "report"
 
 
-def round_inbox(round_dir: Path) -> Path:
-    return Path(round_dir) / INBOX
+def round_report_dir(round_dir: Path) -> Path:
+    return Path(round_dir) / REPORT
 
 
 def dump(round_dir: Path, kind: str, description: str = "", title: str = "") -> Path:
-    """Leave one request in the round's inbox. Refuses a malformed one rather than filing it."""
+    """Leave one request for the control host. Refuses a malformed one rather than filing it."""
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
-    inbox = round_inbox(round_dir)
-    inbox.mkdir(parents=True, exist_ok=True)
-    target = inbox / f"{kind}.{uuid.uuid4().hex[:6]}.json"
+    box = round_report_dir(round_dir)
+    box.mkdir(parents=True, exist_ok=True)
+    target = box / f"{kind}.{uuid.uuid4().hex[:6]}.json"
     target.write_text(json.dumps(
         {"kind": kind, "description": description, "title": title},
         sort_keys=True,
@@ -53,10 +53,10 @@ def pending(round_dirs: list[Path]) -> list[tuple[Path, Path]]:
     """Every request waiting, as (run directory, file). Sorted for determinism."""
     found: list[tuple[Path, Path]] = []
     for round_dir in sorted(round_dirs):
-        inbox = round_inbox(round_dir)
-        if not inbox.is_dir():
+        box = round_report_dir(round_dir)
+        if not box.is_dir():
             continue
-        for path in sorted(inbox.glob("*.json")):
+        for path in sorted(box.glob("*.json")):
             found.append((round_dir, path))
     return found
 

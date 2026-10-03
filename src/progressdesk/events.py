@@ -149,7 +149,7 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
     # derives from who holds the EventLog. It may be project-scoped in §6.2
     # rejections; the flag stays permissive for the pre-project planning path.
     "dispatch.rejected": {
-        "producers": frozenset({"kernel"}),
+        "producers": frozenset({"kernel", "manager"}),
         "payload_required": True,
         "project_scoped": False,
     },
