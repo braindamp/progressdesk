@@ -4,7 +4,7 @@
 
 **Purpose:** Combine both investigations and the owner's subsequent decisions into instructions for the implementing agent.
 
-**Status:** Approved composition, genuine LAYA recovery and deterministic acceptance work can start. The final audit identified two further role-policy decisions in section 2C; these have been put to the owner and are not silently delegated to the implementing agent. Qualitative QA and corrective-task planning must follow the recorded answers before those paths are enabled. This document is a bounded implementation handoff, not evidence of a fully settled or completed framework.
+**Status:** Approved for implementation within the recorded scope. The owner has resolved the final audit's qualitative-QA and corrective-planning decisions in section 2C. Proceed with the approved work while keeping the concrete unknowns in section 7 visible. This document is a bounded implementation handoff, not evidence of a fully commissioned or completed framework.
 
 Read with [the research handoff](RESEARCH_HANDOFF_DOGFOOD_RECOVERY_2026-10-20.md) and [your forensic reply](REPLY_RESEARCH_HANDOFF_DOGFOOD_RECOVERY_2026-10-20.md). This reply supersedes their conflicting recommendations. The older implementation plan is not ready to execute unchanged.
 
@@ -89,14 +89,41 @@ Use the one housekeeping/status path and the existing roles. This clarification 
 
 Carry these explicit owner amendments into workshop 6's operative contract. Preserve donor specifications as historical sources rather than silently treating contradictory older prose as current instructions.
 
-### C. Two policy decisions exposed by the final audit
+### C. Final audit decisions — approved QA and reasoning-led correction
 
-These are genuinely unresolved in the governing material, rather than routine code choices:
+#### DEE_DEE's bounded qualitative QA role is approved
 
-1. **Qualitative QA authority.** VISP section 9 explicitly leaves QA's allowed evidence, assertions, rejection grounds, independence and cost under-defined. The owner has been asked whether to approve a bounded DEE_DEE role: judge only qualitative criteria fixed in the approved contract; read only the frozen product, declared inputs and recorded evaluator evidence; use a separate session within a declared free-model budget; cite evidence; neither alter criteria nor repair the product. The alternative is deterministic acceptance first, with qualitative acceptance left pending. Do not interpret "model judgment where needed" elsewhere as permission to invent this mandate.
-2. **Correction ownership.** A failed acceptance event does not itself define an executable repair. The owner has been asked whether the host should dispatch DEXTER with structured findings and unchanged acceptance criteria as a bounded corrective assignment, with JACK handling non-delivery, or whether the existing planning responsibility should first turn findings into corrective features. The deterministic runner may schedule and apply results; it must not acquire investigative or planning judgment.
+The owner approved the following mandate, resolving the corresponding open thread in VISP section 9 for this implementation:
 
-The questions do not block approved composition, local-service recovery or commissioning deterministic acceptance. They do block silently choosing the corresponding role policy. Update this section with the owner's answers before implementing the affected behavior. Other genuine architecture/scope choices also come back to the owner when evidence exposes them; routine implementation, import repairs and equivalent source reconciliation remain the implementing agent's work.
+- Judge only qualitative criteria fixed in the approved milestone contract. Deterministic criteria continue to use actual evaluator execution.
+- Read the frozen deliverable, declared inputs and recorded evaluator evidence. Use a separate session from the builder, within the declared free-model budget, and cite concrete evidence for the verdict.
+- Return the criterion-level verdict and findings. Do not invent acceptance criteria, change the contract, repair the product, or direct the builder's active session.
+- An unavailable model or unusable response is an evaluator infrastructure outcome, not an invented product verdict.
+
+#### Failed acceptance invokes a bounded reasoning/planning step
+
+The owner did not select immediate repair of the last feature from a failure message. Since no intermediate quality tests ran, a milestone failure may originate in an earlier feature or in how several features compose. A reasoning model must consider the milestone plan and evidence before proposing the corrective work.
+
+The normal correction path is:
+
+```text
+failed milestone acceptance
+  -> reasoning model reviews the milestone plan and acceptance findings
+  -> proposes corrective features within the approved milestone scope
+  -> host records them in the ordinary feature plan
+  -> builders execute them through the usual build/status path
+  -> assemble the changed product and rerun the declared milestone gate
+```
+
+Implement this as a bounded planning responsibility, reusing the definition/planning path where suitable. Give it the milestone plan, original acceptance obligations, failed candidate/evaluator identities, recorded findings, and relevant delivery history or frozen source needed to diagnose the failure. It must be able to consider earlier features; do not assume the last builder caused the problem.
+
+Its normal output is executable corrective feature contracts: outcomes, scope, interfaces and relevant acceptance obligations, with the existing tool/authority metadata preserved. Host code applies the resulting plan changes. The planner cannot silently weaken the milestone, rewrite past acceptance evidence, grant itself capabilities, or repair the product outside the normal builder path. JACK continues to handle non-delivery of ordinary or corrective features.
+
+Expose the same reasoning/planning operation for direct owner invocation and steering. The owner must be able to demand reasoning-model involvement; it is not restricted to an automatic trigger. An explicit steering request does not introduce routine intermediate product testing. Use a model capable of the required reasoning within declared free capacity; never substitute LAYA's compact classification for this planning work or silently escalate to paid capacity.
+
+Within approved scope, corrective planning and dispatch proceed without asking the owner to approve every repair. A proposed change to the product contract, milestone acceptance obligations or architecture returns through the existing human decision boundary. DEE_DEE judges, the reasoning model proposes corrective features, builders implement them, and the deterministic host records and applies transitions.
+
+All currently identified owner policy questions are now answered. Further genuine architecture/scope choices come back to the owner when evidence exposes them; routine implementation, import repairs and equivalent source reconciliation remain the implementing agent's work.
 
 ## 3. Combined findings to carry into implementation
 
@@ -183,7 +210,7 @@ Freeze the relevant product manifest, approved contract revision, evaluator/inpu
 
 Run the candidate independently with a clean import environment. Establish that its imported package and entry point come from the candidate, not workshop 6's identically named package. Capture process result and relevant behavioral evidence in the host. Deterministic criteria use executable results; model judgment is reserved for criteria that require it.
 
-Enabling qualitative model judgment additionally requires the owner decision and mandate in section 2C. Keep its session separate from the builder's; a separate session/model role is not by itself proof of OS isolation. Check that the product and declared evaluator identities remain the ones actually evaluated, and bind acceptance/promotion to those exact bytes and contract evidence.
+Qualitative model judgment must follow the approved DEE_DEE mandate in section 2C. Keep its session separate from the builder's; a separate session/model role is not by itself proof of OS isolation. Check that the product and declared evaluator identities remain the ones actually evaluated, and bind acceptance/promotion to those exact bytes and contract evidence.
 
 Commission the instrument with a relevant positive case and a deliberately broken behavior that must fail for the expected reason. This establishes the acceptance capability; it is not a broad testing campaign or a gate between ordinary features. A source snapshot used to commission the instrument must carry its real provenance, without fabricated builder reports.
 
@@ -193,7 +220,7 @@ Use one existing milestone phase service with coherent orchestration around it. 
 
 Through the public CLI/API, declare the project, milestone, accepted contract and GO; prepare its editable feature list and seed. Obtain a real host-committed feature from 6's actual broker/OpenCode path, then proceed toward the milestone.
 
-After the milestone's required deliveries, run its declared acceptance against the frozen assembly. Product failure leads to executable corrective work using the owner-selected responsibility from section 2C, within the existing approved milestone scope, followed by a changed candidate and the same declared criteria/gate. Preserve the milestone's explicit correction budget and honest terminal non-success when exhausted. Do not silently introduce unlimited repair or arbitrary new limits on recursive JACK splitting. A proposal outside approved scope follows the existing human decision boundary.
+After the milestone's required deliveries, run its declared acceptance against the frozen assembly. Product failure invokes the reasoning-model planning step in section 2C. Apply its corrective features to the normal feature plan and dispatch them through the usual builders, with operational status checks between features and product acceptance at the milestone boundary. Assemble the changed candidate and rerun the same declared criteria/gate. Implement the owner's direct invocation of this planning operation through the public gateway too. Preserve the milestone's explicit correction budget and honest terminal non-success when exhausted. Do not silently introduce unlimited repair or arbitrary new limits on recursive JACK splitting. A proposal outside approved scope follows the existing human decision boundary.
 
 Missing tooling, a runner/setup crash or an unavailable evaluator is an infrastructure outcome, not a negative product verdict and not a consumed product correction. Conversely, a declared evaluator observing the candidate crash or violate a required behavior may legitimately report product failure. Do not classify every nonzero exit/exception as either product failure or infrastructure without this distinction. If the acceptance standard itself is wrong or insufficient, return the criterion/policy change to its external authority; never tailor it silently to obtain a pass or recycle old evidence after a material change.
 
@@ -222,7 +249,7 @@ The next report should identify the chosen composition and working location, the
 | Genuine LAYA installation | Client protocol and historical measurement claims exist; exact serving environment, model identity/weights, startup and supported context limits remain unestablished | Recover the actual tool; no arbitrary replacement or simulated service |
 | Coherent source composition | Donors are identified; their combined imports, event schemas, policies and role calls have not been demonstrated as workshop 6 | Resolve in code; preserve required responsibilities; report a real scope change |
 | Acceptance coverage | The old standard is demonstrably weak; a complete executable mapping of accepted ProgressDesk outcomes has not yet been approved/commissioned | Prepare the mapping from existing scope; expose unclear criteria instead of inventing a private definition of success |
-| Qualitative QA and corrective planning | Two explicit owner questions are in section 2C | No implicit role-authority decision by the implementer |
+| Qualitative QA and corrective planning | Mandates are approved in section 2C; their connected implementation and live evidence remain to be produced | Preserve the QA/planner/builder separation, unchanged acceptance obligations, and direct owner access to reasoning |
 | Runtime identity and capability | Requested account/model are known; no assumption about a new workshop's actual logon, free capacity or hard confinement is justified | Verify actual execution; no paid fallback or false isolation claim |
 | Live completion | Narrow target delivery evidence exists; a full 6-built, independently accepted and promoted product does not | Distinguish commissioning, acceptance and finalization; report unresolved evidence plainly |
 
