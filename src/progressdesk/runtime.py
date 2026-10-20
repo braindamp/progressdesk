@@ -482,7 +482,7 @@ class Runtime:
         taken = 0
         for round_dir, path in pending(self._round_dirs(), min_age_seconds=0 if force else 1.0):
             try:
-                request = json.loads(path.read_text(encoding="utf-8"))
+                request = json.loads(path.read_text(encoding="utf-8-sig"))
             except (OSError, ValueError, UnicodeDecodeError):
                 continue
             if not isinstance(request, dict):
@@ -514,7 +514,7 @@ class Runtime:
         done = 0
         for _, path in requests:
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload = json.loads(path.read_text(encoding="utf-8-sig"))
                 self.drain_sharpener_action(payload)
             except (OSError, ValueError, CommandError):
                 continue
