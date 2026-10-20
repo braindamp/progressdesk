@@ -47,6 +47,13 @@ _FAULT_WORDS = (
     "socket hang up",
     "empty response",
     "truncated",
+    # A provider that ends a generation with an error did not answer. The
+    # model did not fail and the work did not fail: the provider did. That is
+    # the case the nudge exists for, and it must not be read as a dead worker
+    # that consumed its attempt.
+    "finish_reason",
+    "provider error",
+    "upstream error",
 )
 # A status code is not a number followed by a unit or a noun. "read 500 lines"
 # and "compilation terminated with status 0" are ordinary output; matching them
