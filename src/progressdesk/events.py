@@ -133,6 +133,11 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    "project.planned": {
+        "producers": frozenset({"desk"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
     "project.start-requested": {
         "producers": frozenset({"desk"}),
         "payload_required": True,

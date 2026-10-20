@@ -748,6 +748,40 @@ def _project_create(rt: Runtime, cmd: Command) -> Any:
     ).to_manifest()
 
 
+def _artifact_import(rt: Runtime, cmd: Command) -> Any:
+    path = Path(str(cmd.require("path"))).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise CommandError("not_found", f"artifact import path is not a file: {path}")
+    data = path.read_bytes()
+    digest = rt.artifacts.put(data)
+    return {"path": str(path), "bytes": len(data), "ref": "sha256:" + digest}
+
+
+def _project_plan(rt: Runtime, cmd: Command) -> Any:
+    plan = cmd.require("plan")
+    if isinstance(plan, str):
+        try:
+            plan = json.loads(plan)
+        except ValueError as exc:
+            raise CommandError("bad_json_param", f"plan is not JSON: {exc}") from exc
+    return rt.operations.project_plan(
+        str(cmd.require("project_id")),
+        plan,
+        request_id=str(cmd.require("request_id")),
+    )
+
+
+def _project_start(rt: Runtime, cmd: Command) -> Any:
+    return rt.operations.project_start(
+        str(cmd.require("project_id")),
+        request_id=str(cmd.require("request_id")),
+    )
+
+
+def _project_status(rt: Runtime, cmd: Command) -> Any:
+    return rt.operations.project_status(str(cmd.require("project_id")))
+
+
 def _preflight(
     project_id: str, tools: tuple[str, ...], requires: tuple[str, ...]
 ) -> dict[str, Any] | None:
@@ -967,7 +1001,7 @@ def _milestone_signoff(rt: Runtime, cmd: Command) -> Any:
 def _project_events(rt: Runtime, cmd: Command) -> Any:
     events = rt.log.read_all()
     project_id = cmd.get("project_id")
-    return [e.to_dict() for e in events if project_id is None or e.project_id == project_id]
+    return [e.to_dict() for e in events if project_id is None or e.projectId == project_id]
 
 
 def _project_abort(rt: Runtime, cmd: Command) -> Any:
@@ -1183,7 +1217,11 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "definition.create": _definition_create,
     "definition.read": _definition_read,
     "definition.signoff": _definition_signoff,
+    "artifact.import": _artifact_import,
     "project.create": _project_create,
+    "project.plan": _project_plan,
+    "project.start": _project_start,
+    "project.status": _project_status,
     "round.dispatch": _round_dispatch,
     "project.features.init": _features_init,
     "project.features.show": _features_show,
@@ -1241,16 +1279,29 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(prog="progressdesk", description="progressDesk workshop")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="workshop root")
+    parser.add_argument("--params-file", type=Path, help="JSON object of operation parameters")
     parser.add_argument("verb", help="e.g. project.status")
-    parser.add_argument("params", nargs="*", help="key=value pairs")
+    parser.add_argument("params", nargs="*", help="key=value pairs (override the file)")
     args = parser.parse_args(argv)
 
     params: dict[str, Any] = {}
-    for item in args.params:
-        if "=" not in item:
-            raise CommandError("bad_param", f"expected key=value, got {item!r}")
-        key, value = item.split("=", 1)
-        params[key] = _coerce(value)
+    try:
+        if args.params_file is not None:
+            loaded = json.loads(args.params_file.read_text(encoding="utf-8-sig"))
+            if not isinstance(loaded, dict):
+                raise CommandError("bad_params_file", "params file must contain a JSON object")
+            params.update(loaded)
+        for item in args.params:
+            if "=" not in item:
+                raise CommandError("bad_param", f"expected key=value, got {item!r}")
+            key, value = item.split("=", 1)
+            params[key] = _coerce(value)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        print(json.dumps({"error": "bad_params_file", "message": str(exc)}))
+        return 2
+    except CommandError as exc:
+        print(json.dumps({"error": exc.code, "message": exc.message}))
+        return 2
 
     try:
         result = route(Runtime.create(args.root), args.verb, params)
@@ -1348,3 +1399,7 @@ def _coerce(value: str) -> Any:
         return float(value)
     except ValueError:
         return value
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
