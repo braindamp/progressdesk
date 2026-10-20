@@ -13,8 +13,8 @@ __pycache__/
 # dirty, and `git status --porcelain` counts untracked paths. Without these
 # lines the strong sweep could never succeed on a machine that has ever run a
 # round.
-artifacts/
-events/
-projects/
-store/
-scratch/
+/artifacts/
+/events/
+/projects/
+/store/
+/scratch/

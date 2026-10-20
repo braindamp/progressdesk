@@ -1,0 +1,1 @@
+{"blocked": false, "by": "CLEANING_LAYA", "detail": "pid 17480 is not open (err 87)", "operation": "reconcile_liveness", "projectId": "floor", "strength": "strong"}
