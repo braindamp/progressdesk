@@ -40,7 +40,7 @@ Your earlier recommendation to default to the LLM role and make SystemOne option
 ### C. Other settled direction
 
 - BUILD FOR SUCCESS. Complete useful code and the thin successful path. Handle observed failures without speculative architecture.
-- Product acceptance is at milestone boundaries. A builder delivery is captured by the host and does not establish product acceptance.
+- Product acceptance is at milestone boundaries. Operational status, room readiness and observed role-boundary compliance are checked at round boundaries. A builder delivery is captured by the host and does not establish product acceptance.
 - Feature order/descriptions live in one editable JSON file per milestone. The journal records execution and committed artifacts. JACK's two halves replace the failed feature atomically; no split ancestry or rollback graph.
 - Host code applies role effects. A readable answer, a `routed` status or an instruction in a brief is not an applied split, cleanup, lesson or stop.
 - One gateway, one durable event truth, one candidate assembly path and one milestone acceptance lifecycle. Preserve the distinction between orchestration and the underlying milestone phase service; do not create parallel phase machines.
@@ -64,13 +64,26 @@ Implement accordingly:
 - A proposal remains a proposal until human acceptance. No framework implementation is authorized by merely queuing it.
 - Useful lessons and instructions within the approved contract retain SHARPENER's direct host-applied path. They do not become a hidden route for changing the contract.
 
-### B. Milestone evaluation only
+### B. Product acceptance at milestones; operational status at round boundaries
 
-The owner explicitly selected **milestone evaluation only**. This resolves the conflict with VISP section 1B's routine advisory second-model review after each delivered feature.
+The owner selected **milestone evaluation only** for product quality, then clarified the distinction: BUILD FOR SUCCESS also applies to what the builders construct. We expect successful work, and acceptance is the phase where we establish whether the assembled product works as designed. Between features, we still need to know whether the room is clean, execution is accounted for and the builder stayed within its role.
 
-Commit the builder's delivery and move to the next feature. Do not add a routine advisory review, feature-quality gate or additional model inspection between ordinary features. Run independent product acceptance at the milestone boundary against the assembled product.
+Use these separate questions and authorities:
 
-This leaves report-driven SHARPENER learning, exception handling, role boundaries and mechanical delivery capture in place. Those operations do not become feature-quality evaluation.
+| Question | Evidence and responsibility | When |
+|---|---|---|
+| Did the run end, and was its delivery actually captured? | Broker process facts, gateway-bound reports and host-captured artifacts; distinguish completion, non-delivery and infrastructure fault | Each round boundary |
+| Is the room ready for the next builder? | Mechanical housekeeping observations and genuine local LAYA assessment; SCHOTTY handles unresolved cleanup | Each round boundary before continuing |
+| Is there evidence that an agent crossed its role or declared boundary? | Recorded actions, scoped changes and governance facts; use the existing observation/escalation path, with POLICE deciding a concrete violation | Round-boundary status handling and when evidence arises |
+| Does the assembled product work as designed? | Independent execution of the declared acceptance contract, with DEE_DEE/model judgment where the contract genuinely needs it | Milestone acceptance |
+
+Capture committed output and apply the existing operational status path before continuing. A room or boundary problem can stop continuation without turning that stop into a verdict on feature quality. Preserve captured delivery and evidence while handling the room.
+
+Do not add a routine product review, feature-quality gate, functionality check or second-model assessment of the builder's result between ordinary features. Model-assisted assessment of concise operational or role-boundary evidence remains permitted where appropriate to the role and the model's limits. LAYA's compact categorization must not grow into reading and grading the feature implementation.
+
+Keep product delivery, room readiness and boundary findings separate in meaning. A clean room does not establish correct product behavior; an incorrect product at acceptance does not by itself establish a dirty room or a governance violation. An unsupported claim is not a verified status fact.
+
+Use the one housekeeping/status path and the existing roles. This clarification does not create a continuous supervisor, a duplicate status pass or a new approval ceremony. It preserves report-driven SHARPENER learning, observation before cleanup, connected exception handling and mechanical delivery capture.
 
 Carry these explicit owner amendments into workshop 6's operative contract. Preserve donor specifications as historical sources rather than silently treating contradictory older prose as current instructions.
 
@@ -140,6 +153,8 @@ Verify specialist transitions through their concrete operations:
 - SHARPENER observes before cleanup and can teach or propose through host operations. It does not build product features or authorize framework implementation.
 - SCHOTTY cleans and preserves committed output. POLICE decides serious boundary violations and invokes the connected stop mechanism. SHARPENER is spared as required by the owner.
 - DEE_DEE receives the frozen deliverable and declared contract, with actual evaluator capabilities. Remove references to deleted capabilities when replacing them with a working equivalent.
+
+Connect round completion to the operational status handling in section 2B. Establish readiness and handle observed role-boundary findings before dispatching the next feature. This checks the production environment and the agent's mandate; product-result evaluation remains at the milestone.
 
 Keep exceptions terminal when they cannot proceed. Do not invent a post-POLICE automatic restart protocol.
 
