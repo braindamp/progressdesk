@@ -174,6 +174,7 @@ class CommandTransport:
         answers_in: str = "prose",
         termination_grace_ms: int = 5000,
         runtime_family: str = "unknown",
+        prepare: Callable[[SpawnRequest], Path] | None = None,
     ) -> None:
         if answers_in not in ANSWERS:
             raise SpawnError(
@@ -189,6 +190,7 @@ class CommandTransport:
         self._terminator = terminator
         self._build_argv = build_argv
         self._parse = parse
+        self._prepare = prepare
         self._project_id = project_id
         self._grace = termination_grace_ms
         # What this adapter actually launches. The seam pins that family's
@@ -212,9 +214,15 @@ class CommandTransport:
 
     def spawn(self, req: SpawnRequest) -> ResultEnvelope:
         started = time.monotonic()
-        directory = (
-            paths.projects(self._broker.workspace_root) / self._project_id / "rounds" / req.run_id
-        )
+        if self._prepare is not None:
+            # The preparation callback receives the whole request so it can
+            # distinguish builder work from a role consultation. It prepares
+            # the snapshot before any transport metadata is created.
+            directory = Path(self._prepare(req))
+        else:
+            directory = (
+                paths.projects(self._broker.workspace_root) / self._project_id / "rounds" / req.run_id
+            )
         directory.mkdir(parents=True, exist_ok=True)
         pack = directory / "context-pack.md"
         pack.write_text(req.context_pack.render(), encoding="utf-8")
@@ -372,6 +380,7 @@ def pi_transport(
     project_id: str,
     executable: str | tuple[str, ...] | None = None,
     sandbox: str = "none",
+    prepare: Callable[[SpawnRequest], Path] | None = None,
 ) -> CommandTransport:
     """One instance; nothing above this line knows the vendor.
 
@@ -405,5 +414,6 @@ def pi_transport(
         project_id=project_id,
         sandbox=sandbox,
         runtime_family="node",
+        prepare=prepare,
     )
 

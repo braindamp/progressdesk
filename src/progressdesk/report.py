@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -49,14 +50,27 @@ def dump(round_dir: Path, kind: str, description: str = "", title: str = "") -> 
     return target
 
 
-def pending(round_dirs: list[Path]) -> list[tuple[Path, Path]]:
-    """Every request waiting, as (run directory, file). Sorted for determinism."""
+def pending(round_dirs: list[Path], *, min_age_seconds: float = 0.0) -> list[tuple[Path, Path]]:
+    """Every request waiting, as (run directory, file). Sorted for determinism.
+
+    A file younger than ``min_age_seconds`` is still being written by a live
+    role and is left for the next drain. At a confirmed child exit the caller
+    passes zero: the process can no longer be halfway through the write.
+    Read/parse errors are not hidden here; the file stays queued.
+    """
+    now = time.time()
     found: list[tuple[Path, Path]] = []
     for round_dir in sorted(round_dirs):
         box = round_report_dir(round_dir)
         if not box.is_dir():
             continue
         for path in sorted(box.glob("*.json")):
+            try:
+                age = now - path.stat().st_mtime
+            except OSError:
+                continue
+            if age < min_age_seconds:
+                continue
             found.append((round_dir, path))
     return found
 

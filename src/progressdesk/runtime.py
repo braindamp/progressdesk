@@ -219,9 +219,9 @@ class Runtime:
                             broker=self.broker,
                             terminator=PoliceTerminationAuthority().terminate,
                             project_id=project_id,
-                            prepare_workspace=lambda run: __import__(
+                            prepare=lambda req: __import__(
                                 "progressdesk.workspace", fromlist=["ProjectWorkspace"]
-                            ).ProjectWorkspace(self).prepare_round(project_id, run),
+                            ).ProjectWorkspace(self).prepare_round(project_id, req.run_id),
                         )
                     )
                 except SpawnError:

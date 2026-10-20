@@ -15,6 +15,15 @@ class MilestoneError(ValueError):
     """Invalid milestone gate transition or evaluator result."""
 
 
+class EvaluatorInfrastructureError(MilestoneError):
+    """The gate could not obtain a verdict: the evaluator or its service is blocked.
+
+    This is not a negative product verdict. It never requests corrective work and
+    never consumes a correction cycle; it records that the acceptance service
+    itself was unavailable.
+    """
+
+
 def _text(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip() or "\x00" in value:
         raise MilestoneError(f"{field} must be a non-empty string")
@@ -209,6 +218,14 @@ class MilestoneService:
             return MilestoneResult(spec.milestone_id, "failed", (), started, reason)
         try:
             result = self.evaluator(spec, integration_inputs or {}).validate()
+        except EvaluatorInfrastructureError as exc:
+            self._record(
+                "milestone.integration-completed",
+                project_id,
+                spec,
+                {"status": "unavailable", "reason": str(exc), "evidenceRefs": []},
+            )
+            return MilestoneResult(spec.milestone_id, "unavailable", (), started, str(exc))
         except Exception as exc:
             result = IntegrationResult(False, (), (str(exc),))
         evidence = result.evidence_refs
