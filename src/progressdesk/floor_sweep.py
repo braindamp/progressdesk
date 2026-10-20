@@ -223,6 +223,10 @@ class FloorSweep:
             e.runId for e in events
             if e.projectId == report.project_id and e.type == "candidate.submitted"
         }
+        closed = {
+            e.runId for e in events
+            if e.projectId == report.project_id and e.type == "round.closed"
+        }
         unticked = [
             e for e in events
             if e.projectId == report.project_id
@@ -231,7 +235,61 @@ class FloorSweep:
             and e.runId not in delivered
         ]
         for event in unticked:
-            self._record(report, "sweep_debris", self._sweep_round(report.project_id, event.runId))
+            detail = self._sweep_round(report.project_id, event.runId)
+            self._record(report, "sweep_debris", detail)
+            # A swept round is finished. Leaving it open blocks every later
+            # round of the project: the scheduler refuses to dispatch while a
+            # round is neither closed nor reconciled, so a round that never
+            # delivered would hold the project forever. The work is preserved
+            # as evidence; the round is accounted for.
+            if event.runId not in closed and not self._round_is_live(report.project_id, event.runId):
+                self._close_swept_round(report, event, detail)
+
+    def _round_is_live(self, project_id: str, run_id: str) -> bool:
+        """True when a registered process of that round is still alive."""
+        for event in self.log.read_all():
+            if event.projectId != project_id or event.runId != run_id:
+                continue
+            if event.type != "process.registered":
+                continue
+            identity = self._payload(event)
+            pid = identity.get("processId")
+            created = identity.get("processCreationTime")
+            if isinstance(pid, int) and isinstance(created, int):
+                alive, _why = self._is_alive(pid, created)
+                if alive:
+                    return True
+        return False
+
+    def _close_swept_round(self, report: SweepReport, event: Any, detail: str) -> None:
+        """Close a round that housekeeping retired before it delivered."""
+        task_id = ""
+        milestone_id = ""
+        for other in self.log.read_all():
+            if other.projectId != report.project_id or other.runId != event.runId:
+                continue
+            if other.type != "round.dispatched":
+                continue
+            payload = self._payload(other)
+            task_id = str(payload.get("taskId", "") or "")
+            milestone_id = str(payload.get("milestoneId", "") or "")
+        self.log.record(
+            "round.closed",
+            producer="manager",
+            payload=json.dumps({
+                "taskId": task_id,
+                "milestoneId": milestone_id,
+                "outcome": "killed",
+                "candidateHash": None,
+                "files": {},
+                "reason": "round swept by housekeeping before it delivered",
+                "detail": detail,
+            }, sort_keys=True).encode("utf-8"),
+            project_id=report.project_id,
+            run_id=event.runId,
+            cause_id=event.id,
+        )
+        self._record(report, "round_accounted", f"run {event.runId}: closed as killed after sweep")
 
     def _sweep_round(self, project_id: str, run_id: str) -> str:
         """Unaccepted work is never silently promoted; it is preserved."""
