@@ -803,16 +803,22 @@ class RoundDispatcher:
             return outcome
         if role != "DEXTER":
             return outcome  # reviewers' prose is never a product candidate
-        if terminal is not None:
-            outcome.detail = "\n\n".join(
-                [terminal.get("description", "")]
-                + [r.get("description", "") for r in (earlier or [])]
-            ).strip()
-            if terminal.get("kind") != "success":
-                return _with(outcome, delivered=False, status="failed",
-                             detail=f"builder reported {terminal.get('kind')}: {outcome.detail}")
-            # The old implementation returned here, before submitting any candidate.
-            # Success can still be recorded only when the host has frozen real bytes.
+        if terminal is None:
+            # A completed process without a terminal report is not a delivery,
+            # even when it left bytes behind. The host needs the builder's own
+            # success/failure statement to close the round honestly.
+            outcome.detail = (
+                outcome.detail or (envelope.output.strip() or envelope.detail)[:1_000]
+            )
+            return _with(outcome, delivered=False, status="not-delivered",
+                         detail=outcome.detail + "\n\nno terminal report was filed")
+        outcome.detail = "\n\n".join(
+            [terminal.get("description", "")]
+            + [r.get("description", "") for r in (earlier or [])]
+        ).strip()
+        if terminal.get("kind") != "success":
+            return _with(outcome, delivered=False, status="failed",
+                         detail=f"builder reported {terminal.get('kind')}: {outcome.detail}")
         if not produced:
             outcome.detail = outcome.detail or (envelope.output.strip() or envelope.detail)[:1_000]
             return outcome
@@ -893,7 +899,7 @@ class RoundDispatcher:
             run_id=run,
             task_ref=f"{project_id}:{task_ref}",
             role=role,
-            context_pack=self._pack(packet, run),
+            context_pack=self._pack(packet, run, project_id),
             tool_allowlist=tools,
             budget=budget or Budget(),
             model_spec=ModelSpec(provider=provider, model=model),
@@ -930,7 +936,7 @@ class RoundDispatcher:
         except Exception as exc:  # noqa: BLE001 - a bad table is a refusal, not a crash
             raise SpawnError("no_assignment", f"role {role!r} is not configured: {exc}") from exc
 
-    def _pack(self, packet: Any, run: str = "") -> ContextPack:
+    def _pack(self, packet: Any, run: str = "", project_id: str = "") -> ContextPack:
         """Deliver the self-contained task contract, not only its outcome.
 
         This is the actual design-time task data. No checklist/state-machine view,
@@ -961,7 +967,30 @@ class RoundDispatcher:
         inputs = _text(getattr(packet, "input_artifact_refs", ()))
         if inputs:
             sections.append(ContextSection("input artifact references", inputs, 4_096))
+        if project_id and run:
+            inbox = (paths.projects(self.broker.workspace_root) / project_id
+                     / "rounds" / run / "report")
+            sections.append(ContextSection(
+                "your report inbox (absolute path)",
+                _report_instructions(inbox), 2_048,
+            ))
         return ContextPack(tuple(sections))
+
+def _report_instructions(inbox: Path) -> str:
+    """A request is a JSON file. Writing it is the report; no shell is required."""
+    return "\n".join([
+        f"Write one JSON file in: {inbox}",
+        "The filename is yours. Write it as the last thing you do:",
+        '  {"kind": "success", "description": "what you delivered"}',
+        '  {"kind": "aborted", "description": "what blocked delivery"}',
+        "During the work you may also write:",
+        '  {"kind": "issue", "description": "..."}',
+        '  {"kind": "suggestion", "description": "..."}',
+        '  {"kind": "lesson", "description": "..."}',
+        "Writing the file is the report. Never place reports in product source.",
+        "A run that leaves changes but no success request is not a delivery.",
+    ])
+
 
 def _text(value: Any) -> str:
     if isinstance(value, str):

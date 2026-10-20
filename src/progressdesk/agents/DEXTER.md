@@ -74,16 +74,19 @@ TO FINISH YOUR WORK:
 | `aborted` | something blocks deliverable completion. Required Detail. | recorded, session closes, text required |
 
 
-Examples:
- ```
+Reporting is a file you write, not a shell command. Your task context names
+the absolute **report inbox** directory. Write one JSON file there:
 
- python -m progressdesk.report suggestion "useless churn;test xyz is for issues that were fixed"
- python -m progressdesk.report issue "the slice gave no acceptance"
- python -m progressdesk.report lesson "shells mangle UTF-8; set the code page first"
- python -m progressdesk.report success
- python -m progressdesk.report aborted "no write tool was granted"
+```json
+{"kind": "suggestion", "description": "useless churn; test xyz covers a fixed issue"}
+{"kind": "issue", "description": "the slice gave no acceptance"}
+{"kind": "lesson", "description": "shells mangle UTF-8; set the code page first"}
+{"kind": "success", "description": "what I delivered"}
+{"kind": "aborted", "description": "no write tool was granted"}
+```
 
- ```
+The filename is yours. Writing the file is the report. Do not write reports
+into product source; the inbox is outside the product tree.
 
 **A `lesson` is not a request - it is kept, if it makes sense, for the round after
 this one.**Report the fix you already have; do not wait to be allowed to keep it.
