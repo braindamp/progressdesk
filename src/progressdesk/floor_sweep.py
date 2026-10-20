@@ -381,9 +381,38 @@ class FloorSweep:
             return None
 
     # -- journal ----------------------------------------------------------
+    def _seen_fact(self, project_id: str, operation: str, detail: str) -> bool:
+        """Has this exact fact already been recorded for this project?"""
+        key = (project_id, operation, detail)
+        cache = getattr(self, "_fact_cache", None)
+        if cache is None:
+            cache = set()
+            for event in self.log.read_all():
+                if event.type != "floor_sweep.action" or not event.payloadRef:
+                    continue
+                try:
+                    payload = json.loads(
+                        self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1])
+                    )
+                except (OSError, ValueError, IndexError, UnicodeDecodeError):
+                    continue
+                cache.add((str(payload.get("projectId", "")), str(payload.get("operation", "")),
+                           str(payload.get("detail", ""))))
+            self._fact_cache = cache
+        if key in cache:
+            return True
+        cache.add(key)
+        return False
+
     def _record(self, report: SweepReport, operation: str, detail: str, *, blocked: bool = False) -> None:
         action = SweepAction(operation=operation, detail=detail, blocked=blocked)
         report.actions.append(action)
+        # A fact is recorded when it changes, not when it repeats. The same
+        # sweep finding written once per boundary turns the journal into noise:
+        # 258 sweep events for 45 distinct facts, each one an artifact write and
+        # an fsync, in a log that exists to be read when something went wrong.
+        if self._seen_fact(report.project_id, operation, detail):
+            return
         self.log.record(
             "floor_sweep.action",
             producer="manager",
@@ -412,8 +441,8 @@ class FloorSweep:
                     f"replace with a hyphen and have a human sign it off",
                     blocked=True,
                 )
-            else:
-                self._record(report, "check_briefs", f"{path.name}: clean")
+            # A brief that is clean is not a fact worth an event. The sweep
+            # reports what it found; "nothing here" is not a finding.
 
     def record(self, report: SweepReport, operation: str, detail: str, *, blocked: bool = False) -> None:
         """Journal one step. Same writer, same vocabulary, no second record."""
