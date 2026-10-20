@@ -587,11 +587,26 @@ class RoundDispatcher:
         findings = [r for r in said_while_working
                     if r.get("kind") in {"issue", "suggestion", "lesson"}]
         if findings and self._ask_role is not None:
-            context = "Builder observations (judge lessons or propose a VISP):\n" + json.dumps(
-                findings, ensure_ascii=False)
+            # The observer judges the finding, not the workshop. It gets the
+            # finding and the brief of the role that reported it. The full cast
+            # of briefs is what a boundary observation needs, and paying for it
+            # on every round made the learning loop the most expensive thing in
+            # the build: 60-120k input tokens per judgement, on every round.
+            involved = ""
+            if self._read_brief is not None:
+                try:
+                    involved = self._read_brief(actual_role)
+                except Exception:
+                    involved = ""
+            context = "\n".join([
+                "Builder observations (judge lessons or propose a VISP):",
+                json.dumps(findings, ensure_ascii=False),
+                "INSTRUCTION TO REVIEW:",
+                involved,
+            ])
             try:
                 self._ask_role(project_id, "SHARPENER", context,
-                               cast=True, tools=("read", "write", "glob", "grep"))
+                               cast=False, tools=("read", "write", "glob", "grep"))
             except Exception:
                 pass
         if any(e.type == "abort.issued" and e.projectId == "workshop"

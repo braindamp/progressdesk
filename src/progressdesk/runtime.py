@@ -484,7 +484,9 @@ class Runtime:
         a fresh session.
         """
         if role == "SHARPENER":
-            cast = True
+            # The cast of briefs is what a boundary observation needs; a
+            # narrower judgement does not pay for the whole workshop. The
+            # caller decides, and the default is the narrow one.
             tools = tools or ("read", "write", "glob", "grep")
         return self._dispatch(
             project_id, role, state=context, expecting="prose", cast=cast, tools=tools,
