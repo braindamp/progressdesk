@@ -1,0 +1,174 @@
+"""ports.py - progressdesk2-native owner ports store (readers + writers).
+
+Format contract (pinned in M3b): ``state/ports.json`` under the project
+root is a JSON object ``{"ports": [port, ...]}`` where a port is a
+camelCase object
+
+    {"id", "kind", "question", "options", "recommendation",
+     "sliceId" (optional), "openedTs",
+     "answeredTs": null | str, "answer": null | str}
+
+A port is OPEN iff ``answeredTs`` is null.  This is progressdesk2's own
+store - NOT the vendored ralph2 PortBook (that reads a ralph2 repo's
+.ralph2/state); M5d/M6c ports reuse this module.
+
+Reader-tolerant / writer-strict (M2b philosophy): the status surface
+renders what it can read (load_ports/open_ports degrade ANY read problem
+to []), but the writers never write over a store they could not read -
+that would destroy answered history. Typed writer failures:
+PortNotFound, PortAlreadyAnswered.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from pathlib import Path
+from typing import Any
+
+from .state import utc_now
+
+PORTS_PATH = Path("state/ports.json")
+
+
+def load_ports(root: Path) -> list[dict[str, Any]]:
+    """All port dicts from state/ports.json; [] on any read problem.
+
+    UnicodeDecodeError and json.JSONDecodeError are both ValueError
+    subclasses, so (OSError, ValueError) covers every failure mode of
+    reading and parsing the store.
+    """
+    try:
+        raw = json.loads((Path(root) / PORTS_PATH).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw, dict) or not isinstance(raw.get("ports"), list):
+        return []
+    return [entry for entry in raw["ports"] if isinstance(entry, dict)]
+
+
+def open_ports(root: Path) -> list[dict[str, Any]]:
+    """Ports still awaiting an owner answer (answeredTs is None/absent)."""
+    return [entry for entry in load_ports(root) if entry.get("answeredTs") is None]
+
+
+class PortNotFound(Exception):
+    """Typed: no port with this id exists in the store."""
+
+    def __init__(self, port_id: str) -> None:
+        super().__init__(f"port {port_id!r} not found")
+        self.port_id = port_id
+
+
+class PortAlreadyAnswered(Exception):
+    """Typed: the port already carries a recorded owner answer.
+
+    Deliberate divergence from the vendored ralph2 CLI (PortBook.answer
+    prints a stderr warning and no-ops): over the programmatic API a
+    recorded decision is never silently re-answered - the caller gets a
+    typed conflict and the recorded answer stays unchanged on disk.
+    """
+
+    def __init__(self, port: dict[str, Any]) -> None:
+        super().__init__(f"port {port.get('id')!r} already answered ({port.get('answer')!r})")
+        self.port = port
+
+
+def _read_strict(root: Path) -> list[dict[str, Any]]:
+    """Writer read: a MISSING file -> [] (a NEW store is legal).
+
+    Anything else unreadable (torn bytes, a non-object root, a non-list
+    ``ports`` field, non-dict entries) raises ValueError - a writer must
+    never write over a store it could not read; that would destroy
+    answered history. UnicodeDecodeError and json.JSONDecodeError are
+    ValueError subclasses, so (OSError, ValueError) at the call site
+    covers every read failure.
+    """
+    path = Path(root) / PORTS_PATH
+    if not path.exists():
+        return []
+    raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(raw, dict) or not isinstance(raw.get("ports"), list):
+        raise ValueError(f"{PORTS_PATH} is not a {{ports: [...]}} object")
+    for entry in raw["ports"]:
+        if not isinstance(entry, dict):
+            raise ValueError("port entries must be JSON objects")
+    return list(raw["ports"])
+
+
+def _write_store(root: Path, ports: list[dict[str, Any]]) -> None:
+    """Atomic store write: temp+replace, utf-8-sig (write_state pattern)."""
+    path = Path(root) / PORTS_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps({"ports": ports}, indent=2) + "\n", encoding="utf-8-sig")
+    temporary.replace(path)
+
+
+def open_port(
+    root: Path,
+    kind: str,
+    question: str,
+    options: list[str],
+    recommendation: str,
+    slice_id: str | None = None,
+) -> dict[str, Any]:
+    """Open a port for the owner, or return the existing OPEN one.
+
+    Idempotent among OPEN ports (vendor PortBook.open semantics): the
+    same (sliceId, kind, question) still awaiting an answer returns the
+    EXISTING port, so engine retries never duplicate the inbox. ids are
+    "port-" + uuid4().hex[:10] (vendor shape). Ports are OPENED by
+    engine code (M4c suggest-lab, M5d, M6c) - there is deliberately no
+    open-a-port HTTP endpoint in M3e.
+    """
+    ports = _read_strict(root)
+    for entry in ports:
+        if (
+            entry.get("answeredTs") is None
+            and entry.get("sliceId") == slice_id
+            and entry.get("kind") == kind
+            and entry.get("question") == question
+        ):
+            return entry
+    port: dict[str, Any] = {
+        "id": f"port-{uuid.uuid4().hex[:10]}",
+        "kind": kind,
+        "question": question,
+        "options": list(options),
+        "recommendation": recommendation,
+    }
+    if slice_id is not None:
+        port["sliceId"] = slice_id
+    port["openedTs"] = utc_now()
+    port["answeredTs"] = None
+    port["answer"] = None
+    ports.append(port)
+    _write_store(root, ports)
+    return port
+
+
+def answer_port(root: Path, port_id: str, answer: str) -> dict[str, Any]:
+    """Record the owner's answer on an OPEN port; returns the updated port.
+
+    Vendor ergonomics kept: a pure-digit answer within the options range
+    resolves to that option's text (1-based - "2" -> options[1]); free
+    text passes through verbatim (stripped). An unknown id raises
+    PortNotFound; an already-answered port raises PortAlreadyAnswered
+    with the store left exactly as it was.
+    """
+    ports = _read_strict(root)
+    for entry in ports:
+        if entry.get("id") != port_id:
+            continue
+        if entry.get("answeredTs") is not None:
+            raise PortAlreadyAnswered(entry)
+        text = answer.strip()
+        options = entry.get("options") or []
+        if text.isdigit() and 1 <= int(text) <= len(options):
+            text = options[int(text) - 1]
+        entry["answeredTs"] = utc_now()
+        entry["answer"] = text
+        _write_store(root, ports)
+        return entry
+    raise PortNotFound(port_id)

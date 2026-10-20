@@ -1,0 +1,712 @@
+# FUSP — Acceptance Module
+
+A behavioural specification: what the module observes, decides, and records. It does not name
+classes and it is not an implementation plan.
+
+**How to review this.** Version 3.2. Sections 1–20 are settled decisions. §21 states what this design cannot
+do. For each open question: a position, the strongest argument against it, and whether the
+question is correctly posed. If you believe something in
+1–20 is wrong, say so and say what you would replace it with.
+
+**One request, because it is how this document has been most useful.** For each section, trace at
+least one failure path end to end and report what the system actually does. Mark every finding as
+**bug**, **underspecified**, or **preference** — a preference costs nothing to state, so only bugs
+and gaps should earn your answer's length. Every real defect found so far came from tracing a
+path, not from reading carefully.
+
+Finally: **which single requirement, if removed, would make this stop being a gate?**
+
+---
+
+## v3.2 scope note
+
+Three sections were removed. The numbering gaps are intentional.
+
+- **Log integrity and recovery (was §5).** Log durability is the base's job, not the acceptance
+  module's. This module only reads the log and inherits whatever the base guarantees.
+- **Amendments and new milestones (was §18).** Governance for "the standard changed after a
+  failure" — a case the base never emits. Specifying it here would be designing for an event we do
+  not produce.
+- **Scale and the one open question (was §23).** Performance tuning for an unmeasured problem. The
+  fold work it described was held pending measurement anyway, so it was spec surface with no
+  behaviour behind it.
+
+**§12 Isolation stayed.** It was initially flagged as bloat in the same pass and that was wrong:
+it is the rule that keeps builder-authored prose off the acceptance path. It is load-bearing, not
+optional.
+
+**v3.2 adds, in the same vein — decisions taken after the review rounds:**
+
+- **§15 — the standard's tests are black-box.** A milestone test drives the candidate as a
+  subprocess. Declared in the standard, so a builder knows while writing the slice.
+- **§15 — tamper-resistance is structural, never a model's opinion.** No decision model is
+  involved in the evaluation path. Tampering has already happened by the time anyone reads the
+  result.
+- **§7 — a builder's room of freedom is not declared here.** It lives in the role brief, which
+  every round loads and no slice can omit. A declaration may narrow it, never widen it, never be
+  its only source.
+- **§11 — where the definition path lives.** The existing `definitions.py` and `planning.py`, not a
+  second way in.
+
+---
+
+## 0. The principle this document is built on
+
+**Invisibility is the discriminator.**
+
+A gate with a *loud* bypass is still a gate: the bypass is an event, it is countable, and a reader
+can see when the gate has become decorative. A gate whose standard can be *retrofitted silently*
+was never a gate, because nothing in the record distinguishes a standard written in ignorance of
+the work from one written to fit it.
+
+Both failure modes matter, but only one of them is recoverable by inspection. Every rule below is
+weighted by that asymmetry: where a mechanism can be made loud cheaply, it is mandatory; where it
+can only be made quiet, it is refused.
+
+## 0a. What already exists — do not rebuild this
+
+The base workshop already provides the gate. **The acceptance module supplies the evaluator and
+the bindings; it does not re-implement the phase machine.**
+
+- **`MilestoneService.run()`** (`milestones.py`) **is the six-step gate.** It validates the spec,
+  confirms delivery, calls an injected `evaluator(spec, inputs)`, records `integration-started` and
+  `integration-completed`, then branches to `correction-requested`, `signoff-pending`, or `accepted`.
+  It owns **all** milestone event emission. The evaluator returns an `IntegrationResult` and
+  appends nothing. Re-implementing the gate beside it is the single largest drift risk here.
+- **`complete_signoff()`** exists for the human-signoff path — extend it, do not rebuild it.
+- **`report.py`** already lets a builder file `success` / `aborted` /
+  `improvement` into the log; the builder's claim channel works. Do not rebuild it.
+- **`definitions.py`** (`definition.create / revise / signoff`) is the upstream definition and
+  sign-off path a contract binds to. Do not rebuild it.
+
+## 1. Purpose and scope
+
+A milestone is accepted exactly once, by a gate, on evidence, and only when a standard declared
+before any build round began passes against a deliverable the control host froze before evaluation.
+
+**In scope:** the gate — when it runs, what it checks, what it records, how it refuses, how it
+stops.
+
+**Out of scope, deliberately:** any judgement of a slice, a round, a worker, or a planner. No
+per-slice reviewer, no score, no ranking, no pass-rate aggregate, no per-worker metric. A run id
+may appear in a provenance manifest; nothing derived from it evaluates a person.
+
+**Not in scope:** authoring the standard. The acceptance body owns it.
+
+**One gate per milestone.** No per-task or per-slice gate, and no notion of partial milestone
+acceptance.
+
+## 2. Context
+
+A single workshop root. **The append-only JSONL event log is the only durable *authoritative*
+state.** Artifacts on disk are durable bytes, but they carry no authority — see §6.
+
+There is no status file, no checkpoint store, no view cache, no lock database. This module adds
+none.
+
+Workers are LLM agents: a single-use token, a tools allowlist, a hard timeout, no network, no
+memory between iterations beyond their own workspace. They are killed without warning. **A worker
+cannot write the event log**; it leaves a request in a report folder that the control host drains,
+validating and appending. **One trusted writer.**
+
+**The report folder is a write buffer, not a store.** It holds requests that have not yet become events.
+It is exempt from the no-second-store rule precisely because it is the mechanism by which
+untrusted writers reach the single authoritative one. Its contents are authoritative only after
+they are drained into the log. **It lives inside the round directory, so the run is implied by
+where a request was written and never asserted by what it says** — the same discipline the task id
+follows (§3).
+
+A broker mediates every action a worker takes and produces evidence per action.
+
+A local decision model ("Laya") serves binary prose judgements elsewhere in the system.
+
+## 3. Prerequisites
+
+The gate cannot be built honestly until these exist. **None of them exist in the base today.** Build
+them first, before any gate code, because the gate reads all four. (An earlier draft called them
+"not module work"; that was wrong — they are this module's first prerequisite, and skipping them
+means the gate has nothing to read.)
+
+- **`task.declared`** must exist and carry `task_id`, `milestone_id`, and the task's spec. This is
+  the event that populates a milestone's `required_task_ids`; nothing else supplies that binding.
+
+- **`round.dispatched` must carry `task_id`** and **`milestone_id`.** Without them there is no
+  run-to-task binding and delivery cannot be read. A dispatch whose `task_id` is not in the
+  milestone's `required_task_ids` is recorded as an anomaly.
+- **`builder.reported` must carry `task_id`,** validated against the dispatch record at drain. A
+  report whose task contradicts its dispatch is an anomaly and counts as nothing. **Free text is
+  not an authority for task identity.**
+- **Neither `run_id` nor `task_id` may be asserted by the worker.** Both are stamped by the host —
+  the run from the round directory the request was drained from, the task from the dispatch record
+  (§2). A builder that is asked to supply either will eventually get it wrong, and an unattributable
+  report is a report nobody can act on.
+- **`round.closed` must carry `candidate_hash`,** computed **by the control host** from broker
+  evidence for the candidate artifacts at close time — never reported by the builder. This is the
+  frozen build. **A `round.closed` outcome of `killed` or `timed_out` carries
+  `candidate_hash: null`** and is never delivered.
+
+## 4. Roles, authority, and what authority means here
+
+| Actor | May do |
+|---|---|
+| Acceptance role | author a milestone's contract and test declaration |
+| Control host | validate and append every event; freeze candidates; run the gate |
+| Human | approve or waive a contract; veto a passing result; amend a standard; extend a budget; abandon a milestone |
+| Worker | nothing in this module, except that the acceptance role is a worker with a narrow allowlist |
+
+**Attribution is recorded, not authenticated.** There is no identity system here and this
+specification does not invent one. `authored_by`, `requested_by`, `signer` and `approved_by` are
+audit labels. **Nothing here enforces an authority boundary it does not have, and no section may
+be read as claiming one.**
+
+The consequence, stated rather than glossed: **"the acceptance body owns the method" is a claim
+about information and timing, not about independence.** The acceptance role is a model agent,
+probably sharing weights with the builder. Its independence is that it never sees builder output
+and that it speaks before the work begins. It is not independence of judgement.
+
+**The allowlist is the enforcement, so the allowlist is tested.** The acceptance role's token must
+be refused by the broker when attempting to read the event log, and that refusal is evidence. A
+declared permission that nothing checks will drift to whatever was convenient the week someone was
+in a hurry.
+
+## 6. Artifacts and state
+
+The distinction, written down because leaving it implicit lets it drift:
+
+- **State** is mutable, derived, and reconstructible from the log. There is none that is durable.
+- **Artifacts** are immutable, content-addressed files written through the broker. **Their
+  authority is the hash recorded in the log, not their presence on disk.**
+
+**If a file on disk does not match its logged hash, the module refuses to use it** and records an
+integrity failure. This applies to candidate artifacts, test bundles, and fixtures alike.
+
+Retention is housekeeping, not correctness. Deleting an artifact cannot cause a false pass; it
+causes a loud integrity failure if anyone tries to use it afterwards.
+
+**Ephemeral read models are permitted.** The prohibition is on *durable* state. A derived index
+that is a pure function of a log prefix and is discarded on any mismatch is a memoised fold, not
+a store. **The distinction that matters is which reads may use one**, and it is given in §12.
+
+## 7. The declaration
+
+Two events, both before the first build round.
+
+**`milestone.declared`** — control host, on operator instruction. Carries `milestone_id`, name,
+spec hash, `required_task_ids`, **declared deliverable paths per task**, signoff policy, budget
+limits.
+
+**`milestone.test_declared`** — acceptance role, through its report folder. Carries the contract (hash,
+reference, and its full clause text), the **clause-to-test citation map** (every declared test
+cites at least one clause), the **clause-to-task map** (used to target corrections), the test
+bundle hash, the **declared test population** as a list of test ids, the runner (kind, entry,
+timeout, network policy, **writable scratch declaration**, resource limits, clock and environment
+policy), the **assertion-isolation mode**, `standard.rule`, `authored_from`, `supersedes`, and a
+reason when superseding.
+
+**Settled decisions** (what has already been decided against, with a ref each) travel with the
+declaration so a builder does not re-litigate them. **A builder's room of freedom is *not* declared
+here.** The always-true part — what is within a builder's own scope to decide, and what is never
+theirs to decide — lives in the role brief, which every round loads and no slice can omit. A
+declaration may narrow it for one milestone, never widen it, and never be its only source. That
+inversion is deliberate: a per-slice latitude field would be forgotten by whichever slice forgot
+it, and the brief cannot be.
+
+The bundle **bytes** live in the content-addressed artifact store (§6), keyed by the bundle hash;
+the declaration records the hash, not a path to a second copy. There is no bundle directory outside
+the store.
+
+Validation at append, all of it refusing rather than accepting-and-hoping:
+
+- the declared population is **non-empty**
+- every declared test cites at least one existing clause
+- every clause is cited by at least one declared test
+- every task in the clause-to-task map is in `required_task_ids`
+- `supersedes` names a declaration that **exists**, **belongs to the same milestone**, and **is
+  not itself superseded** — a dangling or cross-milestone reference is refused at append, and a
+  declaration that would supersede an already-superseded one is refused, because it creates a
+  cycle that makes replay ambiguous
+- **if the assertion-isolation mode is `isolated_assertion`, the contract must name the
+  invocation surface** the arbiter needs: module paths, function signatures, or CLI synopsis
+
+Three properties:
+
+- **Authored before dispatch, from the spec alone.** The acceptance role's allowlist grants a
+  **builder-free projection** of the milestone — the spec, `milestone_id`, and `required_task_ids`
+  with their spec-derived descriptions — and its own output directory. It cannot read the event
+  log. The constraint is *no builder-originated information*, not *no inputs*.
+- **Immutable per milestone revision.** Any change is a new declaration naming the one it
+  supersedes, with a reason.
+- **The control host refuses to dispatch build rounds for a milestone's tasks until a test
+  declaration exists**, and, where the contract approval is required, until it is approved.
+
+**Assertion-isolation mode** is one of:
+
+- **`isolated_assertion`** — no candidate code executes in the process that produces per-test
+  results. Satisfied by a service, a CLI, **or an acceptance-authored driver inside the declared
+  bundle** that imports the library and reports over a pipe. The candidate can lie about
+  *behaviour*; it cannot forge a *verdict*.
+- **`shared_assertion`** — candidate code executes in the asserting process. A declared, weaker
+  standard. **When chosen, the declaration must name the specific clauses that forced it**, and
+  that list is part of the declaration a human sees.
+
+`isolated_assertion` is the default. The mode is recorded on every evaluation event, so a weaker
+gate is always visible in the log.
+
+**`standard.rule` ships as `all_declared_pass` only.** No percentage threshold, no partial credit.
+
+## 8. The standard must be able to bite
+
+**A declaration is not dispatch-ready until the bundle, run through the broker against an
+author-crafted fixture that violates a cited clause, yields `fail`.** This is recorded as
+`milestone.test_validated`, carrying the declaration id, the control fixture hash, and the verdict.
+**The control fixture lives in the declaration**, so the approval in §11 sees it.
+
+This upgrades the first limit in §21 from *asserted* to *demonstrated*. **The honest residuals:**
+the author can co-fit the tests and the probe, so teeth exist exactly where the probe bites; and
+teeth on some clauses is not teeth on all. It is a floor. Human approval remains the real check.
+
+Cost: one broker run per declaration, keyed to the bundle — never to `input_key`, never to any
+budget.
+
+## 9. Delivery
+
+Delivery is a **fold over the log**. It is not a builder claim, not a new record, not a cache.
+
+**The fold reads only what it needs.** Builder-originated events reach it through a projection
+carrying `{task_id, run_id, outcome, candidate_hash}` — the structural fields. **No free-text
+field authored by a builder is read on any path in this module.** Narrative is unavailable rather
+than forbidden, because a rule that names one field will be defeated by the next field someone
+adds.
+
+For a task:
+
+- no `round.dispatched` for the task → not delivered, `never_dispatched`
+- no `round.closed` for any run → not delivered, `in_flight`
+- the latest closed run, **by append order, never by timestamp** — clocks are not authoritative
+  here — has `outcome` in `killed`, `timed_out` → not delivered, `run_did_not_complete`
+- more than one terminal report **drained before that run's `round.closed`** → not delivered,
+  `anomalous_multiple_terminals`; the first valid terminal remains authoritative, and later ones
+  are refused at drain as `builder.report_rejected`
+- no terminal report → not delivered, `no_terminal_report`
+- terminal report is `aborted` → not delivered, `reported_failure`
+- `round.closed.candidate_hash` is null on a success → not delivered, `success_without_candidate`
+- `round.closed.outcome` disagrees with the terminal report → not delivered,
+  `close_disagrees_with_report`
+- otherwise → delivered, with the run id and candidate hash
+
+Rules:
+
+- **Only the latest closed run counts.** A task delivered once and then re-run is superseded by
+  the new run, even when the new run fails. "Delivered once" is not a fixed fact.
+- **`problem` then `success` is delivered.** Problems are non-terminal by
+  definition and carry no weight in this read.
+- **`improvement` is ignored entirely** by this read. It goes to diagnosis.
+- **The control host writes `round.closed` when the spawner kills a worker.** If it does not, that
+  is a gap in the build loop and this module will not paper over it by inferring anything.
+- **A task the builder never reported on is not delivered**, and that produces no acceptance event,
+  because nothing asked. Silence is neither a pass nor a failure.
+
+**Permanently undelivered tasks do not escalate on a timer.** §2 establishes there are no
+authoritative clocks. A milestone whose required task is never dispatched stays not-ready until a
+human acts, and that is a **human-detection problem by design, stated here so it is not mistaken
+for an oversight.**
+
+The injected callable keeps its existing name for compatibility, but the operation is delivery and
+it must be implemented as `task_delivered`. **Calling it `task_accepted` invites someone to
+conclude the tasks are already accepted and skip the gate.**
+
+## 10. Reaching the gate
+
+One verb: `request_acceptance(project_id, milestone_id, requested_by)`. It is the trigger: it
+constructs a `MilestoneSpec` from the milestone's declaration and calls `MilestoneService.run()`,
+which is the executor (§0a).
+
+**`input_key = H(milestone_id ‖ test_declaration_content_hash ‖ sorted [(task_id, candidate_hash)])`**
+
+The declaration's *content* hash, not its bundle hash, because the meaning of an evaluation depends
+on the whole declaration — population, runner, isolation, clause maps, limits. A supersession
+therefore re-keys. Including `task_id` in the pair means two tasks swapping artifacts is a
+different input. **A standard amended while the candidates sit unchanged is a different input and
+must re-evaluate**; this is the correction route, and it has to work.
+
+**Idempotency is scoped to terminal verdicts.** A recorded **pass or fail** for a key suppresses
+re-evaluation of that key. A recorded `evaluation_errored` **does not**, up to `max_infra_retries`
+— otherwise one infrastructure error would permanently block the milestone.
+
+**One condition:** after every `round.closed` the control host reads readiness and calls the verb
+for each milestone that has become ready. Readiness is: every required task delivered; a
+validated, non-superseded test declaration exists; the milestone is not accepted, escalated, or
+abandoned; **and no evaluation carrying a recorded verdict exists for this `input_key`.** An
+`evaluation_errored` does not count as a verdict, so the bounded retry can actually fire.
+
+**A stalled milestone is a recorded fact, not a silence.** When readiness is false for any reason,
+the host appends `milestone.readiness_blocked`, idempotent on the hash of the blocking-reason set,
+carrying each task and its reason. This is not a timeout and not a resolution — it is visibility,
+which §10's rejection of the verb-only trigger demanded in the first place.
+
+Two stall conditions are escalated rather than merely noted:
+
+- all tasks delivered, this key already evaluated as fail, a correction exists, and the key is
+  unchanged → `milestone.escalated{reason: no_change_after_correction}`. A builder who returns
+  byte-identical artifacts after a correction has consumed a cycle and produced nothing; without
+  this the milestone sits in exactly the silence §10 called a failure mode.
+- a required task is undelivered for reasons attributable to no builder → left to human detection,
+  per §9.
+
+Three rejected triggers:
+
+- **"At the last round's close."** "Last" is not well defined — tasks close in any order,
+  corrections re-open tasks, reruns happen — and encoding it puts gate logic inside the
+  round-close path.
+- **Verb only, no condition.** Nothing calls it, milestones silently never get judged, and
+  unjudged is indistinguishable from pending.
+- **`success` triggers the gate.** A terminal report is about one task. It is never a claim
+  about a milestone.
+
+## 11. Contract approval, before dispatch
+
+**Where this lives.** A milestone and its contract arrive through the **existing definition path** —
+`definitions.py` (`definition.create / revise / signoff`) and the task list in `planning.py`. This
+module does not introduce a second way to declare or approve a milestone (§0a). Contract approval is
+that path's sign-off; this section states what the gate requires to have seen, not how the
+signature was produced.
+
+**Approval of the contract is mandatory and unwaivable.** The contract is the acceptance role's
+written reading of the spec — short, prose, reviewable in minutes — and **correlated blind spots
+originate in misreading the spec.** This is where they are caught, and it is the cheapest point in
+the whole cycle.
+
+**Approval of the test bundle is per milestone.** The bundle is long and is code; a human skimming
+it will catch almost nothing a contract review would not have caught earlier.
+
+**A milestone cannot dispatch until a human event exists, and that event is one of two:**
+`milestone.contract_approved` or `milestone.contract_approval_waived`, which carries a reason.
+**Non-review becomes a recorded act rather than a configuration default**, and any acceptance
+descending from a waiver carries a visible marker on its events.
+
+**The residual cost, stated plainly:** a human who waives forty times learns to waive, and the log
+will then *look* like oversight while containing none. That is worse than honest optionality,
+because a downstream reader cannot distinguish a reflex approval from a considered one. The
+partial mitigation is that the approval event must carry something attention-shaped — the clauses
+read, or the coverage gaps being accepted — so a reflex approval is at least a reflex lie.
+
+## 12. Isolation, restated so it is testable
+
+**The rule:** no free-text field authored by a builder is read anywhere on the acceptance path.
+Builder-originated events enter only through a projection carrying `{task_id, run_id, outcome,
+candidate_hash}`. **The frozen artifacts themselves are of course read** — evaluation necessarily
+examines the submitted deliverable, and forbidding that would forbid the module from doing its
+job.
+
+**No model reads those artifacts on the verdict path.** The verdict is computed by deterministic
+code over the declared test ids.
+
+This is testable, and the test asserts the **projection's field set**, not the absence of one field
+name. Making narrative unavailable is the mechanism; a test is the confirmation.
+
+## 13. What the builder is told
+
+On declaration, the control host publishes a builder-visible contract projection: the contract,
+the declaration id, the declared deliverable paths, and the test bundle's content hash. **The test
+bundle is not in the projection, and the broker refuses a builder token's read of it**, with the
+refusal recorded as evidence. A prompt instruction not to look is not a control.
+
+**What this actually guarantees, without inflation:**
+
+> The builder does not receive the test implementation as an input artefact, and the broker denies
+> it access to the test bundle. The system does **not** guarantee secrecy against candidate code
+> that can observe its own execution environment. Under `shared_assertion` the bundle is visible to
+> the candidate at runtime in **both the filesystem and process memory** — that is the specific
+> weakening being recorded. What survives is: the declared population is enforced by a trusted
+> parent that does not import candidate code; the candidate is frozen by a host-computed hash
+> before evaluation; and the correction channel carries clause-level summaries only.
+
+## 14. The gate
+
+1. **Load and validate.** Milestone declaration and the current non-superseded test declaration.
+   Verify the bundle on disk matches its logged hash. Any refusal stops here.
+2. **Confirm delivery.** Every required task delivered. Otherwise refuse as not ready, naming each
+   task and its reason. **No evaluation. No correction budget consumed.**
+3. **Assemble the fixture.** Through the broker: retrieve declared candidate artifacts by hash,
+   verify each, materialise into a fresh **read-only** directory alongside a **separate writable
+   scratch directory declared in the standard**, and return a fixture hash and evidence ids. A
+   hash mismatch is an integrity failure and stops the gate.
+4. **Evaluate.** §15. Record the result and all evidence references **before** any transition.
+5. **Resolve, and only here check budgets.** On **fail**: correction budget exhausted → escalate;
+   otherwise correction request. On **`evaluation_errored`**: infra retries exhausted → escalate;
+   otherwise re-attempt **without waiting for a new readiness poke**, bounded by
+   `max_infra_retries`.
+
+**No budget is checked at entry.** A gate that escalates on arrival rather than at the branch that
+would spend the budget skips the final evaluation entirely — the last correction's work would never
+be tested, and a milestone that exhausted its corrections could never be accepted even if the last
+submission passed.
+
+**A crash between step 4 and the verdict must still be counted.** If broker launch evidence exists
+with no corresponding verdict event, the control host records `evaluation_errored`. Without this an
+evaluation that crashes every time — an out-of-memory in the harness, say — produces no event,
+never increments the retry counter, and **loops forever**, which is the exact case
+`max_infra_retries` exists to bound.
+
+Acceptance is derivable from the log alone: a `milestone.accepted` event referencing a passing,
+evidenced evaluation, and a signoff event if one was required.
+
+The existing six-step milestone service remains the executor, made **step-wise** so the signoff
+pause is a phase boundary rather than a blocking call — **a service call that blocks waiting for a
+human turns any crash into a lost gate.** The service owns all milestone event emission; the
+evaluator returns an `IntegrationResult` and appends nothing. See §0a.
+
+## 15. Evaluation and the trust boundary
+
+**Trusted:** the broker, the control host, the parent harness, the declared test bundle as policy.
+**Untrusted:** the fixture and everything in it, including anything the candidate does at import.
+
+**Two processes, and the distinction matters.** The **parent** harness never imports candidate
+code and never loads a module whose origin lies under the fixture path. It launches the **child**
+test process, receives per-test results over a pipe, and applies `standard.rule` against the
+declared ids. The child may import the candidate; that is what `shared_assertion` names.
+
+**Under `isolated_assertion`, the harness verifies the mode rather than trusting the label:**
+after the run it asserts that no fixture-origin module was loaded in the parent. A declared label
+that nothing checks drifts to whatever was convenient.
+
+**The standard's tests are black-box.** A milestone test drives the candidate as a subprocess — it
+runs the CLI or service and reads stdout and the exit code. It does not import the candidate's
+internals. **This is declared in the standard, so a builder knows it while writing the slice, not
+after.** It costs expressiveness: an integration test can check the assembled product through its
+interface but not the internals of a piece of it. That is the correct scope for milestone
+acceptance (F-R5: an integration test of the assembled result) and it is what makes a forged pass
+structurally hard rather than merely discouraged.
+
+The evaluator:
+
+1. Verifies the bundle hash and the fixture hash against the log. On mismatch, records an
+   integrity error and does not run.
+2. Asks the broker to launch the parent harness with the bundle and fixture mounted read-only,
+   the declared writable scratch mounted separately, **network denied except loopback where the
+   declaration requires driving a service from outside**, the declared timeout and limits, and a
+   per-run nonce.
+3. Collects tests **rooted only in the bundle's declared paths**. The fixture is never a
+   collection root, or a candidate shipping test files gets them collected and burns retries.
+4. Applies `standard.rule` against the declared ids.
+
+Verdict rules, all deterministic:
+
+- any declared test **missing** or **erroring** → fail
+- **zero collected** → `evaluation_errored` under `isolated_assertion`, because collection happened
+  in the child that imported the *tests*, not the candidate, and zero means the bundle or harness
+  broke; under `shared_assertion` it is fail, every declared test missing. **Charging a builder
+  for our own harness failing is a misattribution**, and the mode determines which it is.
+- the child reports tests that were **not declared**: under `isolated_assertion` this is an
+  authoring defect, because the report is trustworthy there — recorded as `evaluation_errored` and
+  escalated, since otherwise the standard silently shrinks to whatever happened to be declared;
+  under `shared_assertion` fabrication is expected, so it is an anomaly and the verdict is
+  unaffected. **At most 100 undeclared results are stored; the rest are counted but not recorded.**
+- malformed report, missing report, or nonce mismatch → `evaluation_errored`, not a verdict
+- the runner's exit code alone is never a verdict
+
+**The declared population cannot be shrunk by the child.** A candidate can monkeypatch the
+framework, call `os._exit(0)`, or fabricate results for tests executing in that child. It cannot
+remove a test from the population the parent checks, and a missing test is a failure it did not
+choose.
+
+**An erroring test is charged as fail, deliberately.** A candidate can always induce an error, and
+the conservative choice protects the gate. This is a real cost and it belongs in §21 rather than
+being discovered under pressure.
+
+**An integrity hash proves what was observed, not that untrusted code was confined.** No anti-cheat
+introspection of the candidate is built; inspecting a builder's code for manipulation is
+worker-grading with a security costume. **Tamper-resistance is structural** — separate processes,
+disjoint mounts, a pipe between them, a frozen and hash-verified candidate — not a judgement call
+and not a model's opinion.
+
+**No decision model is involved in this section, ever.** Tampering has already happened by the time
+anyone reads the result; a model reading a plausible green result sees a green result. Detection is
+a property of the process topology, not of a second opinion.
+
+## 16. What the builder is told when it fails
+
+A correction request carries **failing contract clause ids, the target tasks from the declared
+clause-to-task map, and the cycle number.**
+
+It does **not** carry test source, assertion messages, expected values, or stack traces from
+inside the bundle. Raw failure output leaks the standard through the back door, so the full report
+is kept as evidence for humans and the builder receives the clause-level summary.
+
+**A test must cite a contract clause.** A test checking behaviour no clause states is a **test
+defect**, not a builder defect: escalated to a human as `contract_gap` and **never sent to the
+builder as a correction.** This is what makes a standard the builder could not read a fair
+standard — it may test undisclosed cases, but it may not require undisclosed behaviour.
+
+**The declaration must be sufficient to construct every correction from itself plus the verdict.**
+This is a design invariant, not a hope: uncited failing tests have no correction content, which is
+what makes the contract-gap escalation derivable rather than asserted.
+
+**The clause-to-task map's granularity is the acceptance role's responsibility**, declared at
+declaration time. A coarse map wastes correction budget re-doing tasks that were already right.
+
+## 17. Budgets and escalation
+
+Two budgets, both declared, both with different meanings:
+
+- **`max_correction_cycles`** counts `milestone.correction_requested` events **per `milestone_id`,
+  across the entire supersession chain.** The test bundle hash is recorded on each event as data
+  and is **never part of the key**. An amendment ships a new bundle; keying on the bundle would
+  reset the count on every amendment, which is precisely the standard-shopping the rule exists to
+  prevent. Resetting remains an explicit, reasoned `milestone.budget_extended` event.
+- **`max_infra_retries`** counts `milestone.evaluation_errored` events per `input_key`.
+  Infrastructure failures are not the builder's failures and never consume correction cycles.
+  Without this bound a hang is an infinite loop; with it, a bounded, non-punitive retry.
+
+> **Note the deliberate asymmetry, so nobody "fixes" it later.** `input_key` includes the
+> declaration, so an amendment **re-evaluates**. The correction budget is keyed to the milestone,
+> so an amendment **does not reset the budget**. Re-evaluation is free; another attempt is not.
+
+When a bound is hit: `milestone.escalated` with the reason and the last event id. The milestone
+stays unaccepted, readiness excludes it, no further correction rounds are dispatched. **Nothing
+auto-resolves and nothing times out into acceptance.**
+
+Only a human can then:
+
+- **`milestone.budget_extended`** — carries which budget (`corrections` or `infrastructure`), the
+  new bound or increment, and a reason. It is a defined event precisely so the escape hatch is not
+  a dead end.
+- **Amend the standard** — a new declaration with a reason, authored again from the spec, and
+  contract-approved as §11 requires.
+- **`milestone.abandoned`** — terminal, blocking downstream milestones rather than waiving them.
+
+**`milestone.readiness_blocked` is not an escalation** and does not consume budget.
+
+## 19. Signoff
+
+Humans have two points: contract approval before dispatch (§11, mandatory) and a veto after a pass.
+
+**The human may grant a pass, reject it, or defer.** A rejection escalates, because the human saw
+something the test did not measure, which is evidence the test is incomplete rather than evidence
+the work is fine.
+
+**A human may not accept a failing evaluation or an `evaluation_errored` event.** Only a passing
+evaluation may be accepted or vetoed. **"Inconclusive" is not a state in this system** — the
+non-verdict state is `evaluation_errored`, and it is not acceptable either.
+
+If signoff could turn a fail into acceptance, the gate's output would be "test result **or**
+human said so", and under schedule pressure that is a gate that cannot fail. The honest route past
+a failure is to amend the standard, which leaves a record saying the standard changed and why.
+
+**A pending signoff is invalidated if `input_key` changes.** The human was asked to approve a
+delivery that no longer exists. The milestone re-evaluates and is re-presented.
+
+**No signoff timeout and no auto-grant on silence.** A pending signoff is a stable, visible state
+and waits indefinitely.
+
+**Signoff verbs are control-host commands, not worker tools, so signoff cannot be issued through
+the worker tool surface.** Given §4, that is the precise property — not authentication, and not an
+unforgeable authority decision. **No waiver exists in this version.**
+
+## 20. Recovery, idempotency, and ordering
+
+- **All appends are conditional appends by a single serialized writer** that re-evaluates its
+  precondition against the log state at the append offset. Read-then-append is a TOCTOU race. The
+  writer *is* the lock; there is no lock store.
+- **Attempts are claimed by log-derived preconditions.** A stale attempt is explicitly recorded as
+  abandoned before any retry.
+- **A round is terminalised by the control host** — on a worker terminal report, a timeout, a
+  kill, or cancellation — and the gate is poked after either path. Reports arriving after a
+  host-recorded terminal event are late anomalies, **excluded from the delivery fold** and unable
+  to alter it. **They also cannot invalidate an in-progress evaluation**, whose delivery snapshot is
+  the one taken when `input_key` was computed, not one re-read mid-evaluation.
+- **A crash before the decision leaves an open gate** the next readiness read re-runs. Nothing is
+  held in memory across a pause.
+- **`request_reevaluation(reason)`** appends an event whose id enters `input_key`, so a re-run is
+  always possible and always leaves a record of who asked and why. **This exists because
+  idempotency plus a flaky test would otherwise permanently condemn a candidate**: inputs
+  unchanged means no re-evaluation, and the only exits would be a builder change or escalation.
+- **Replay is decision-level, not bit-identical.** Re-executing a bundle is not deterministic.
+  Replay asserts that the **decision function over recorded evaluation results** reproduces
+  identically — same verdicts, and an errored attempt stays errored. Given the log and the bundles
+  it produces the same outcomes; given the log and *no* bundles it produces integrity failures
+  rather than passes.
+
+**A `round.closed` for a required task after `milestone.accepted`** appends
+`milestone.post_acceptance_drift` — an anomaly, visible, never re-opening the gate, never
+un-accepting. Acceptance is terminal.
+
+## 21. Known limits — stated, not hidden
+
+- **A declared standard cannot be *proven* able to fail.** §8 demonstrates that this one bites,
+  against one authored probe. That is a floor, not a ceiling.
+- **Correlated blind spots are real and unremovable.** If the acceptance role and the builder
+  misread the same specification the same way, the test will agree with the bug. This is the
+  strongest argument for §11's mandatory contract approval.
+- **Candidate code can observe the test it runs.** Content secrecy is not available and is not
+  claimed. Population enforcement and immutability are what remain.
+- **Attribution is not authentication.** §4.
+- **`shared_assertion` is a weaker gate**, deliberately permitted, deliberately recorded, and
+  expensive to choose because it must name the clauses that forced it.
+- **Erroring tests are charged as failure.** Deliberate, and it can punish a builder for genuine
+  flakiness. The resolution is human escalation, and it exists.
+- **Acceptance is not revocation-safe.** A correlated blind spot discovered after acceptance
+  cannot be walked back. Correcting the downstream impact requires a new milestone. There is no
+  mechanism here, and pretending otherwise would be worse than saying so.
+- **Permanently undelivered milestones are not detected automatically.** Human detection, by
+  design (§9).
+
+## 22. Hard constraints
+
+The log is the only durable **authoritative** state. Artifacts are content-addressed and authorised
+by logged hash. Durable read models are forbidden; ephemeral ones carry no authority.
+
+**Laya appears nowhere in this module** — not as a vote, not as a tie-break, not as a failure
+summariser feeding the verdict, not as "is this flaky", not as "erroring, ask the model". Any of
+those is the model deciding pass/fail through a side door. **This is enforced at runtime, not
+statically**: a test asserts that no Laya client is instantiated and none is invoked, on any gate
+path including error paths. A static import check alone is defeated by a dynamic import or a
+subprocess.
+
+No test runs except through the broker, and every action produces evidence that is itself
+recorded. One gate per milestone. **Every budget, escalation, and correction is keyed to the
+milestone or the task, never to a worker instance or role.**
+
+## 24. What the module must ship with
+
+- **Delivery reads:** killed run with no candidate; timeout with no report; problem then success;
+  success then failure on rerun; two terminal reports before close; a late terminal report that
+  does not alter delivery; close disagreeing with report; dispatched-but-not-required as an anomaly.
+- **Degenerate standards:** empty bundle refused at declaration; bundle missing a declared test →
+  fail; no declaration → refuse, never pass; only exit code zero with no report → errored, never
+  pass.
+- **Hostile fixture:** a fixture calling `os._exit(0)` at import yields fail or errored, never
+  pass. Under `isolated_assertion`, a fixture writing a fake report is ignored, and a fixture-origin
+  module loaded in the parent is detected.
+- **Stalls:** identical resubmission after a correction escalates; `evaluation_errored` does not
+  suppress readiness; infra retry terminates.
+- **Budgets:** the final correction cycle's submission is evaluated, never skipped; an amendment
+  re-evaluates but does not reset the correction budget.
+- **Declaration integrity:** dangling, cross-milestone, and cycle-forming `supersedes` are refused.
+- **Correction channel:** no assertion text, expected value, or stack fragment from the bundle
+  appears in any correction event.
+- **Structural isolation:** builder events reach the acceptance path only through the projection,
+  asserted on the projection's field set, on every path including fixture assembly.
+- **Allowlist:** the acceptance role's token is refused the event log.
+- **Laya:** not instantiated and not invoked on any gate path.
+- **Replay:** decision-level determinism; warm-fold ≡ rebuild-from-scratch.
+- **Torn tail:** an incomplete trailing line is repaired and recorded; a malformed interior line
+  hard-stops.
+
+## 25. The single requirement
+
+If you are asked which one requirement, removed, makes this stop being a gate — the answer is the
+pre-commitment in §7: **the standard is declared before any build round, from the spec alone, and
+cannot change without a recorded supersession.**
+
+Remove it and every mechanism still runs. Candidates freeze, populations are enforced, budgets
+tick, verdicts are recorded. But the verdict now means *"the artifact satisfies a standard chosen
+by someone who had seen the artifact"* — a measurement of agreement, not a gate.
+
+The runner-up is §19's prohibition on accepting a failing evaluation, and it ranks second for one
+reason only: **an override is visible.** If a human can wave a failure through, the log contains an
+event saying so, and you can count those events and notice when the gate has become decorative. A
+post-hoc standard leaves no such trace.
+
+**Invisibility is the discriminator.** A gate with a loud bypass is still a gate. A gate whose
+standard can be retrofitted silently was never one.

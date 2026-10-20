@@ -1,0 +1,35 @@
+{
+  "budget": {
+    "maxActions": 30,
+    "maxOutputTokens": 32000,
+    "maxTurns": 40,
+    "wallSeconds": 60
+  },
+  "contextPack": [
+    {
+      "byteBudget": 16384,
+      "bytes": 70,
+      "name": "outcome"
+    },
+    {
+      "byteBudget": 16384,
+      "bytes": 4,
+      "name": "scope"
+    },
+    {
+      "byteBudget": 16384,
+      "bytes": 8,
+      "name": "acceptance"
+    }
+  ],
+  "modelSpec": {
+    "model": "space-bunny-alpha",
+    "provider": "openrouter",
+    "thinking": null
+  },
+  "role": "DEXTER",
+  "runId": "69f4bdf0-9087-40f2-8f44-60a9efc07848",
+  "sandbox": "none",
+  "taskRef": "split-demo:t-split",
+  "toolAllowlist": []
+}

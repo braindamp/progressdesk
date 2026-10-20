@@ -1,0 +1,93 @@
+A team is building a software product with an AI "builder workshop," and I need you to design
+the information channel that feeds it. I want a design, not a survey — commit to one approach
+and defend it.
+
+## The setup
+
+Work is split into **milestones**, and each milestone into **feature slices**. One slice is one
+builder agent's job. Slices are produced by a **Ralph loop**: the same agent wakes, reads, edits,
+verifies, and repeats, many times, until it declares the slice done. Iteration count is high and
+unpredictable, which is the entire problem I am asking you to solve.
+
+Three documents are canonical and pre-existing:
+
+- a **vision document** (why this product exists, strategic intent)
+- a **functional specification** (what the product must do, behaviourally)
+- a **technical specification** (architecture, interfaces, conventions, constraints)
+
+They were written once, by humans, for humans. They are long. They are not going to be rewritten
+per slice.
+
+## What a builder actually is, technically
+
+- A subprocess with a **single-use token**, a **tools allowlist** (typically a shell, file read,
+  file write, and nothing else), and a hard **timeout**.
+- It has **read access to the repository** and can therefore read any file in it, including the
+  three documents, if it chooses to.
+- It has **no network** and **no memory between iterations** except what it writes to disk in its
+  own workspace.
+- It is running inside a **job object** that will kill it without warning.
+- It is **not permitted to write to the central event log**; it leaves requests in an inbox that
+  the control host drains. This matters because I want to know exactly what a builder can and
+  cannot be made to do.
+- It **cannot see any other builder's session**.
+
+The control host above it does very little. It does not review work, does not score workers,
+and will not be extended into doing so. Any judgement of quality has to come out of what you
+design here, or it does not exist.
+
+## What I am actually asking
+
+**Design the artefact that tells a builder everything it needs to deliver one slice, and nothing
+it does not.** I want the artefact itself, with named sections and named fields — not a
+description of a philosophy. Where a field has a format, give the format. Where something is
+pointed at rather than copied in, say what the pointer is and how the builder is expected to
+follow it.
+
+Then answer these, concretely, because they are where the design usually falls apart:
+
+1. **Sizing.** What makes a slice correctly sized versus a planning failure disguised as a slice?
+   Give a rule I could apply when writing one, not an intuition.
+
+2. **Iteration cost.** In a Ralph loop the same context is re-read every wake. What is the
+   dominant driver of token burn in the arrangement you propose, and what specifically did you do
+   to make the *second* iteration cheap rather than merely the first?
+
+3. **The stopping condition.** How does the builder know it is done, in a way that does not
+   require a human and does not require the control host to grow a reviewer? Be concrete about
+   what it checks and what it does when the check passes but the work is wrong.
+
+4. **The brief is wrong.** The builder discovers that the slice as written does not match the
+   code, or contradicts itself, or asks for something already decided against. What does it do,
+   and what does that cost? Note that I do not want drift silently corrected and I do not want
+   the loop dead-ended either.
+
+5. **The specification is overruled.** These documents are authoritative, but a human above them
+   can change their mind. That has to be representable. Where does the change live so that a
+   builder does not read stale authority, and so that the document and the change cannot
+   disagree?
+
+6. **The escape hatch.** A builder that cannot deliver the slice at all. What does it do, and
+   who finds out?
+
+7. **What the builder hands back.** When the slice is done, what does it leave behind, in what
+   form, and who reads it? Be careful here — I want the minimum that is still useful.
+
+8. **What you would refuse.** Name anything in the space above you think is the wrong instinct,
+   anything you think is commonly proposed that is actually harmful, and anything in my framing
+   above you think I have got wrong. An answer that agrees with everything above without
+   reservation has not engaged with the problem.
+
+## Constraints
+
+- The three documents stay canonical and stay where they are. You are not redesigning them.
+- No new human in the loop per slice. I am asking what can be automated about this, not what a
+  team should do manually.
+- The builder cannot be trusted, and cannot be supervised continuously. Assume it is competent and
+  fallible.
+- Cost matters. The obvious answer to most of these questions is "give it less," and that is
+  usually wrong — essential precision is cheaper than rework. Say where you are deliberately
+  spending tokens up front and why.
+
+Prefer one coherent design over a menu. If you think part of the setup is wrong, build the design
+you think is right and tell me what you changed and why.

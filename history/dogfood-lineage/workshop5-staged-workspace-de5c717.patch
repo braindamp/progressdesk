@@ -1,0 +1,134 @@
+commit de5c71718bd483fe5cb87b838d9ea777d5031892
+Author:     workhop <geluid@gmail.com>
+AuthorDate: Sun Oct 4 01:38:32 2026 +0200
+Commit:     workhop <geluid@gmail.com>
+CommitDate: Sun Oct 4 01:38:32 2026 +0200
+
+    feat: the staged workspace holds the project
+    
+    TESP 5.3 step 4 says stage the project files, and the code created the directory
+    and put a .keep in it. The slot has been in the layout since v1.1 and has never
+    been filled, which is why a builder dispatched into it concludes the project is
+    empty -- which is what happened to SCHOTTY's round.
+    
+    The kernel and the owner's configuration are never staged. A staged workspace is
+    what a builder can reach, and 7.3 grants it no access to installed kernel files,
+    so copying those in would move them from unreachable to readable -- the one thing
+    staging must not do. The probe caught that leak; it would have shipped silently.
+    
+    Also corrects the v1.12 status line: it claimed owner acceptance, which is wrong
+    twice over. The owner's remit is the VISP and the FUSP, and 20 says this layer is
+    not separately gated. It rests on the workshop's LLM authority, and now says so.
+
+diff --git a/docs/ProgressDesk TESP_v1.12.md b/docs/ProgressDesk TESP_v1.12.md
+index c1d73a5..56e9157 100644
+--- a/docs/ProgressDesk TESP_v1.12.md	
++++ b/docs/ProgressDesk TESP_v1.12.md	
+@@ -1,7 +1,7 @@
+ # TESP — Technical Execution Specification (Workshop Core)
+ 
+ - Version: 1.12
+-- Status: NORMATIVE — derives authority from the accepted FUSP chain and is not separately gated (§20). The owner co-authors the VISP and signs off the FUSP; this layer is not theirs to accept.
++- Status: NORMATIVE — derives authority from the accepted FUSP chain and is not separately gated (§20, F-G8). The owner's remit is the VISP and the FUSP; this layer sits outside it and rests on the workshop's LLM authority.
+ - Supersedes: 1.11
+ - Parent authority: accepted VISP v1.11 and FUSP v1.11 (and the owner's subsequent accepted amendments).
+ - Purpose: specify the target workshop sufficiently for implementation through milestones and small tasks; defines how, including model assignment policy per milestone.
+diff --git a/src/progressdesk/desk.py b/src/progressdesk/desk.py
+index 0b1a6d1..c5bdf82 100644
+--- a/src/progressdesk/desk.py
++++ b/src/progressdesk/desk.py
+@@ -75,6 +75,16 @@ from progressdesk.definitions import Definition, DefinitionError, Definitions
+ from progressdesk.events import Event, EventLog
+ 
+ PROJECT_PLAN_SCHEMA_VERSION = 1
++
++# Never staged into a workspace: the kernel and the owner's configuration are
++# what 7.3 keeps a builder away from, so copying them in would move them from
++# unreachable to readable.
++_STAGE_EXCLUDED = ("installed", "config", "events", "artifacts", "store",
++                 "projects", "scratch")
++
++
++def _is_kernel(relative: Path) -> bool:
++    return bool(relative.parts) and relative.parts[0] in _STAGE_EXCLUDED
+ # A milestone declaration is its own shape, not a plan revision. It has to be
+ # separate because a milestone can be declared again (a later slice subdividing
+ # an existing project) without the plan changing.
+@@ -238,6 +248,7 @@ class _ValidatedPlan:
+ 
+     name: str
+     draft_ref: str
++    source: Path | None = None
+     # What gets staged into the project's workspace (TESP 5.3 step 4). None
+     # stages an empty workspace, which is what a project with no files yet is.
+ 
+@@ -406,10 +417,11 @@ class ProjectService:
+             )
+         )
+         with self._project_lock(project_id):
+-            return self._create_locked(request_id, draft_ref, project_id)
++            return self._create_locked(request_id, draft_ref, project_id, source)
+ 
+     def _create_locked(
+-        self, request_id: str, draft_ref: str, project_id: str
++        self, request_id: str, draft_ref: str, project_id: str,
++        source: Path | None = None
+     ) -> ProjectCreation:
+         destination = self.projects_root / project_id
+ 
+@@ -546,6 +558,32 @@ class ProjectService:
+         self.projects_root.mkdir(parents=True, exist_ok=True)
+         return self.projects_root / f".staging-{project_id}-{uuid.uuid4().hex}"
+ 
++    def _stage_source(self, workspace: Path, source: Path | None) -> None:
++        """Copy the owner's files into the staged workspace (TESP 5.3 step 4).
++
++        The workspace is the project, so it holds the project's source rather
++        than a description of it. A plain copy: a workspace is a working
++        directory, not a store, so nothing here is content-addressed.
++
++        Refused rather than guessed. A source that is missing, or is the
++        workspace itself, would publish a project that looks fine and is not.
++        """
++        if source is None:
++            _atomic_bytes(workspace / ".keep", b"")
++            return
++        source = Path(source)
++        if not source.is_dir():
++            raise ProjectError("source_missing", f"stage source {source} is not a directory")
++        if source.resolve() == workspace.resolve():
++            raise ProjectError("source_self", "a project cannot stage from its own workspace")
++        for path in sorted(source.rglob("*")):
++            relative = path.relative_to(source)
++            if not path.is_file():
++                continue
++            if any(part.startswith(".") for part in relative.parts) or _is_kernel(relative):
++                continue
++            _atomic_bytes(workspace / relative, path.read_bytes())
++
+     def _materialize_stage(
+         self,
+         stage: Path,
+@@ -658,7 +696,8 @@ class ProgressDeskOperations:
+         self.projects = projects
+ 
+     def project_create(
+-        self, draft_revision: str, *, request_id: str
++        self, draft_revision: str, *, request_id: str, source: Path | None = None
+     ) -> ProjectCreation:
+-        return self.projects.create(draft_revision, request_id=request_id)
++        return self.projects.create(draft_revision, request_id=request_id,
++                                    source=source)
+ 
+diff --git a/src/progressdesk/runtime.py b/src/progressdesk/runtime.py
+index 25acc61..6b2649e 100644
+--- a/src/progressdesk/runtime.py
++++ b/src/progressdesk/runtime.py
+@@ -705,6 +705,7 @@ def _project_create(rt: Runtime, cmd: Command) -> Any:
+     return rt.operations.project_create(
+         str(cmd.require("spec")),
+         request_id=str(cmd.require("request_id")),
++        source=cmd.get("source") or None,
+     ).to_manifest()
+ 
+ 

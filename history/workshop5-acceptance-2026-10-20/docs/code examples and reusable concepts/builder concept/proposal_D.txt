@@ -1,0 +1,221 @@
+The Slice Pack
+The design, committed up front: the artefact is a per-slice directory — a planner-authored brief.md backed by planner-authored, hash-pinned executable acceptance material — and the "information channel" is not one document but four edges with fixed readers: trunk (authority, downward), the slice branch (the deliverable, outward), an inbox (exceptions only, schema'd), and a one-line status file (the driver's control surface). The organising principle: the brief is a contract, not a knowledge transfer. The scarce resource is not information; it is unambiguity and falsifiability. Tokens are spent once, at brief-authoring time, to make every subsequent wake cheap and stable.
+
+1. Channel topology
+trunk — docs/ (the three canon documents + docs/decisions/ADR-*.md), slices/<id>/brief.md, slices/<id>/verification/. Written by planner/humans only. Builders read, never write.
+slice branch — slice/<id>, cut from base_rev. The builder's workspace. The diff is the deliverable.
+inbox/ — host-mounted dropbox. The builder's only outbound channel besides the branch. Append-only JSON files. No free text, no events, no chat.
+status.json — one line, rewritten every wake, read by the driver.
+No other edges exist: builders never see each other's sessions or worktrees, and nothing a builder writes reaches the event log.
+
+The runner prompt the driver passes at each wake is constant and tiny:
+
+text
+
+Wake k for slice M3-F07. Read slices/M3-F07/brief.md §0 and follow it.
+All variability lives in the brief, on disk, versioned.
+
+2. The artefact on disk
+text
+
+repo/
+  docs/            vision.md  func-spec.md  tech-spec.md  decisions/ADR-*.md
+                   (canonical; headings carry stable anchors, e.g. "## TS-4.2 — Session lifecycle")
+  slices/M3-F07/
+    brief.md            planner-authored; byte-identical to trunk at all times
+    verification/       check.sh + tests + fixtures; planner-authored, hash-pinned in brief
+    report.md           builder-authored, written at exit, merges to trunk as the record
+    status.json         builder-authored, one line
+  inbox/                host-mounted; builders append; host drains to the planner queue
+worktree (per builder, branch slice/M3-F07):
+  ...repo...
+  slices/M3-F07/notes/  gitignored, builder-owned: state.md, journal.md
+3. brief.md, annotated
+Tags: [WAKE] = re-read every wake; [WAKE1] = first wake only; [ON-EXIT] = read when finishing/failing.
+
+Markdown
+
+---
+slice: M3-F07                      # = directory = branch = commit tag
+title: "Expired sessions redirect to /login, draft preserved"
+base_rev: 8c4f2e1                  # trunk commit this brief was cut from; staleness + envelope anchor
+brief_version: 1                   # planner-only field; a bump ends a blocked spell
+status: ready                      # ready|active|blocked|done|failed|superseded
+expected:                          # sizing declaration; tripwires, not targets
+  iterations: "2-6"                # driver cap = 3x upper bound, floor 8
+  changed_lines: 400               # D-SIZE tripwire at 2x
+  pristine: "red: 5 failures in session_expiry_test.ts (listed in verification/README)"
+                                   # planner RAN the suite on base_rev and recorded the red
+touch:
+  allow: ["src/session/**", "src/web/routes/session*", "src/web/templates/**", "tests/session/**"]
+  deny:  ["src/billing/**", "db/migrations/**", "docs/**", "slices/**"]   # deny wins
+interfaces:                        # load-bearing COPIES, verbatim, with source
+  - "func (s *Store) Get(ctx context.Context, id session.ID) (*Session, error)  // TS-4.2"
+  - "GET /login?next=<path> -> 302                                              // FS-7.1"
+overrides: []                      # e.g. [{spec:"FS-7.1", ref:"ADR-019",
+                                   #        scope:"redirect target is /login?next, not /logout"}]
+pinned:                            # sha256 of every file under verification/ at authoring time
+  - {path: verification/check.sh, sha256: "9f3c..."}
+  - {path: verification/session_expiry_test.ts, sha256: "ab12..."}
+---
+
+## 0. Resume protocol [WAKE]
+Every wake, before anything else: (1) this section, §1, §2, §4, §5; (2) notes/state.md;
+(3) `git log --oneline <base_rev>..HEAD -- docs/` — new commits touching your anchored
+sections => D-STALE; (4) `git diff --stat <base_rev>` — where you are.
+Then continue from state.md NEXT. Do NOT open the canonical docs beyond §3's anchors;
+needing more is a defect report, not a licence.
+End of every wake: update state.md, rewrite status.json, `git commit` (WIP is fine —
+the job object will not warn you).
+
+## 1. Intent [WAKE]
+After this slice: an authenticated user whose session expires and who clicks Save is
+redirected to /login?next=<original path>; after re-login the draft is intact. No 5xx.
+One behavioural consequence. (If you need "and then", the slice is mis-sized — D-SIZE.)
+
+## 2. Non-goals [WAKE]
+- Draft autosave while logged in -> M3-F08. Do not build it.
+- Admin session revocation -> M3-F09.
+- Anything under touch.deny, ever.
+
+## 3. Authority and distilled context [WAKE1]
+Pointers resolve: `grep -n "<id>" docs/<file>`, read to the next heading of the same level.
+- docs/tech-spec.md TS-4.2 (session lifecycle, expiry source of truth)
+- docs/func-spec.md FS-7.1 (login redirect)
+Distilled by the planner against the code as of base_rev; trust over re-derivation:
+- Sessions live in internal/session; Expiry is UTC. (TS-4.2)
+- Routes register only in web.NewRouter() (src/web/router.go:31). Template-based JS
+  redirects broke M2-F03; do not repeat.
+If distilled context contradicts code you can see: quote both (§5, D-GHOST).
+
+## 4. Done [WAKE]
+done <=> ALL of: (a) verification/check.sh exits 0 — it self-checks the envelope
+(changed paths ⊆ allow, ∩ deny = ∅; pinned hashes match; no `BLOCKED:` markers remain
+in the diff). Advisory here; BINDING at the merge gate, which re-runs it and diffs the
+branch against trunk. (b) report.md complete per §7. (c) status.json phase=done.
+Wake-1 duty: run check.sh BEFORE editing. It must fail with exactly the failures named
+in expected.pristine. Green-on-pristine or a different failure set => D-SELF; do not build.
+Demonstrated wrongness (you can name the failing scenario) blocks the slice;
+unease without a demonstration goes to notes_for_planner and done stands on the gate.
+
+## 5. Defects [WAKE]
+Classes: D-STALE (brief vs current docs) · D-GHOST (brief vs code) · D-SELF (brief vs
+itself/its verification) · D-ENV (unpassable: toolchain/deps) · D-SCOPE (correct fix
+needs touch.deny or a seam that does not exist) · D-SIZE (tripwire blown).
+Protocol: QUOTE BOTH SIDES with file:line (no blocker without quotes) -> write
+inbox/M3-F07-<n>.json -> mark affected tasks BLOCKED in state.md -> stub code with
+`// BLOCKED: <id>` -> continue every task not downstream of the defect.
+Never edit brief.md, verification/**, docs/**. Never silently reinterpret.
+The line: ambiguity about WHAT DONE IS is a defect; ambiguity inside the touch surface
+that you resolve is work — but declare it under report deviations.
+D-SIZE: extra work within the enumerated tasks -> finish, then report; newly discovered
+scope -> stop and block.
+
+## 6. Escape [ON-EXIT]
+result=failed only after ALL of: pristine recorded; >=1 alternative approach attempted
+(one line each in journal); §3 anchors re-read; >=1 blocker filed (unless D-ENV-total).
+Then: commit partial work in best runnable state, report result=failed + class +
+evidence, status.json phase=failed, ESCAPE message in inbox.
+
+## 7. Handback [ON-EXIT]
+status.json (one line, rewrite each wake):
+{"slice":"M3-F07","brief_version":1,"phase":"active","wake":4,"head":"a91f...","check":"red","blocked":["M3-F07/D-GHOST#1"]}
+report.md <= 40 lines: result / iterations, blockers_filed / evidence (pristine line +
+check.sh tail <= 20 lines) / what_changed <=5 (only what the diff cannot say) /
+deviations <=5 (code vs brief text; or "none") / surprises_for_next <=5 /
+notes_for_planner <=8.
+Commit subject: "M3-F07(v<brief_version>): <intent one-liner>".
+The [WAKE] set is ~800–1,200 tokens. Everything else is demand-led.
+
+Builder-local state. state.md, fixed form, hard cap 60 lines — written for the next wake, not for posterity:
+
+text
+
+WAKE: 4
+HEAD: a91f...
+DONE: middleware wired; template added; 3/5 tests green
+NEXT: fix test 4 (cookie flags — see TS-4.2 note); then check.sh
+GOTCHAS: route registration only via NewRouter
+BLOCKED: M3-F07/D-GHOST#1 — stub at src/web/routes/session.go:41
+NO_PROGRESS: 0
+journal.md is append-only evidence (pristine run, alternatives attempted) and is never re-read. A growing "learnings" file that gets re-read every wake is the classic quadratic burn; the fixed form forbids it.
+
+Inbox message (BLOCKER shown; ESCAPE adds after: — wakes, alternatives tried):
+
+JSON
+
+{"type":"BLOCKER","id":"M3-F07/D-GHOST#1","slice":"M3-F07","brief_version":1,"class":"D-GHOST",
+ "evidence":[{"claim":"brief pins this signature","where":"brief.md interfaces[0]",
+              "quote":"func (s *Store) Get(ctx context.Context, id session.ID) (*Session, error)"},
+             {"claim":"code has a different one","where":"src/session/store.go:88",
+              "quote":"func (s *Store) Get(ctx context.Context, id session.ID, opts ...GetOption) (*Session, error)"}],
+ "ask":"confirm canonical signature; bump brief if it is the code's",
+ "work_state":"tasks 1-3 done, 4-5 stubbed; check red (2 failing)"}
+The merge gate — the one thing the host does beyond waking and draining, all arithmetic: on phase=done, check out the branch; assert changed paths (vs base_rev) ⊆ allow, ∩ deny = ∅; assert brief.md and verification/** byte-identical to trunk (tamper ⇒ fail); re-run check.sh; run the trunk suite on the merge candidate; green ⇒ merge, else phase=failed + MERGE-FAIL into the queue. This is not review: it executes the planner's own pinned tests and reads exit codes. It is CI wearing the host's hat, and it is the single place a builder's claim is re-verified outside the builder. If the host genuinely may not run it, run it as cron CI on trunk — but something must re-execute the pinned tests, or every stopping condition below is a strong suggestion.
+
+4. Where tokens are deliberately spent
+expected.pristine: the planner runs the suite on base_rev once at authoring and records the red. Kills vacuous suites before they cost a slice.
+Distilled context (§3): the planner reads the relevant code once so that no builder ever reads the full specs again — the difference between ~2k tokens once and ~40k × N wakes.
+Verbatim interface pins: small, load-bearing, drift-dangerous — copied, not pointed. Everything large and stable is pointed, resolved by grep-on-anchor, read once.
+Envelope assertions inside check.sh: a few dozen lines of script that make the honest path the cheap path.
+Deviations + evidence discipline: a few lines per slice, the entire anti-silent-drift mechanism.
+The eight questions
+1. Sizing
+Apply at authoring, two minutes:
+
+One consequence. Intent fits in one sentence with one observable behavioural delta. If it needs "and then", split.
+Closed surface. You can enumerate the files now. "We'll see how it goes" is a milestone wearing a slice's name.
+Total verification exists today. You can write check.sh now, and green is equivalent to done. If acceptance requires taste ("clean", "feels right"), it is not a slice; split until each piece is script-checkable. "All tests pass" is not acceptance — it hides integration inside a slice and makes done unfalsifiable.
+Fits the window. Brief + anchored sections + distilled context ≤ ~⅓ of the builder's window, leaving room to work. If the distilled context doesn't fit, the planner hasn't distilled.
+Resumable. Mid-slice position expressible in state.md's 60 lines. If you can't imagine the note, it's too big or too meandering.
+Tells of a planning failure in disguise: chained intentions; a touch surface that is a region ("the auth module") rather than a set; whole-suite green as the check; a slice whose only check is "it compiles". And the opposite failure: micro-slices — a slice with no observable behaviour can't have total verification, and per-slice overhead dominates. The floor is one observable behaviour, not one function.
+
+You do not need this rule to be prophetic, because D-SIZE tripwires detect mis-sizing at runtime (2× lines, cap in sight with red acceptance). The rule's job is to make D-SIZE rare; blocker-and-escape rate per milestone is your measurement of whether it is.
+
+2. Iteration cost
+In the naive arrangement the dominant driver is re-orientation: re-reading the three docs, re-reading its own accumulating notes, re-deriving code understanding — paid N times — plus unbounded verifier output. It is not only money: salience shifts between wakes, so the model re-decides settled things, which is precisely why Ralph loops oscillate.
+
+What I did, in order of leverage: the [WAKE]/[WAKE1] split (canonical docs read once per slice, anchored sections only; §0 forbids reopening them — needing more is a defect report, not a licence); fixed-form state ≤ 60 lines (builder memory does not grow with N; the journal is never re-read); diff-first resume (one git log, one git diff --stat, then work); verifier output contract (≤ 50 lines on red, so failure loops don't eat the window); distilled context and interface pins, which delete the most expensive reads outright. Wake 2's mandatory read set is under ~1.5k tokens before any work; everything else is demand-led.
+
+Note the causality: the second iteration is cheap because the first was disciplined, and the discipline is prescribed — wake 1 must write state.md in the fixed form, must commit WIP (so wake 2 re-orients from a diff, not from re-reading files), must record the pristine line (so wake 2 doesn't re-derive it). In my arrangement the dominant residual burn is genuine work plus red-green cycles — the burn you want — and the pristine pin plus structured failure output exist to shorten those cycles.
+
+3. The stopping condition
+Done is a state transition, not an utterance: phase=done ∧ check.sh = 0 ∧ report complete. The builder's own envelope checks make honesty cheap; the binding verification is the merge gate. An untrusted builder's "done" is a claim that costs nothing to make and is worthless unless a script agrees. The reviewer you refused to build is replaced by a test you refuse to skip.
+
+"Green but wrong" is answered in three layers, all built at brief time: (i) in-slice — the suite is adversarially authored and pinned red-first; a suite that is green before any code exists is a D-SELF defect, so vacuous passes are caught before work starts; (ii) inter-slice — briefs copy the interfaces they depend on verbatim, and the next slice's check exercises them, so wrongness surfaces as someone else's red, not as an opinion; (iii) trunk — nothing merges without the trunk suite, so a lying slice is stranded on its branch with a MERGE-FAIL naming it. When the builder itself believes green-but-wrong: demonstrated wrongness blocks; felt wrongness notes. A rule, not a vibe — "I'm uneasy" must not dead-end a slice, and "here is a counterexample" must not be ignorable.
+
+4. The brief is wrong
+Protocol §5, and the two guards that make it work. First, the evidence rule: no blocker without both conflicting texts quoted at file:line — this is the check against a model over-eager to declare defects. Second, the continuation rule: unaffected tasks proceed; only affected tasks stub to // BLOCKED: <id> and pause. The slice cannot reach done with open blockers (the marker rule inside check.sh enforces it mechanically), so defects can't be laundered into green.
+
+The line between work and drift: ambiguity about what done is is a defect; ambiguity inside the touch surface that the builder resolves is work — but it must be declared under deviations. Silent reinterpretation is never available as a move: the builder's only authority is citation, and the only resolution path is a brief_version bump that is itself visible in git.
+
+Cost: a bounded partial iteration (the wake isn't wasted), queue latency (schema'd, evidence-quoted blockers triage in minutes, batched — a human reads a daily queue, not a per-slice interrupt), one brief edit, and a cheap resume because the workspace stays warm. The loop is never dead-ended: phase=blocked stops waking, the planner bumps the version, the next wake resumes for pennies. And the blocker stream, classified D-STALE…D-SIZE, is planning-quality telemetry produced by a channel you had to build anyway.
+
+5. The specification is overruled
+The change lives in the canonical document, as a commit. There is no addendum file, no changelog layer, no overrides register — any second location is a place where document and change can disagree, so there is exactly one. Rationale goes in docs/decisions/ADR-*.md, linked from the section it explains; ADRs are context, never authority, and if an ADR and the doc disagree, the doc wins (that disagreement is D-STALE bait).
+
+Builders do not trust freshness; they check it: every wake runs one command, git log <base_rev>..HEAD -- docs/. New commits touching the slice's anchored sections ⇒ D-STALE, affected tasks pause; anything else ⇒ proceed and note. So a human changing their mind is: edit the doc, commit; every in-flight slice self-detects on its next wake, and the resulting blockers tell the planner which briefs need bumping. Stale authority is unreadable by a compliant builder and unexploitable by a non-compliant one, because the acceptance tests are pinned and the gate is binding.
+
+Slice-local exceptions remain representable, but only upward: the brief's overrides: field, scoped to a stated clause and referencing the deciding ADR, written by the planner at authoring or bump — never by the builder. Lifecycle rule: an override that survives its milestone is an unpaid doc edit; absorb it at milestone close or it will rot.
+
+6. The escape hatch
+Three triggers. Two involuntary and outside the builder: the driver's wake cap (3× the brief's expected upper bound, floor 8) and the per-wake job-object timeout; plus a host stuck-detector — three consecutive wakes with identical head ⇒ phase=failed. One voluntary and gated by a floor of effort (§6): pristine recorded, at least one alternative attempted and journalled, anchors actually re-read, at least one blocker filed — except total environment failure. Escape is the claim "impossible or mis-scoped", and it must be the last resort, not the first.
+
+Mechanics: commit partial work in its best runnable state, report.md with result=failed + class + evidence, phase=failed, ESCAPE message. Who finds out, mechanically: the driver stops waking; the drained inbox puts it in the planner queue; and the system self-surfaces the gap — any dependent slice hits its verbatim interface pin at wake 1, goes red, and queues its own blocker. Nobody discovers by vigilance; absence is loud because downstream briefs pin what should exist.
+
+7. The handback
+The deliverable is the diff on the slice branch — code and tests, WIP-committed every wake. Around it, the minimum: status.json (one line; reader: driver and gate), report.md ≤ 40 lines with six fields (readers: planner-at-next-brief, planner-at-milestone, gate), and the commit subject convention. Each field has a named consumer: evidence for triage and audit; what_changed for decisions the diff cannot speak (choices at unpinned seams); deviations — the anti-drift record, declared not silent; surprises_for_next, which the planner harvests into the next brief's distilled section — that harvest is the loop that makes briefs improve instead of accumulating folklore; notes_for_planner for disagreements that are not defects.
+
+Cut on principle — every field pays rent or it doesn't ship — self-scores, confidence percentages, coverage dumps, restated diffs, test inventories, narrative. report.md merges to trunk under slices/ as the durable record; state.md and journal.md are worktree-local and die with the slice. If the planner doesn't harvest, the report is waste — harvesting is a planner obligation, not the builder's hope.
+
+8. What I would refuse
+In your framing:
+
+"Tells it everything it needs and nothing it does not" is transmission-thinking. The highest-value sections of my brief — non-goals, defect classes, tripwires, the pristine pin — contain almost no "information the builder needs" in the transfer sense. The artefact's product is falsifiability, not knowledge. Build the contract, not the textbook.
+"Until it declares the slice done." Declarations are words. Loop exit must be a state transition bound to a script; nothing in this system should end because a language model said a sentence.
+All three documents are not the builder's read path. Vision never is. If a slice's intent needs the vision document, the plan is broken; intent is distilled at brief time. FS and TS, by anchor only. Keeping them canonical and in place is fine; they need anchors and an ADR folder, which is a retrofit, not a rewrite.
+"Iteration count is high and unpredictable, which is the entire problem." Unpredictable is fine; high is a symptom — of bad re-orientation or bad slicing — and you should measure it (blocker/escape rate per milestone, re-orientation cost) rather than fight N directly. If those don't fall, the problem was never the channel.
+"The builder cannot be trusted" — right conclusion, slightly wrong threat model. The danger is not sabotage; it is plausible self-convincing: it will satisfy the letter of a weak check and believe it did well. Hence adversarial test authoring, hash pins, and one binding gate. Never ask a model to self-certify in prose what a hash can decide.
+Commonly proposed, harmful here: persona and pep-talk preamble (burned every wake, dilutes the operative constraints, zero measured effect); copying spec sections into briefs "for convenience" (manufactures exactly the doc-versus-change disagreement Q5 exists to prevent — copy only small, load-bearing things); self-grading and confidence thresholds (they will be gamed by the grader's mood); an LLM reviewer between slices (rebuilds the reviewer you banned, with a confident voice and no accountability — and differential double-execution adds nothing here, since both runs face the same pinned suite); whole-suite green as acceptance; a free-text chat channel to the host (chat invites conversation; a schema'd blocker with quotes terminates); rich builder-written telemetry (you already ruled it out, and you were right — an untrusted writer on the event log is a forge; the inbox is the mediation).
+
+Where humans remain in my design, stated plainly rather than hidden: blocker triage (batched), report harvest at brief-authoring, an optional milestone diff-read. That is per-defect and per-milestone, not per-slice — I take your constraint as satisfied — but a design that claims zero human attention anywhere is lying about where the drift went. This is the floor, and the instrumentation to know whether even this is too much or too little comes free from the channel above.

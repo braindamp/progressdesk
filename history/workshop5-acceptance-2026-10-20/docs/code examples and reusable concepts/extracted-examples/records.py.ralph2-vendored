@@ -1,0 +1,352 @@
+"""Frozen core records: JSON round-trip and validation without external schema libs."""
+
+from __future__ import annotations
+
+import dataclasses
+import functools
+import json
+from dataclasses import dataclass, field, fields
+from pathlib import Path
+from typing import Any, ClassVar, TypeVar
+
+STATUS = frozenset({"ready", "running", "evaluating", "accepted", "parked", "failed"})
+EXIT_CLASS = frozenset({"ok", "blocked", "env_failure", "transient", "crash", "timeout"})
+CHECK_TYPES = frozenset({"cmd", "test", "file", "http"})
+RISK_TIERS = frozenset({"low", "med", "high"})
+VERDICT_KINDS = frozenset({"reviewer", "director", "audit"})
+DECISIONS = frozenset({"accept", "rework", "abstain", "unavailable"})
+RECEIPT_KINDS = frozenset({"test", "build", "capture", "gate0"})
+_REASON_PATH = Path(__file__).with_name("reason_codes.json")
+
+
+class RecordError(ValueError):
+    """Structural or semantic record violation."""
+
+
+@functools.lru_cache(maxsize=1)
+def reason_codes() -> dict[str, str]:
+    """Registry {code: description} loaded from reason_codes.json."""
+    data = json.loads(_REASON_PATH.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise RecordError("reason_codes.json must be a JSON object")
+    return {str(k): str(v) for k, v in data.items()}
+
+
+def _enum(cls: str, name: str, val: Any, allowed: frozenset[str]) -> None:
+    if val not in allowed:
+        raise RecordError(f"{cls}.{name}: {val!r} not in {sorted(allowed)}")
+
+
+def _typed(cls: str, name: str, val: Any, typ: type | tuple[type, ...], *, optional: bool = False) -> None:
+    if val is None and optional:
+        return
+    if isinstance(val, bool) and typ is not bool:
+        raise RecordError(f"{cls}.{name}: bool where {typ} expected")
+    if not isinstance(val, typ):
+        raise RecordError(f"{cls}.{name}: expected {typ}, got {type(val).__name__}")
+
+
+def _str_list(cls: str, name: str, val: Any) -> None:
+    if not isinstance(val, list) or not all(isinstance(v, str) for v in val):
+        raise RecordError(f"{cls}.{name}: expected list[str]")
+
+
+def _has_default(f: dataclasses.Field[Any]) -> bool:
+    return f.default is not dataclasses.MISSING or f.default_factory is not dataclasses.MISSING
+
+
+T = TypeVar("T", bound="Record")
+
+
+@dataclass(frozen=True)
+class Record:
+    """Base record: to_dict/to_json/from_dict/from_json/replace. Subclasses implement validate()."""
+
+    _nested: ClassVar[dict[str, type[Record]]] = {}
+    _lists: ClassVar[dict[str, type[Record]]] = {}
+
+    def validate(self) -> None:
+        raise NotImplementedError
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+
+    def replace(self: T, **changes: Any) -> T:
+        rec = dataclasses.replace(self, **changes)
+        rec.validate()
+        return rec
+
+    @classmethod
+    def from_json(cls: type[T], text: str) -> T:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RecordError(f"{cls.__name__}: invalid JSON: {exc}") from exc
+        return cls.from_dict(data)
+
+    @classmethod
+    def from_dict(cls: type[T], data: Any) -> T:
+        if not isinstance(data, dict):
+            raise RecordError(f"{cls.__name__}: expected object")
+        kwargs: dict[str, Any] = {}
+        for f in fields(cls):
+            if f.name not in data:
+                if _has_default(f):
+                    continue
+                raise RecordError(f"{cls.__name__}: missing field {f.name!r}")
+            val = data[f.name]
+            if f.name in cls._nested and val is not None:
+                val = cls._nested[f.name].from_dict(val)
+            elif f.name in cls._lists:
+                if not isinstance(val, list):
+                    raise RecordError(f"{cls.__name__}.{f.name}: expected list")
+                val = [cls._lists[f.name].from_dict(v) for v in val]
+            kwargs[f.name] = val
+        try:
+            rec = cls(**kwargs)
+        except TypeError as exc:
+            raise RecordError(f"{cls.__name__}: {exc}") from exc
+        rec.validate()
+        return rec
+
+
+@dataclass(frozen=True)
+class Check(Record):
+    type: str
+    arg: str
+    expect: str
+
+    def validate(self) -> None:
+        _enum("Check", "type", self.type, CHECK_TYPES)
+        _typed("Check", "arg", self.arg, str)
+        _typed("Check", "expect", self.expect, str)
+
+
+@dataclass(frozen=True)
+class Criterion(Record):
+    id: str
+    text: str
+    check: Check
+    _nested: ClassVar[dict[str, type[Record]]] = {"check": Check}
+
+    def validate(self) -> None:
+        _typed("Criterion", "id", self.id, str)
+        _typed("Criterion", "text", self.text, str)
+        _typed("Criterion", "check", self.check, Check)
+        self.check.validate()
+
+
+@dataclass(frozen=True)
+class Goal(Record):
+    id: str
+    version: int
+    text: str
+    criteria: list[Criterion]
+    status: str
+    _lists: ClassVar[dict[str, type[Record]]] = {"criteria": Criterion}
+
+    def validate(self) -> None:
+        _typed("Goal", "id", self.id, str)
+        _typed("Goal", "version", self.version, int)
+        _typed("Goal", "text", self.text, str)
+        _typed("Goal", "criteria", self.criteria, list)
+        for c in self.criteria:
+            c.validate()
+        _enum("Goal", "status", self.status, STATUS)
+
+
+def _validate_assignment(a: Any) -> None:
+    if not isinstance(a, dict):
+        raise RecordError("Slice.assignment: expected object")
+    _typed("Slice.assignment", "producer_class", a.get("producer_class"), str)
+    _typed("Slice.assignment", "executor", a.get("executor"), str)
+    b = a.get("budget")
+    if not isinstance(b, dict):
+        raise RecordError("Slice.assignment.budget: expected object")
+    _typed("Slice.assignment.budget", "tokens_out", b.get("tokens_out"), int)
+    _typed("Slice.assignment.budget", "iterations", b.get("iterations"), int)
+
+
+def _validate_evaluation(e: Any) -> None:
+    if not isinstance(e, dict):
+        raise RecordError("Slice.evaluation: expected object")
+    _typed("Slice.evaluation", "tier", e.get("tier"), str)
+    _str_list("Slice.evaluation", "reviewers", e.get("reviewers"))
+
+
+@dataclass(frozen=True)
+class Slice(Record):
+    id: str
+    goal_id: str
+    title: str
+    depends_on: list[str]
+    scope_globs: list[str]
+    criteria: list[Criterion]
+    status: str
+    reason_code: str | None
+    risk_tier: str | None
+    assignment: dict[str, Any]
+    evaluation: dict[str, Any]
+    rework_count: int = 0
+    _lists: ClassVar[dict[str, type[Record]]] = {"criteria": Criterion}
+
+    def validate(self) -> None:
+        c = "Slice"
+        for n in ("id", "goal_id", "title"):
+            _typed(c, n, getattr(self, n), str)
+        _str_list(c, "depends_on", self.depends_on)
+        _str_list(c, "scope_globs", self.scope_globs)
+        _typed(c, "criteria", self.criteria, list)
+        for cr in self.criteria:
+            cr.validate()
+        _enum(c, "status", self.status, STATUS)
+        _typed(c, "reason_code", self.reason_code, str, optional=True)
+        if self.reason_code is not None and self.reason_code not in reason_codes():
+            raise RecordError(f"Slice.reason_code: unknown {self.reason_code!r}")
+        if self.risk_tier is not None:
+            _enum(c, "risk_tier", self.risk_tier, RISK_TIERS)
+        _typed(c, "rework_count", self.rework_count, int)
+        _validate_assignment(self.assignment)
+        _validate_evaluation(self.evaluation)
+
+    @property
+    def budget(self) -> dict[str, int]:
+        return dict(self.assignment["budget"])
+
+
+@dataclass(frozen=True)
+class UsageEvent(Record):
+    ts: str
+    run_id: str
+    slice_id: str
+    role: str
+    executor: str
+    model: str
+    provider: str
+    iteration: int
+    attempt: int
+    tokens_in: int
+    tokens_in_cached: int
+    tokens_out: int
+    wall_ms: int
+    exit_class: str
+    verdict: str | None
+    cost_est: float
+    free_window: bool
+    estimated: bool
+    prefix_sha: str | None
+
+    def validate(self) -> None:
+        c = "UsageEvent"
+        for n in ("ts", "run_id", "slice_id", "role", "executor", "model", "provider"):
+            _typed(c, n, getattr(self, n), str)
+        for n in ("iteration", "attempt", "tokens_in", "tokens_in_cached", "tokens_out", "wall_ms"):
+            _typed(c, n, getattr(self, n), int)
+        _enum(c, "exit_class", self.exit_class, EXIT_CLASS)
+        _typed(c, "verdict", self.verdict, str, optional=True)
+        _typed(c, "cost_est", self.cost_est, (int, float))
+        _typed(c, "free_window", self.free_window, bool)
+        _typed(c, "estimated", self.estimated, bool)
+        _typed(c, "prefix_sha", self.prefix_sha, str, optional=True)
+
+
+@dataclass(frozen=True)
+class Verdict(Record):
+    id: str
+    slice_id: str
+    kind: str
+    role: str
+    model: str
+    decision: str
+    findings: list[str]
+    ts: str
+
+    def validate(self) -> None:
+        c = "Verdict"
+        for n in ("id", "slice_id", "role", "model", "ts"):
+            _typed(c, n, getattr(self, n), str)
+        _enum(c, "kind", self.kind, VERDICT_KINDS)
+        _enum(c, "decision", self.decision, DECISIONS)
+        _str_list(c, "findings", self.findings)
+        if self.decision == "unavailable" and any(
+            f.strip().lower().startswith("accept") for f in self.findings
+        ):
+            raise RecordError("Verdict: unavailable cannot carry accept semantics")
+
+    def is_accept(self) -> bool:
+        return self.decision == "accept"
+
+    def is_gating(self) -> bool:
+        return self.decision in ("accept", "rework", "unavailable")
+
+
+@dataclass(frozen=True)
+class Port(Record):
+    id: str
+    slice_id: str | None
+    kind: str
+    question: str
+    options: list[str]
+    recommendation: str
+    opened_ts: str
+    answered_ts: str | None = None
+    answer: str | None = None
+
+    def validate(self) -> None:
+        c = "Port"
+        for n in ("id", "kind", "question", "recommendation", "opened_ts"):
+            _typed(c, n, getattr(self, n), str)
+        _typed(c, "slice_id", self.slice_id, str, optional=True)
+        _str_list(c, "options", self.options)
+        _typed(c, "answered_ts", self.answered_ts, str, optional=True)
+        _typed(c, "answer", self.answer, str, optional=True)
+
+
+@dataclass(frozen=True)
+class EvidenceReceipt(Record):
+    id: str
+    slice_id: str
+    kind: str
+    artifact_path: str
+    sha256: str
+    size: int
+    ts: str
+    ok: bool
+
+    def validate(self) -> None:
+        c = "EvidenceReceipt"
+        for n in ("id", "slice_id", "artifact_path", "sha256", "ts"):
+            _typed(c, n, getattr(self, n), str)
+        _enum(c, "kind", self.kind, RECEIPT_KINDS)
+        _typed(c, "size", self.size, int)
+        _typed(c, "ok", self.ok, bool)
+
+
+KINDS: dict[str, type[Record]] = {
+    "goal": Goal,
+    "criterion": Criterion,
+    "check": Check,
+    "slice": Slice,
+    "usageevent": UsageEvent,
+    "verdict": Verdict,
+    "port": Port,
+    "evidencereceipt": EvidenceReceipt,
+}
+SCHEMA_KEYS = ("Goal", "Slice", "UsageEvent", "Verdict", "Port", "EvidenceReceipt", "Criterion")
+
+
+def kind_of(rec: Record) -> str:
+    return type(rec).__name__.lower()
+
+
+def schema() -> dict[str, dict[str, str]]:
+    """7 top-level keys -> {field: type-string}. Used by `ralph2 records schema`."""
+    by_name = {cls.__name__: cls for cls in KINDS.values()}
+    return {k: {f.name: str(f.type) for f in fields(by_name[k])} for k in SCHEMA_KEYS}
+
+
+def _unused() -> None:  # keeps `field` import meaningful for subclasses extending defaults
+    _ = field

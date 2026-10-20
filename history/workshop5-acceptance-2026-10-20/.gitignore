@@ -1,0 +1,8 @@
+lessons/
+events/
+projects/
+store/
+scratch/
+__pycache__/
+*.pyc
+artifacts/

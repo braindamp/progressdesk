@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProgressDesk — GO board</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --text:#e6edf3;
+          --dim:#8b949e; --go:#238636; --go-hover:#2ea043; --amber:#d29922; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:32px; background:var(--bg); color:var(--text);
+         font:14px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap { max-width:900px; margin:0 auto; }
+  header { display:flex; align-items:center; justify-content:space-between;
+           gap:24px; margin-bottom:32px; flex-wrap:wrap; }
+  h1 { font-size:19px; margin:0; font-weight:600; }
+  .sub { color:var(--dim); font-size:13px; margin-top:2px; }
+  .toggle { display:flex; align-items:center; gap:9px; cursor:pointer;
+            user-select:none; font-size:13px; color:var(--dim); }
+  .toggle input { accent-color:var(--go); width:15px; height:15px; cursor:pointer; }
+  .project { margin-bottom:28px; }
+  .project > h2 { font-size:13px; font-weight:600; color:var(--dim);
+                  text-transform:uppercase; letter-spacing:.06em; margin:0 0 10px; }
+  .ms { background:var(--card); border:1px solid var(--line); border-radius:8px;
+        padding:14px 16px; margin-bottom:8px; }
+  .row { display:flex; align-items:center; gap:12px; }
+  .name { font-weight:600; }
+  .pill { font-size:11px; padding:2px 9px; border-radius:99px; border:1px solid var(--line);
+          color:var(--dim); white-space:nowrap; }
+  .pill.ready { color:var(--amber); border-color:var(--amber); }
+  .pill.done { color:var(--go); border-color:var(--go); }
+  .goal { color:var(--dim); margin-top:6px; }
+  .exit { margin:10px 0 0; padding-left:18px; color:var(--dim); font-size:13px; }
+  .exit li { margin:2px 0; }
+  button { margin-left:auto; background:var(--go); color:#fff; border:0;
+           border-radius:6px; padding:7px 15px; font-size:13px; font-weight:600;
+           cursor:pointer; white-space:nowrap; }
+  button:hover { background:var(--go-hover); }
+  button[disabled] { background:var(--line); color:var(--dim); cursor:default; }
+  .reason { margin-top:10px; display:flex; gap:8px; }
+  .reason input { flex:1; background:var(--bg); border:1px solid var(--line);
+                  border-radius:6px; color:var(--text); padding:7px 10px;
+                  font:inherit; font-size:13px; }
+  .empty { color:var(--dim); padding:20px 0; }
+  .declare { margin-top:36px; padding:18px; background:var(--card);
+             border:1px solid var(--line); border-radius:8px; }
+  .declare h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+                color:var(--dim); margin:0 0 12px; font-weight:600; }
+  .declare label { display:block; font-size:12px; color:var(--dim); margin-bottom:10px; }
+  .declare input, .declare textarea { display:block; width:100%; margin-top:4px;
+    background:var(--bg); border:1px solid var(--line); border-radius:6px;
+    color:var(--text); padding:7px 10px; font:inherit; font-size:13px; }
+  .declare textarea { resize:vertical; }
+  #declMsg { margin-left:12px; font-size:12px; color:var(--dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>GO board</h1>
+      <div class="sub">A milestone is not dispatchable until you say so.</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="auto"> auto-approve
+    </label>
+  </header>
+  <div id="out"><div class="empty">loading…</div></div>
+
+  <section class="declare" id="declare">
+    <h2>Declare a milestone and its first task</h2>
+    <label>Milestone name<input id="mName" value="M1 acceptance gate" placeholder=></label>
+    <label>Goal<input id="mGoal" value="A milestone gate decides pass/fail on a declared standard against a host-frozen deliverable." placeholder=></label>
+    <label>Exit criteria<input id="mExit" value="A dispatched round is bound to a task
+Every round closes with a host-computed candidate hash
+A builder&#x27;s report carries an identity nobody could forge" placeholder=></label>
+    <label>Task title<input id="tTitle" value="Build-loop prerequisites" placeholder=></label>
+    <label>Outcome<textarea id="tOutcome" rows="2" placeholder="observable result">A dispatched round is bound to a task, and every round ends with a record the host computed itself.
+
+When a builder reports done, the log carries a task identity nobody could have forged, and a frozen
+hash of what was actually produced.</textarea></label>
+    <label>Scope<textarea id="tScope" rows="3" placeholder="files you may change; what you may not">**You may change:** `src/progressdesk/events.py` · `src/progressdesk/loop.py` ·
+`src/progressdesk/runtime.py` · `src/progressdesk/desk.py`
+
+**You may not change:** anything under `src/progressdesk/acceptance/` · `milestones.py` ·
+`store.py` · `report.py` · any role brief.
+
+**Already correct in this repo — read it, use it, do not rewrite it:**
+
+- Reports are already per-round. `runtime.drain_reports()` and `runtime._round_dirs()` exist, and a
+  report is attributed to the round directory it was found in — never by what its body claims. **You
+  do not add a run id to anything.**
+- `_digests()` already turns bytes into `{name: &quot;sha256:...&quot;}` against the content-addressed
+  store, and `DispatchOutcome` already carries `.files`. You are hashing a map that exists. You are
+  not building collection or storage.
+- `DispatchOutcome.has_candidate` already means &quot;this round produced an artifact.&quot; Use it; do not
+  rename it.
+
+**Your decision:** the shape of the hash helper · where the close is emitted in the dispatch flow ·
+helper names in the two files you edit.</textarea></label>
+    <label>Interfaces<textarea id="tIface" rows="4" placeholder="what you emit, who reads it">You are building the substrate every later slice reads. Four events, three readers.
+
+| event | payload you must provide | who reads it |
+|---|---|---|
+| `task.declared` | `taskId`, `milestoneId`, `spec` | populates a milestone&#x27;s `required_task_ids` |
+| `round.dispatched` | `taskId`, `milestoneId` | the delivery fold — this is the run→task binding |
+| `round.closed` | `outcome`, `candidateHash`, `files`, `taskId`, `milestoneId` | the delivery fold, and the fixture assembler |
+| `builder.reported` | `taskId`, added to the existing payload | the delivery fold |
+
+**`round.closed.files` is the most load-bearing field you produce.** It is a `path → digest` map,
+and the fixture assembler pulls each artifact out of the content-addressed store through it. Without
+it, nothing can be assembled and nothing can be judged.
+
+**`outcome` takes these values and no others:** `success` · `failure` · `killed` · `timed_out` ·
+`cancelled`. Readers branch on exactly these.
+
+**The task id is stamped by the host, from the dispatch record — never from the report body.** A
+report naming a different task than the one it was dispatched against is an anomaly and counts as
+nothing. This applies to both identities: the run comes from the round directory, the task from the
+dispatch.
+
+**`candidateHash` is computed by the control host from broker evidence for the candidate artifacts
+at close time — never reported by the builder.** `killed` and `timed_out` carry
+`candidateHash: null`.
+
+**Do not add fields that nothing above reads.** If you believe you need one, you are outside this
+slice.</textarea></label>
+    <label>Acceptance<textarea id="tAcc" rows="3" placeholder="one check per line">task_declared_event_exists
+dispatch_carries_task_and_milestone
+round_closed_outcome_and_host_candidate_hash
+killed_close_carries_null_hash
+builder_filed_report_reaches_the_log_with_task_id
+report_task_id_stamped_from_dispatch_not_worker
+report_task_contradiction_rejected
+report_run_id_comes_from_the_round_directory
+report_asserting_a_fake_run_id_is_still_attributed_to_its_directory</textarea></label>
+    <button id="doDeclare">declare</button>
+    <span id="declMsg"></span>
+  </section>
+</div>
+<script>
+const mName=document.getElementById("mName"),mGoal=document.getElementById("mGoal"),
+      mExit=document.getElementById("mExit"),tTitle=document.getElementById("tTitle"),
+      tOutcome=document.getElementById("tOutcome"),tScope=document.getElementById("tScope"),
+      tIface=document.getElementById("tIface"),tAcc=document.getElementById("tAcc");
+const autoIssued = new Set();   // this session only; the effect is logged, not the toggle
+
+async function load() {
+  const r = await fetch("/api/state");
+  const s = await r.json();
+  render(s);
+  if (document.getElementById("auto").checked) autoApprove(s);
+}
+
+function render(s) {
+  const out = document.getElementById("out");
+  if (!s.projects.length) { out.innerHTML = '<div class="empty">no projects yet</div>'; return; }
+  out.innerHTML = s.projects.map(p => {
+    const ms = s.milestones[p.id] || [];
+    return `<div class="project"><h2>${esc(p.name || p.id)}</h2>` +
+      (ms.length ? ms.map(card).join("") : '<div class="empty">no milestones</div>') +
+      `</div>`;
+  }).join("");
+}
+
+function card(m) {
+  const open = document.getElementById("open") === m.id;
+  const done = m.status === "done" || m.status === "ready";
+  const head = `<div class="row">
+      <span class="name">${esc(m.name || m.id)}</span>
+      <span class="pill ${esc(m.status)}">${esc(m.status)}</span>
+      <button data-go="${m.id}" ${done ? "disabled" : ""}>${open ? "cancel" : "GO"}</button>
+    </div>` +
+    (m.goal ? `<div class="goal">${esc(m.goal)}</div>` : "") +
+    (open && m.exit.length
+      ? `<ul class="exit">${m.exit.map(e => `<li>${esc(e)}</li>`).join("")}</ul>` : "");
+  if (!open) return `<div class="ms" id="${m.id}">${head}</div>`;
+  return `<div class="ms" id="${m.id}">${head}
+    <div class="reason">
+      <input id="why-${m.id}" placeholder="what you are approving (optional)">
+      <button data-confirm="${m.id}">confirm</button>
+    </div></div>`;
+}
+
+document.addEventListener("click", async e => {
+  const go = e.target.dataset.go;
+  if (go) { document.getElementById("open") = go; return load(); }
+  const c = e.target.dataset.confirm;
+  if (c) {
+    await fetch("/api/go", { method: "POST",
+      body: JSON.stringify({ milestoneId: c,
+        reason: document.getElementById("why-" + c).value }) });
+    document.getElementById("open") = null;
+  }
+});
+
+async function autoApprove(s) {
+  for (const p of s.projects) for (const m of (s.milestones[p.id] || [])) {
+    if (m.status !== "draft" || autoIssued.has(m.id)) continue;
+    autoIssued.add(m.id);
+    await fetch("/api/go", { method: "POST",
+      body: JSON.stringify({ milestoneId: m.id, issuedBy: "auto-approve" }) });
+  }
+}
+
+const lines = v => v.split(String.fromCharCode(10)).map(s => s.trim()).filter(Boolean);
+document.getElementById("doDeclare").onclick = async () => {
+  const st = await (await fetch("/api/state")).json();
+  const pid = st.projects[0] && st.projects[0].id;
+  if (!pid) { document.getElementById("declMsg").textContent = "no project yet"; return; }
+  const r = await (await fetch("/api/declare", { method: "POST", body: JSON.stringify({
+    projectId: pid,
+    milestone: { name: mName.value, goal: mGoal.value, exit: lines(mExit.value) },
+    task: { title: tTitle.value, outcome: tOutcome.value, scope: tScope.value,
+            interfaces: tIface.value, acceptance: lines(tAcc.value) } })})).json();
+  document.getElementById("declMsg").textContent = r.ok ? "declared" : (r.error || "failed");
+  load();
+};
+document.getElementById("auto").onchange = () => { autoIssued.clear(); load(); };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+load();
+setInterval(load, 2000);
+</script>
+</body>
+</html>

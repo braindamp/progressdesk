@@ -1,0 +1,71 @@
+commit 542f57eee4d6c8befbf735eb443726d62e9019a0
+Author:     workhop <geluid@gmail.com>
+AuthorDate: Sun Oct 4 00:51:56 2026 +0200
+Commit:     workhop <geluid@gmail.com>
+CommitDate: Sun Oct 4 00:51:56 2026 +0200
+
+    feat(board): a dispatch door, so a round can be started from the interface
+    
+    The board declares a milestone, issues GO and runs a gate, but nothing on it could
+    run a round, so there was no way to start S1 through the surface the owner uses.
+    This calls round.dispatch -- the same verb the CLI and the HTTP transport call --
+    so it is a door onto the one entry point, not a second one.
+    
+    The task row reaches its project through milestone, and outcome lands in
+    narrative; both were guesses until the schema said otherwise.
+
+diff --git a/src/progressdesk/go_board.py b/src/progressdesk/go_board.py
+index c6b0fe0..c6caea7 100644
+--- a/src/progressdesk/go_board.py
++++ b/src/progressdesk/go_board.py
+@@ -254,6 +254,34 @@ class Board:
+                 return etype.split(".", 1)[1]
+         return ""
+ 
++    def dispatch_task(self, project_id: str, task_id: str,
++                      tools: tuple[str, ...] = ()) -> dict[str, Any]:
++        """Run one round for one declared task, through the ordinary verb.
++
++        The board declares and gates but never runs a round, so S1 had no door.
++        This is not a second way in: it calls round.dispatch, the same verb the
++        CLI and the HTTP transport call. Tools default to empty because that is
++        what the verb means by empty -- no tools at all, not every tool.
++        """
++        from .runtime import route
++
++        row = next((r for r in fetch_all(self.conn, "task")
++                    if r["id"] == task_id
++                    and r["milestone_id"] in {
++                        m["id"] for m in fetch_all(self.conn, "milestone", project_id=project_id)
++                    }), None)
++        if row is None:
++            return {"ok": False, "error": "no such task in this project"}
++        outcome = route(self.runtime, "round.dispatch", {
++            "project_id": project_id,
++            "task_id": task_id,
++            "milestone_id": row["milestone_id"],
++            "slice": row["narrative"] or row["title"],
++            "tools": list(tools),
++        })
++        self.sync()
++        return {"ok": True, "outcome": outcome}
++
+     def issue_go(self, milestone_id: str, issued_by: str = "human",
+                  reason: str = "") -> dict[str, Any]:
+         """Append, then project."""
+@@ -306,6 +334,15 @@ def _handler(board: Board):
+                     body.get("task") or {})).encode(),
+                     "application/json")
+                 return
++            if path == "/api/dispatch":
++                length = int(self.headers.get("Content-Length", 0))
++                body = json.loads(self.rfile.read(length) or b"{}")
++                self._send(200, json.dumps(board.dispatch_task(
++                    str(body.get("projectId", "")),
++                    str(body.get("taskId", "")),
++                    tools=tuple(body.get("tools") or ())), default=str).encode(),
++                    "application/json")
++                return
+             if path == "/api/gate":
+                 length = int(self.headers.get("Content-Length", 0))
+                 body = json.loads(self.rfile.read(length) or b"{}")

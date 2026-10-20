@@ -1,0 +1,27 @@
+{
+  "$id": "https://progressdesk2.local/schemas/project-config.schema.json",
+  "title": "ProgressDesk2 Project Configuration",
+  "type": "object",
+  "required": ["name", "phases", "validation"],
+  "properties": {
+    "name": {"type": "string"},
+    "phasePattern": {"type": "string"},
+    "phases": {
+      "type": "object",
+      "required": ["order"],
+      "properties": {
+        "order": {"type": "array", "items": {"type": "string"}},
+        "checklist": {"type": "string"}
+      }
+    },
+    "validation": {
+      "type": "object",
+      "required": ["test"],
+      "additionalProperties": {
+        "type": "object",
+        "required": ["cmd"],
+        "properties": {"cmd": {"type": "string"}}
+      }
+    }
+  }
+}

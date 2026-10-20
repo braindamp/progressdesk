@@ -1,0 +1,257 @@
+"""qa.py - Q&A sessions that derive machine-checkable milestone plans (M4a).
+
+The G2 "converses to a plan" half of VISP step 2: the owner drives ONE
+question per session, the LLM (via the backend) answers, and from those
+answers the session DERIVES a milestone plan that is machine-checkable -
+its entries carry the same ``checks`` command strings the M1b gate
+contract already proves, so a derived plan is immediately runnable by
+``progressdesk2 check``.
+
+Distinct from chat.py (M3d): chat.py is free-form owner<->LLM chat whose
+value is the persisted transcript; qa.py's value is the DERIVED PLAN
+written into state. Both stores live outside the integrity-hashed
+progressdesk_state.json (append-only operational data, the M1c lesson).
+
+Session store contract: per-session files under
+``<root>/state/qa/<sessionId>.json``, camelCase fields, one file per
+session. A session is::
+
+    {"sessionId": str, "createdAt": str, "updatedAt": str,
+     "question": str, "answers": [str], "askedTs": str,
+     "plan": [{"milestoneId": str, "title": str, "checks": [str]}] | None}
+
+Atomicity discipline (chat.py precedent): ``record_answer`` asks the
+backend FIRST, then appends the answer and writes the session. A failed
+ask leaves the session untouched - no half pairs.
+
+Machine-checkable discipline: ``check_plan`` returns the validation
+problems (an empty list means the plan is checkable), and
+``write_plan_to_state`` REFUSES an invalid plan (QaPlanError carrying
+the problems) - a derived plan that cannot run its checks is never
+written into state.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import uuid
+from pathlib import Path
+from typing import Any
+
+from .llm import LlmError
+from .state import load_state, read_json, utc_now, write_state
+
+#: Session store directory (relative to the project root): one JSON file
+#: per session, OUTSIDE the integrity-hashed progressdesk_state.json
+#: (chat.py CHATS_DIR precedent; state/qa/ and state/chats/ siblings).
+QA_DIR = Path("state/qa")
+
+#: Session ids: 12-hex (chat.py new_session_id pattern). Pinning the shape
+#: removes path-traversal room for ids that become file names; any other
+#: shape is SessionNotFound, never a file access.
+SESSION_ID_RE = re.compile(r"[a-f0-9]{12}")
+
+
+class SessionNotFound(Exception):
+    """Typed: the caller asked to append to an unknown session id."""
+
+    def __init__(self, session_id: str) -> None:
+        super().__init__(f"qa session {session_id!r} not found")
+        self.session_id = session_id
+
+
+class QaPlanError(Exception):
+    """Typed: the plan failed machine-checkable validation.
+
+    ``problems`` is the check_plan list - the caller sees every problem,
+    not just the first.
+    """
+
+    def __init__(self, problems: list[str]) -> None:
+        super().__init__("invalid qa plan: " + "; ".join(problems))
+        self.problems = problems
+
+
+def new_session_id() -> str:
+    """Fresh opaque session id (chat.py naming pattern)."""
+    return uuid.uuid4().hex[:12]
+
+
+def _session_path(root: Path, session_id: str) -> Path:
+    if not SESSION_ID_RE.fullmatch(session_id):
+        raise SessionNotFound(session_id)
+    return root / QA_DIR / f"{session_id}.json"
+
+
+def check_plan(entries: list[dict[str, Any]]) -> list[str]:
+    """Validate plan entries -> the list of problems (empty = checkable).
+
+    Machine-checkable contract per entry: ``milestoneId`` and ``title``
+    are non-empty strings, unpadded, ids unique across the plan;
+    ``checks`` is a list of non-empty command strings (duplicate commands
+    are harmless to run - kept). Problems accumulate - the caller sees
+    the whole list, not just the first.
+    """
+    problems: list[str] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
+        where = f"entry[{index}]"
+        if not isinstance(entry, dict):
+            problems.append(f"{where}: must be an object")
+            continue
+        for field in ("milestoneId", "title"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value.strip():
+                problems.append(f"{where}: {field} must be a non-empty string")
+            elif value != value.strip():
+                problems.append(f"{where}: {field} must not be padded with whitespace")
+        milestone_id = entry.get("milestoneId")
+        if isinstance(milestone_id, str) and milestone_id.strip():
+            if milestone_id in seen:
+                problems.append(f"{where}: duplicate milestoneId {milestone_id!r}")
+            seen.add(milestone_id)
+        checks = entry.get("checks", [])
+        if not isinstance(checks, list):
+            problems.append(f"{where}: checks must be a list")
+        else:
+            for check_index, check in enumerate(checks):
+                if not isinstance(check, str) or not check.strip():
+                    problems.append(
+                        f"{where}: checks[{check_index}] must be a non-empty command string"
+                    )
+    return problems
+
+def load_session(root: Path, session_id: str) -> dict[str, Any] | None:
+    """Strict read of one session; a missing file -> None.
+
+    Read problems are NOT tolerated (chat.py strict-reader contract: a
+    corrupt session maps to a typed error at the caller, never silently
+    replaced - the owner sees the data problem).
+    """
+    path = _session_path(root, session_id)
+    if not path.exists():
+        return None
+    session = read_json(path)
+    if not isinstance(session, dict):
+        raise ValueError(f"qa session {session_id!r} is not a JSON object")
+    if session.get("sessionId") != session_id:
+        raise ValueError(f"qa session {session_id!r} file carries a different sessionId")
+    if "question" not in session:
+        raise ValueError(f"qa session {session_id!r} is missing 'question'")
+    if not isinstance(session.get("answers"), list):
+        raise ValueError(f"qa session {session_id!r} answers is not a list")
+    return session
+
+
+def create_session(root: Path, question: str) -> dict[str, Any]:
+    """Create + persist a new qa session carrying the driving question.
+
+    The driving question is the ONE owner question this session answers;
+    every backend answer appended via record_answer belongs to it.
+    """
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError("the driving question must be a non-empty string")
+    session = {
+        "sessionId": new_session_id(),
+        "createdAt": utc_now(),
+        "updatedAt": utc_now(),
+        "question": question.strip(),
+        "answers": [],
+        "askedTs": utc_now(),
+        "plan": None,
+    }
+    _write_session(root, session)
+    return session
+
+
+def record_answer(
+    root: Path,
+    backend: Any,
+    session_id: str,
+    question: str,
+) -> dict[str, Any]:
+    """Ask one question through the backend, append the answer, return the session.
+
+    chat.py atomicity: the backend is consulted FIRST; only on a
+    successful answer is the answer appended and the session rewritten
+    atomically. A failed ask (LlmError) leaves the session exactly as it
+    was.
+    """
+    session = load_session(root, session_id)
+    if session is None:
+        raise SessionNotFound(session_id)
+    answer = backend.ask(question)
+    if not isinstance(answer, str) or not answer.strip():
+        raise LlmError("bad_answer", "backend answered empty text")
+    session["answers"].append(answer.strip())
+    session["askedTs"] = utc_now()
+    session["updatedAt"] = utc_now()
+    _write_session(root, session)
+    return session
+
+
+def derive_plan_from_answers(answers: list[str]) -> list[dict[str, Any]]:
+    """Deterministic fallback derivation: one plan entry per answer.
+
+    Each non-empty stripped answer becomes ``{"milestoneId": "QA-<n>",
+    "title": <answer>, "checks": []}`` - ``n`` counts DERIVED entries (not
+    answer-list positions), so a skipped blank answer never leaves a hole
+    in the id sequence. Empty/whitespace answers are skipped: a derived
+    milestone must never be title-less. The LLM-assisted derivation is
+    M4b scaffold territory; this slice derives locally.
+    """
+    entries: list[dict[str, Any]] = []
+    for answer in answers:
+        if not isinstance(answer, str) or not answer.strip():
+            continue
+        entries.append(
+            {
+                "milestoneId": f"QA-{len(entries) + 1}",
+                "title": answer.strip(),
+                "checks": [],
+            }
+        )
+    return entries
+
+
+def write_plan_to_state(root: Path, entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Write derived plan entries into state as milestones; return the state.
+
+    Machine-checkable gate FIRST: ``check_plan`` problems raise QaPlanError
+    and state is never touched. Entries are appended ADDITIVELY after
+    existing milestones; an entry whose milestoneId already exists is
+    SKIPPED (idempotent re-derivation never duplicates and never mutates
+    existing milestones). The write goes through write_state, so the
+    integrity hash is recomputed.
+    """
+    problems = check_plan(entries)
+    if problems:
+        raise QaPlanError(problems)
+    state = load_state(root)
+    existing = {milestone["id"] for milestone in state["milestones"]}
+    for entry in entries:
+        if entry["milestoneId"] in existing:
+            continue
+        state["milestones"].append(
+            {
+                "id": entry["milestoneId"],
+                "title": entry["title"],
+                "status": "planned",
+                "dependsOn": [],
+                "checks": list(entry["checks"]),
+                "gateStatus": "not_run",
+                "evidencePacketRef": None,
+            }
+        )
+        existing.add(entry["milestoneId"])
+    write_state(state, root)
+    return state
+
+
+def _write_session(root: Path, session: dict[str, Any]) -> None:
+    path = _session_path(root, session["sessionId"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(session, indent=2) + "\n", encoding="utf-8-sig")
+    temporary.replace(path)

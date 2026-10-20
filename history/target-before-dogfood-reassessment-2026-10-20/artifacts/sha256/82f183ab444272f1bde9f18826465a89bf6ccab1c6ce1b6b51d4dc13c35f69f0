@@ -1,0 +1,1 @@
+{"taskId": "greeting-file", "milestoneId": "M1", "outcome": "success", "candidateHash": "sha256:e1325a209dc3e9ad392cab38a033ecc311cd3641bfc2dd1ad9739f6dda4ba0be", "files": {"greeting.txt": "sha256:403c67806064e4db56c07ab1551448b1a19d8c87a6cc0e6127f32efe2da294b5"}}

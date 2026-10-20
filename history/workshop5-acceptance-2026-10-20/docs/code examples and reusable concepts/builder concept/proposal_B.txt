@@ -1,0 +1,85 @@
+The prudent pattern is **progressive disclosure**: keep the vision, functional spec, and technical spec as the canonical knowledge base, but give each builder a small, versioned **execution packet for one slice**. Don’t make the builder reread all three documents—or rely on it to infer a precise task from them—on every Ralph-loop iteration.
+
+### Use three layers of context
+
+1. **A compact project charter, always available**  
+   Put shared rules in something like `AGENTS.md`: key architectural invariants, coding conventions, setup and test commands, where the source documents live, and what to do when requirements conflict. Keep it short; it should not repeat the specifications.
+
+2. **One slice packet per builder task**  
+   This is the builder’s task contract. Include only the product and technical context needed for that slice, and make the expected result testable.
+
+3. **Details retrieved as needed**  
+   Point to relevant spec sections, ADRs, designs, and code paths. If the builder cannot access those sources, include the relevant excerpts in the packet. A link to inaccessible material is not useful context.
+
+For example, a slice packet might look like:
+
+```markdown
+# Slice M2-S3: Restore a saved draft
+
+Spec revision / base commit:
+Depends on:
+
+## Outcome
+A returning user can resume an unfinished draft after reloading.
+
+## Scope
+In: ...
+Out: ...
+
+## Requirements
+- F-021: ...
+- TECH-API-04: ...
+
+## Acceptance criteria
+- Given ..., when ..., then ...
+- ...
+Include relevant empty, error, permission, and loading states.
+
+## Constraints and choices
+Must: ...
+The builder may choose: ...
+
+## Integration points
+Relevant contracts, likely code entry points, and related tests.
+
+## Validation
+Commands to run and expected checks.
+
+## Stop and ask if
+A requirement conflicts with the code or a product/technical decision is missing.
+
+## Done when
+All acceptance criteria pass, relevant tests pass, and the change stays within scope.
+```
+
+Use stable requirement IDs and links or anchors into the canonical documents. The packet should be an **execution view**, not a second competing specification: record any approved exception in the source docs or an ADR. If the packet, specs, and existing code disagree, the builder should surface the conflict rather than silently choose.
+
+### Make slices ready before handing them off
+
+Prefer bounded, independently verifiable **vertical slices**—a user-visible result that may cross UI, API, and data layers—rather than assignments like “build the frontend.” Before starting, check that:
+
+- The outcome and acceptance criteria are observable and specific.
+- Dependencies and shared interfaces are known.
+- Relevant edge cases and constraints are covered.
+- The validation commands are clear.
+- Any unresolved product or architecture decisions have an owner.
+
+It helps to distinguish **must follow** constraints from implementation choices. That gives builders room to work without making them guess which parts of the technical spec are mandatory.
+
+### Keep the Ralph loop artifact-based
+
+Use a stable, short loop instruction that tells the builder to read the charter and the assigned packet, inspect the relevant code, implement only that slice, and verify it against the acceptance criteria. Don’t feed the loop the full chat history or ask it to reconstruct progress from memory.
+
+Persist concise state in a file or issue, for example:
+
+```text
+status: in progress
+acceptance: 3/4 verified
+tests: targeted suite passes; integration test fails because ...
+changed areas: ...
+blocker/next action: ...
+```
+
+Each iteration can then use the task packet plus this small status update. Keep logs in files and summarize relevant failures rather than pasting large outputs into the prompt. Require a short handoff when the slice is done: what changed, which criteria were verified, what tests ran, and any remaining concerns. A reviewer or CI check can verify completion independently.
+
+The key is to **reduce irrelevant context, not essential precision**. Exact acceptance criteria may cost a few more tokens up front, but they usually save tokens overall by preventing guesses, rework, and extra loop iterations.

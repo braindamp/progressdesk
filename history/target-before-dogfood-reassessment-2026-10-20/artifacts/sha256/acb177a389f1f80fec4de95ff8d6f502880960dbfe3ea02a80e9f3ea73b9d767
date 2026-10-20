@@ -1,0 +1,1 @@
+{"acceptanceConditions":["it works"],"acceptedExampleRefs":[],"allowedToolRefs":[],"inputArtifactRefs":[],"interfaces":[],"limits":{},"milestoneId":"m","outcome":"Build a CSV parser with validation, error messages and three examples.","parentDefinitionRefs":["d@1"],"scope":"none","skillRefs":[],"taskId":"t-split","taskRevision":1}

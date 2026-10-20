@@ -1,0 +1,5 @@
+- act, do not narrate: an assistant message carrying no tool call ends the round, clean exit and no report
+- check what already exists before writing. a second reader for the same thing is duplication, and the first is usually already correct
+- the round directory is your workfloor. what is in it when you stop is the candidate, and your account of it is re-derived rather than believed
+- the target and this workshop are separate trees. read the target; change only what the slice says you may
+- exit 0 is not success. completion is the files on disk now, read back and checked

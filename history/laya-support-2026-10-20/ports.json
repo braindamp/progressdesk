@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "note": "Every decision CLEANING_LAYA is asked to make. `threshold` is the probability at or above which the answer is yes. `workshop: true` means the decision is about ProgressDesk itself and belongs to no project. Raise a threshold where a wrong yes costs more than a wrong no; lower it where the reverse holds.",
+  "ports": {
+    "room": {
+      "question": "Does this report describe at least one problem?",
+      "threshold": 0.5,
+      "workshop": false
+    },
+    "work_undone": {
+      "question": "Does this message report that the work could not be done?",
+      "threshold": 0.5,
+      "workshop": false
+    },
+    "work_split": {
+      "question": "Is this one piece of work, or two that could each be delivered?",
+      "threshold": 0.5,
+      "workshop": false
+    },
+    "change": {
+      "question": "Is this message explaining a software change?",
+      "threshold": 0.5,
+      "workshop": true
+    }
+  }
+}

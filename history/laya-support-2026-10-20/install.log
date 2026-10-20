@@ -1,0 +1,19 @@
+== 1. venv (3.12, matching the product) ==
+Using CPython 3.12.12
+Creating virtual environment at: .venv
+Activate with: .venv\Scripts\activate
+== 2. torch (cu126, for the 3080 Ti) ==
+Resolved 10 packages in 803ms
+Downloading sympy (6.0MiB)
+Downloading setuptools (1.2MiB)
+Downloading torch (2.4GiB)
+Downloading networkx (2.0MiB)
+ Downloaded setuptools
+ Downloaded networkx
+ Downloaded sympy
+  × Failed to download `torch==2.14.1+cu126`
+  ├─▶ Failed to extract archive: torch-2.14.1+cu126-cp312-cp312-win_amd64.whl
+  ├─▶ I/O operation failed during extraction
+  ╰─▶ failed to create file
+      `D:\Coding\.cache\uv\.tmphc0g8q\torch/lib/cudart64_12.dll`: The system
+      cannot find the path specified. (os error 3)

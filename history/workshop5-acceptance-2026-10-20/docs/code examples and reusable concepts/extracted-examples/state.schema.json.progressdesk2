@@ -1,0 +1,67 @@
+{
+  "$comment": "SOURCE: D:/Coding/progressDesk_Reference_Material/progressdesk2/schemas/state.schema.json — copied verbatim for study; not gospel. Integrity-hashed milestone/workPieces state model (Sep 10, 2026 — newest prior schema generation).",
+  "$id": "https://progressdesk2.local/schemas/state.schema.json",
+  "title": "ProgressDesk2 State",
+  "type": "object",
+  "required": ["schemaVersion", "projectId", "milestones", "activeLoops"],
+  "properties": {
+    "schemaVersion": { "enum": [1, 2] },
+    "projectId": { "type": "string" },
+    "milestones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "status", "dependsOn", "checks", "gateStatus"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "enum": ["planned", "in_progress", "review", "accepted"] },
+          "dependsOn": { "type": "array", "items": { "type": "string" } },
+          "checks": { "type": "array", "items": { "type": "string" } },
+          "gateStatus": { "enum": ["not_run", "pass", "fail"] },
+          "evidencePacketRef": { "type": ["string", "null"] },
+          "modes": {
+            "description": "Steering modes (VISP amendment 7): closed vocabulary; mapping semantics defined in modes.py (M5a).",
+            "type": "array",
+            "items": { "enum": ["quality_first", "iterate_quick", "embrace_change", "deep_testing"] }
+          },
+          "workPieces": {
+            "description": "Placeholder records of the isolated work pieces (VISP amendment 8) the start orchestrator (M5c) will iterate. Items extended additively in later phases.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "title"],
+              "properties": {
+                "id": { "type": "string" },
+                "title": { "type": "string" },
+                "status": { "enum": ["planned", "in_progress", "review", "accepted"] },
+                "summary": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "activeLoops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["phaseId", "iterationCounter"],
+        "properties": {
+          "phaseId": { "type": "string" },
+          "pidOwnerNote": { "type": "string" },
+          "iterationCounter": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "required": ["algorithm", "payloadSha256"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "payloadSha256": { "type": "string" }
+      }
+    },
+    "updatedAt": { "type": "string" }
+  }
+}

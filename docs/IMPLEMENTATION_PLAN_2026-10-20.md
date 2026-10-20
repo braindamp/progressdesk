@@ -1,5 +1,7 @@
 # ProgressDesk implementation plan
 
+**Execution correction after the owner's dogfood clarification: read section 0A first. The VISP is the primary authority. The original numbered stages remain implementation detail; qualify the acceptance plant before resuming that backlog. No revert has been applied.**
+
 Prepared 20 October 2026 from the current checkout, the October 10 package notes, and the new root `handover.md`. The project is being published to GitHub for the first time at `https://github.com/braindamp/progressdesk` as part of this handoff.
 
 ## 0. First GitHub publication and source of truth
@@ -10,9 +12,93 @@ After the first push, use `https://github.com/braindamp/progressdesk` as the sha
 
 For the implementation model: inspect `git status` and the GitHub remote at the start of a coding session, change the smallest coherent source slice, record it in a descriptive commit, and publish that commit to the same repository. Keep the code and plan in sync when a verified implementation finding changes the sequence. Do not rewrite or force-push the first publication to hide an ordinary implementation failure. A feature's **host-committed delivery** in ProgressDesk is product runtime evidence; a GitHub commit of ProgressDesk source is a separate developer action. Neither substitutes for the other.
 
+## 0A. VISP first: recover the dogfood build without losing useful work
+
+### Authority and intended sequence
+
+Read docs/ProgressDesk VISP_v1.11.md in full before choosing the recovery path. FUSP and TESP elaborate that vision; installed code and handovers describe what exists. Code being newer does not make its design authoritative. PLAN-datamodel.md and PLAN-definition-layer.md are investigation notes. The code-example folder explicitly says its contents are reference material, not governing requirements.
+
+The owner's clarified sequence is:
+
+| Stage | Factory | Product being constructed |
+|---|---|---|
+| Foundation build | D:/Coding/progressDesk4-build/builder | The foundation of D:/Coding/progressDesk |
+| Acceptance dogfood build | D:/Coding/progressDesk5-acceptance | The acceptance capability and remaining work in D:/Coding/progressDesk |
+| Subsequent self-improvement | A working, versioned ProgressDesk workshop | Approved improvements to the product through the same task loop |
+
+The VISP requires the framework's improvement to be a product of itself, with one mutation path, independent acceptance and recoverable evidence. FUSP section 2 and TESP sections 0/17 also distinguish the existing development framework from the target it builds: the unfinished target does not have to provide every final capability before the factory can build it.
+
+The build 5 launcher confirms the two roots: PYTHONPATH selects its own src directory, while the root argument points at D:/Coding/ProgressDesk. Its processes can therefore use factory code while writing events, project rounds and artifacts under the target root. The root argument alone does not establish which engine is running; record the imported module path as well.
+
+### What the history actually establishes
+
+| Evidence | Interpretation |
+|---|---|
+| Build 4's typed journal: 35 distinct item ticks, MS1.GATE through MS6.GATE; final gate commit 493cac3 on 25 September | The foundation build was recorded complete. Its output commits are already in the target repository's history; this was built into progressDesk, not a later unproven migration. The old CHECKLIST.md is stale; use the typed journal. |
+| Commits 3e5a593/bfa1240, 1 October | Previously untracked runtime/composition modules were committed, and runtime directories were ignored. These are additional baseline candidates to compare with the September 25 foundation. |
+| Commits e35ee83, 2b381a8 and 2dc1745, 1 October | Checkpoint/recovery machinery, kernel authorization and domain modules were removed before the factory/target fork. The authorization-removal message explicitly acknowledges that dispatch could run without GO. An October 4 checkout cannot simply be called the tested foundation. |
+| Last common commit 5042d4b, 2 October | Factory and target share an ancestor but have since developed separately. |
+| Workshop acceptance commits 0a37633, 0bfec3d and 3cb75c5, 2 October | Acceptance was already being implemented in the workshop before October 10. The last message reports passing and failing dogfood paths, but that claim must be read against the actual declared standard. |
+| Workshop commit 8b971af, 3 October | A parallel gate phase machine was replaced with delegation to the existing MilestoneService. Keeping one gate owner is sound; the GO board's result interface was left inconsistent. Repair that binding without resurrecting a second phase machine. |
+| Target commits 0b7e2f4 and ecdd0d8, 3 October | Their messages explicitly describe manually syncing workshop repairs back into the target and repeated drift. This predates October 10. |
+| Target commit 777d8e5, 4 October | Foundation machinery was synced; acceptance modules and the declared evaluation bundle were deliberately kept out because those were the product to be built. Their absence was intentional. |
+| Workshop commits 542f57e and de5c717, then ed9f0e8 and e09d47b, 4 October | A board dispatch door and staged source workspace were added and then reverted. The revert messages give no rationale. Recover the required capabilities without assuming these rejected patches should be reapplied unchanged. |
+| October 10 handover/package notes, captured in bb240a4 on October 20 | They describe direct file replacements in the target. Git did not record each intermediate package, so it cannot establish the exact date or rationale of every changed line. |
+| Today's commits 7befb59 through ffc34ad | Startup, OpenCode, report delivery, plan/start/status and BOM ingestion were implemented in the target. Preserve them as donor work. |
+| Target journal sequence 204/205/212 | A terminal success report, candidate submission and successful closure exist for greeting.txt on October 20. This is useful delivery evidence. It is not evidence that build 5 produced the acceptance module or that milestone QA passed. |
+
+The repeated work is explainable: the factory needed its own operational repairs, some repairs were manually synced to the target, and later target-only work did not advance the factory. My original plan continued target editing without recovering this distinction.
+
+The investigation also ran one focused negative control against build 5's existing tests/progressdesk_standard.py: four syntactically invalid candidate modules, with no event log, produced **3 passed, exit 0**. C1 only checks file existence; C2 and C3 return successfully when the log is absent. This does not test the runnable ProgressDesk code promised by its clauses. Preserve the result in history/dogfood-lineage/acceptance-standard-negative-control.txt. Fixing the actual acceptance instrument is now the first useful delivery.
+
+MilestoneService itself was already part of the September foundation (MS6.3, commit 15cae3d). Do not delete every acceptance-related file when undoing later work. Distinguish that foundation service from the later declared evaluator, product assembly and gate orchestration being added around it.
+
+### Recovery points and accessible source
+
+- GitHub branch codex/pre-dogfood-reassessment-2026-10-20 preserves target source at ffc34ad before this review.
+- history/workshop5-acceptance-2026-10-20/ preserves the actual build 5 files, including its acceptance implementation, briefs, GO board, lessons and runtime records. It is reference material, not an automatically installed replacement.
+- history/target-before-dogfood-reassessment-2026-10-20/ preserves today's target artifacts, journal, projects and a consolidated SQLite snapshot.
+- history/dogfood-lineage/ preserves the build 4 instructions and the two reverted build 5 patches for comparison.
+- history/laya-support-2026-10-20/ preserves the standalone LAYA client, decision-port configuration and failed October 1 installer log. The client is not a model server.
+
+No reset, checkout replacement or workshop-code edit was performed for this review. Build 5 remains at its existing source state. Its tracked October 1 handover-note deletion was already present and has not been undone.
+
+### Optimized execution path
+
+1. **Retain the current target as donor code.** Use the protected branch and snapshots to recover any useful implementation. Do not erase the October 10 changes or today's fixes to make the directory look like an earlier date.
+2. **Keep the immediate plant scope to the foundation plus acceptance.** The owner's latest clarification does not ask for a more elaborate factory. Compare the September 25 foundation at 493cac3 and the added runtime composition at 3e5a593/bfa1240 with the current workshop before selecting a base. Recover required behavior, not every old line. Do not restore a whole September implementation that conflicts with the current milestone-only QA or thin-loop doctrine, and do not assume the stripped October 4 source retained every completed foundation obligation.
+3. **Make build 5 evaluate actual candidate code first.** Reuse its declared evaluator, fixture, pytest driver and MilestoneService bindings. Repair the dictionary/attribute mismatch at the GO board boundary. Adapt the October 10 whole-product snapshot/assembly work so the evaluator sees the assembled product, not only the last round's changed files. Replace the weak standard with a small declared behavioral contract that launches the frozen candidate in a subprocess and observes actual outputs/state. Ensure the child loads candidate code, not the factory's same-named Python package. No LAYA model belongs on the acceptance-verdict path.
+4. **Qualify that instrument with useful positive and negative cases.** The already observed invalid-module false pass must become a failure. A known working candidate must satisfy the specific declared behavior, and an intentionally broken behavior must fail for that reason. Exercise the actual candidate entry point/API; do not replace the candidate with an injected always-true evaluator. Evaluate current main as an explicitly frozen source input before deciding which target changes need undoing. Imported source has commit/hash provenance; it does not require inventing a builder report or falsely recording a dogfood-delivered task. This evaluator commissioning is separate from claiming a production milestone accepted.
+5. **Then restore the build path only as needed.** The old workshop registers Pi/manual/systemone, not OpenCode. Bring over the current adapter together with its broker/transport dependencies, runtime registration and configuration; reuse the reporting and BOM repairs. Check the dependency group together. The GO board currently records GO without dispatching; reuse current launch/source-preparation work for a real task when the next product feature needs building. These operational repairs must not expand into another foundation rewrite.
+6. **Build remaining acceptance/product fixes through ordinary features when practical.** Use a named source seed and current approved requirements. Do not choose 777d8e5 merely because it predates October 10: some foundation removals are older. Keep main untouched while a candidate is constructed in a separate workspace. Preserve a QA contract covering allowed reads, rejection grounds, evidence, independence and budget. Deterministic behavioral evaluation can settle mechanical clauses; wider model judgment still needs the narrower role contract identified in VISP section 9. No quality check runs between builder features.
+7. **Transfer the qualified acceptance capability into the target.** Prefer a declared dogfood feature that reuses the proven plant code and yields host-recorded output. The owner has allowed a simpler integration if self-construction becomes disproportionate: an explicitly recorded integration still gets independent acceptance against the real assembled target. Human-integrated code can be tested validly; its provenance must not be described as an automated dogfood build. Compare against concurrent source changes before materializing declared paths. Keep the workshop pinned while it builds/evaluates a successor, then promote an accepted version deliberately.
+8. **Continue toward the full VISP scope through the same plant.** Acceptance is the next product milestone. Finalization also covers the definition pipeline, authorization/process boundaries, attribution, recovery, checkpoints/manager, self-improvement and human approval surface at their accepted scope. M12 requires usable signoff/onboarding; GUI polish remains deferred. ModelScout/competitions are explicitly parked in VISP section 10 and should not become a bootstrap project.
+
+### Useful changes to evaluate for transfer
+
+| Donor work | Use in the recovered factory / eventual product |
+|---|---|
+| October 20 OpenCode adapter, broker environment support and transport event/session handling | Enable the requested free model under the verified execution identity. Review the dependency group together. |
+| File inbox, host-bound report identity, terminal delivery and BOM ingestion | Give the builder a reporting path the workshop actually drains. |
+| Approved plan/start/status operations | Restore a usable launch path without requiring new dashboard development. |
+| October 10 feature_list.py and JACK changes | Editable ordered work and two adjacent ordinary split features; no ancestry machinery. |
+| October 10 workspace.py and milestone_flow.py | Source preparation and full assembled-product evaluation. The old evaluator's latest-round-only input is insufficient. |
+| October 10 SHARPENER/POLICE changes | Preserve the owner's accepted role duties while keeping the stop authority and evidence ownership explicit. |
+| Build 5 delivery/evaluator/fixture/gate/standard modules and GO board | Existing acceptance machinery and owner surface to adapt, not code that has already been delivered to the target. |
+
+### Conflicts to resolve against the VISP before enabling behavior
+
+The owner's latest instruction gives the VISP priority. Use it as the default where documents disagree, and check any recorded later owner amendment before adopting a divergent behavior. Do not ask the owner to repeat that precedence decision.
+
+- VISP sections 1A/9 park LAYA-assisted housekeeping; later FUSP/TESP and the handover require an external decision service. The recovery recommendation therefore starts from the VISP's deterministic HOUSEKEEPING policy and preserves the LAYA adapter as donor work pending an explicit adopted extension. Do not fake a service answer: changing a workshop policy must be explicit, and a run still configured to require the service remains blocked when it is unavailable. Treat the original Stage 5 below as conditional service-integration work. The actual service startup/weights location has not been recovered.
+- VISP section 1B describes a separate advisory sparring round; the later handover excludes model inspection between features. Following the VISP means its advisory role must be explicit and non-blocking. It does not turn into feature acceptance or a supervisor. Milestone acceptance remains the quality gate.
+- The handover defers post-project research while the VISP defines SHARPENER's research role. Distinguish a scoped acceptance bootstrap from a claim that the whole VISP is finalized. Do not silently erase the final product requirement or make its full implementation a prerequisite for the first dogfood feature.
+
+Resolve a genuine vision/scope conflict at the owner's front-end contract boundary. Do not add recurring approval requests inside approved execution. The original source backlog below supplies implementation detail; it cannot resolve an authority conflict by itself.
+
 ## 1. What this plan delivers
 
-Complete the simple production engine and its CLI/local API. The first delivery is **one real DEXTER feature built through ProgressDesk and committed by the host**. Continue from that working chain to ordered multi-feature builds, real room clearance, independent milestone acceptance, automatic corrective work, and the existing SHARPENER/POLICE/SCHOTTY duties.
+Complete ProgressDesk through the recovered build 5 plant. The next delivery is **a working acceptance instrument that tests the actual frozen ProgressDesk candidate**. Restore only the foundation/build capabilities it needs, then integrate acceptance into the target, preferably through a dogfood run. Continue to whole-product milestone acceptance, bounded corrective work and the remaining VISP requirements. A usable human approval surface is required and GUI polish stays deferred.
 
 **BUILD FOR SUCCESS; PLAN TO FAIL.** Build the next working path. Ordinary builder failure is expected input to JACK; milestone failure is expected input to correction. Neither justifies adding an architecture around imagined future failures.
 
@@ -21,20 +107,20 @@ This is an implementation plan for a subsequent coding model. The investigation 
 ### Decisions already made by the owner
 
 - Work in `D:\Coding\progressDesk`; reading elsewhere in `D:\Coding` is authorized. Preserve the source state captured in the first GitHub publication.
-- Current source and the new `handover.md` supersede the old ZIP, October 1 task order, and inconsistent historical specifications.
+- The VISP is primary. Current source establishes what is installed; it does not override the product contract. Read lower specifications, handovers and owner amendments in that hierarchy.
 - Use **OpenCode**, with **DeepSeek V4.1 Flash Free**, for language-model roles. CLEANING_LAYA remains a separate decision adapter.
 - Prefer running the controller as Windows user **codexlab**, so broker children inherit that user.
 - Complete the engine and CLI/API first. GUI polish is deferred.
 - Feature order lives in one editable JSON file per milestone. Delivery facts live in the journal and artifact store.
 - JACK replaces one unfinished feature with two adjacent ordinary features. Repeated splitting has no depth limit. Do not add split ancestry, rollback, split-history projection, a dependency graph, or a split-draining protocol.
-- Acceptance runs at milestone boundaries against the assembled product. No feature QA and no model inspecting work between features.
+- Acceptance runs at milestone boundaries against the assembled product. No feature QA. The VISP's separate non-blocking advisory role is addressed in section 0A.
 - SHARPENER observes a dirty scene before SCHOTTY; it may propagate lessons/instructions directly and queue framework VISPs for the next milestone boundary.
 - POLICE may stop workshop project work while sparing SHARPENER. Implement the existing stop, not a speculative post-POLICE recovery protocol.
-- Post-project SHARPENER research is deferred by the new handover. Completing this plan does not require that research subsystem.
+- The earlier handover deferred post-project SHARPENER research during bootstrap. Track its VISP role in the finalization backlog; do not call a scoped acceptance build the completed VISP.
 
 ### Execution discipline
 
-Execute the numbered stages in order. Within a stage, finish one coherent code change and exercise its actual path. Once that path works, advance. Keep owner interactions to one actionable step when an account login, service start, or other human action is actually needed.
+Follow section 0A's dogfood recovery sequence first. The numbered stages below are the original target-source backlog and implementation detail; translate remaining work into features executed by the recovered workshop. Preserve completed work and skip already established commissioning. Keep owner interactions to one actionable step when an account login, service start, or other human action is actually needed.
 
 There is no requirement to create a unit-test suite, maximize coverage, lint every module, benchmark models, or repeatedly run unrelated checks. Use a disposable example project to commission the product. The milestone evaluator is a product feature and must work; it is not an excuse to put tests between builder features.
 
@@ -42,9 +128,11 @@ Do not turn this plan into another specification rewrite. Revise a task only whe
 
 ## 2. What is known in this checkout
 
+**Historical planning baseline:** the table below records the initial inspection. Commits 7befb59 through ffc34ad have since repaired parts of it. Both target and old workshop runtime modules imported successfully during this review using Python 3.12. Reconcile existing code and receipts before turning an old finding into another task.
+
 The original local baseline commit was `777d8e5`, dated October 4. The first GitHub publication adds the accepted October 10 source and this plan in a later commit. `feature_list.py`, `milestone_flow.py`, and `workspace.py` were untracked at inspection time; they are necessary source files included in that publication. A checkout reset to `777d8e5` would remove accepted work.
 
-The journal inspected during planning contains 126 events, last dated October 4. It has no `candidate.submitted`, `builder.reported`, or `milestone.accepted` events. Use a **new project** for commissioning. Do not fabricate missing evidence or migrate that journal into a claimed successful build.
+The initial journal inspection contained 126 events, last dated October 4. The review now finds 212 events, including one terminal builder success, candidate submission and successful closure for greeting.txt on October 20. There is still no milestone.accepted evidence in that journal. Preserve the actual evidence and use a new declared project for the acceptance dogfood build.
 
 | Finding | Evidence and implication |
 |---|---|
@@ -370,6 +458,8 @@ Stages 3 and 4 meet at the first real feature commit. Implement their minimum co
 
 ## 9. Stage 5 — commission real room clearance
 
+**VISP-first recovery note:** section 0A identifies the authority conflict around making LAYA mandatory. Keep this adapter/service detail for an explicitly adopted decision-service policy. Do not substitute a fixture for the real service or treat this earlier plan paragraph as authority to change the VISP.
+
 **Edit only if an actual service mismatch appears:** `decide.py`, `floor_sweep.py`, related dispatch wiring.
 
 Use the existing `PROGRESSDESK_DECISIONS` endpoint. The supplied handover explicitly rejects a hardcoded clean-room fixture as proof. Obtain one actual response through `SystemOneExecutor` with a recorded typed probability.
@@ -632,14 +722,14 @@ If a step fails, use that output to make the smallest relevant fix and continue.
 
 ## 16. Handoff instructions for the implementation model
 
-Start by reading `handover.md`, this plan, and the current files for Stage 1. The import failure has already been reproduced; repair it, then run the shown import command. Do not spend a turn proposing to investigate the whole repository again.
+Start by reading the VISP in full and section 0A of this plan. Preserve the protected current target and the archived workshop. First make build 5's acceptance instrument execute an explicitly frozen real candidate and detect meaningful breakage. Recover its builder path with donor fixes as needed, and prefer dogfood delivery of the qualified acceptance capability. Do not redo already completed startup/OpenCode/report work as if those commits did not exist.
 
-Proceed to the configured OpenCode adapter and the minimum public setup needed for a real feature. Keep source changes in `D:\Coding\progressDesk` and publish coherent implementation commits to the new GitHub repository. Do not reset to the pre-publication commit or treat the newly published Python modules as disposable. Do not rerun the self-copying installer.
+Product source and GitHub publication remain in D:/Coding/progressDesk. The operational dogfood workshop is D:/Coding/progressDesk5-acceptance. Keep those roles explicit in every launcher and imported source path. This review has prepared references and recovery points only; editing/deploying the sibling workshop needs write access to that directory in the execution session. Do not rerun the self-copying installer or reset the current target as an implicit bootstrap action.
 
 Use the owner's saved `runas` shortcut when the host must run as codexlab. The main implementation does not require building an alternate-user process launcher into the broker. If a manual account/service action is necessary, ask for exactly that action and explain the observed blocker. Continue independent code work while waiting where practical.
 
-Preserve the simple feature file and role duties. In particular, do not interpret this plan's code-completion work as permission to add per-feature QA, a new role, a split history system, post-project research, or post-POLICE recovery.
+Preserve the simple feature file and role duties. Do not add per-feature QA, a new supervisory role, a split history system or speculative post-POLICE recovery. Scope the existing research role according to the VISP and explicit owner deferrals.
 
 At each completed stage report: what code now works, the one relevant observed execution, and the next concrete missing behavior. Do not claim the workshop is complete because imports pass or an injected evaluator returned true.
 
-**The completion result is a working production loop:** the owner can submit a fresh approved plan, start it, obtain host-committed features in editable file order, receive independent milestone acceptance or bounded corrective work, exercise the existing role/stop behavior, and retrieve the final assembled deliverable through the CLI/local API.
+**The acceptance checkpoint is a working production loop:** the owner can submit a fresh approved plan, start it, obtain host-committed features in editable file order, receive independent milestone acceptance or bounded corrective work, exercise the existing role/stop behavior, and retrieve the final assembled deliverable. **Full finalization is judged against the VISP**, including its definition/approval surface, attribution, recovery and self-improvement responsibilities. Record remaining or explicitly deferred scope honestly.

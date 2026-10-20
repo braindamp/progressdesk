@@ -1,0 +1,3 @@
+- a threshold means nothing until it has a positive control. one clean measurement is the other half of the evidence, and without it a number is an observation, not a decision
+- absence is a third answer. a service that does not answer, a low probability and an unusable payload are three facts and never collapse into one
+- a missing file is not a scope violation and a refused call is not a failure. report the limit and carry on

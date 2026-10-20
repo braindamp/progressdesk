@@ -1,0 +1,5 @@
+Existing workshop standard on four syntactically invalid candidate modules, with no event log.
+Command: Python 3.12 -B -m pytest -q --noconftest -p no:cacheprovider <workshop5>/tests/progressdesk_standard.py
+Exit code: 0
+...                                                                      [100%]
+3 passed in 0.04s

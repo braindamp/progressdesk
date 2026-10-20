@@ -1,0 +1,5 @@
+DIT is de workshop van waaruit de acceptance module in ProgressDesk nu 
+gebouwd moet worden.
+en er is een website om een GO te geven aan een nieuwe project build.
+
+Probleem is dat ergens nog paar dingen fout gaan, geen idee.

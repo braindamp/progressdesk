@@ -1,0 +1,18 @@
+{
+  "milestoneId": "M1",
+  "features": [
+    {
+      "taskId": "greeting-file",
+      "taskRevision": 1,
+      "outcome": "greeting.txt exists at the product root containing exactly the line: hello from progressdesk",
+      "scope": "Create only greeting.txt at the product root. Do not modify message.txt.",
+      "title": "Add the greeting file",
+      "interfaces": [
+        "filesystem"
+      ],
+      "acceptance": [
+        "greeting.txt exists and contains hello from progressdesk"
+      ]
+    }
+  ]
+}

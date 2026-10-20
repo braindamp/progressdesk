@@ -1,0 +1,120 @@
+%% ProgressDesk as it exists today.
+%% Solid = connected and exercised. Dashed = written but never called.
+%% Dotted = specified, nothing built. Red = wired but unproven.
+
+flowchart TB
+
+  subgraph ENTRY["Entry points"]
+    HUMAN["owner / you"]
+    BOARD["GO board<br/>/api/state /api/go<br/>/api/declare /api/gate"]
+    VERB["_VERBS table<br/>14 commands"]
+  end
+
+  subgraph DEF["Definition layer"]
+    PLAN["planning.open<br/>item.create / edit / attach / relate"]
+    LAB["lab.request / lab.result"]
+    DEFC["definitions.py<br/>create / read / signoff / split"]
+  end
+
+  subgraph EXEC["Execution"]
+    RDISP["round.dispatch verb"]
+    DISP["RoundDispatcher.dispatch"]
+    SWEEP["Sweep.after_slice<br/>LIGHT - runs before every worker"]
+    SPAWN["Spawner.spawn"]
+    SEAL["Transport seam"]
+  end
+
+  subgraph WORKER["Workers"]
+    BUILDER["DEXTER<br/>slice brief: 4 fields"]
+    SHOTTY["SCHOTTY<br/>read write glob grep<br/>+ kill_builder_process"]
+    SHARP["SHARPENER"]
+    RESEARCH["RESEARCHER"]
+    POLICE["POLICE"]
+    DEEDEE["DEE_DEE"]
+  end
+
+  subgraph LAYA["CLEANING_LAYA - decision model, no brief"]
+    Noul["decide.py noul()<br/>detection question, one option"]
+    Floor["floor_sweep.py<br/>LIGHT / STRONG"]
+    Judged["Cleaner -> restartable<br/>or needs SCHOTTY"]
+  end
+
+  subgraph REPORT["Report channel"]
+    FILE["report CLI<br/>issue success aborted<br/>suggestion lesson"]
+    ROUNDDIR["rounds/&lt;run&gt;/report/"]
+    DRAIN["drain_reports()<br/>pump thread + round boundary"]
+    LOG["EVENT LOG<br/>authoritative"]
+  end
+
+  subgraph SUPPORT["Support"]
+    TRANS["transcript.py<br/>prose / settled / tools"]
+    JAN["janitor.py<br/>kill_builder_process"]
+    LESSON["lessons/&lt;ROLE&gt;.md<br/>rebuilt from log"]
+    DELIV["delivery.py<br/>task_delivered"]
+  end
+
+  %% ---- wired and exercised
+  HUMAN --> BOARD --> VERB
+  VERB --> PLAN
+  VERB --> LAB
+  VERB --> DEFC
+  VERB --> RDISP
+  RDISP --> DISP
+  DISP --> SWEEP
+  SWEEP --> Floor
+  Floor --> Noul --> Judged
+  DISP --> SPAWN --> SEAL --> BUILDER
+  SEAL --> SHOTTY
+  SEAL --> SHARP
+
+  %% ---- reporting, the one channel every role shares
+  BUILDER -.->|files| FILE
+  SHOTTY -.->|files| FILE
+  SHARP -.->|files| FILE
+  POLICE -.->|files| FILE
+  DEEDEE -.->|files| FILE
+  RESEARCH -.->|files| FILE
+  FILE --> ROUNDDIR --> DRAIN --> LOG
+
+  %% ---- what the drained log is read for
+  DRAIN --> SHARP
+  LOG --> DELIV
+  LOG --> LESSON
+  SHARP -->|teach| LESSON
+  LESSON -.->|injected below brief| BUILDER
+  LESSON -.-> SHOTTY
+
+  %% ---- asks: role consulted, not dispatched
+  DISP -->|ask_role| SEAL
+  SEAL -.-> POLICE
+  SEAL -.-> DEEDEE
+  SEAL -.-> RESEARCH
+
+  %% ---- never called
+  RESEARCH -.->|"no caller"| NOTHING1["nothing dispatches him"]
+  DEEDEE -.->|"never dispatched"| NOTHING2["listed in harness.py only"]
+  STRONG["Sweep.after_milestone<br/>STRONG"] -.->|"no caller"| NOTHING3["defined, never run"]
+
+  %% ---- new, uncoupled
+  WL["Sweep.work_left()<br/>undelivered tasks"] -.->|"no caller"| NOTHING4["chain does not exist"]
+  TRANS -.->|"not called"| NOTHING5["prose not read yet"]
+  JAN -.->|"not wired"| NOTHING6["module tested, no dispatch path"]
+
+  %% ---- specified, nothing built
+  subgraph TODO["Specified in FUSP/TESP, not built"]
+    MSVC["MilestoneService<br/>six-step gate"]
+    ACA["acceptance module<br/>task.declared, round.closed,<br/>declared test events"]
+  end
+  DELIV -.-> MSVC
+  MSVC -.-> ACA
+
+  classDef dead fill:#fdecea,stroke:#a1160a,color:#4a0d06,stroke-width:2px
+  classDef unbuilt fill:#eeeeee,stroke:#5a5a5a,color:#222222,stroke-width:2px
+  classDef ok fill:#d6ead9,stroke:#1b5e20,color:#0d2f10,stroke-width:2px
+  classDef warn fill:#fdeec8,stroke:#8a6100,color:#3d2b00,stroke-width:2px
+  classDef plain fill:#f2f2f2,stroke:#444444,color:#111111,stroke-width:1px
+
+  class NOTHING1,NOTHING2,NOTHING3,NOTHING4,NOTHING5,NOTHING6 dead
+  class WL,TRANS,JAN,STRONG,MSVC,ACA unbuilt
+  class BUILDER,SHOTTY,SHARP,LOG,FILE,DRAIN ok
+  class POLICE,DEEDEE,RESEARCH warn

@@ -1,0 +1,3 @@
+- act, do not narrate: a message with no tool call ends your round before anything is cleaned
+- "nothing here" and "nothing was shown here" are different findings. the sweep records every step it took; if less than that reached you, say so instead of reporting a clean room
+- a process is identified by pid AND creation time. a pid alone can name a different process now

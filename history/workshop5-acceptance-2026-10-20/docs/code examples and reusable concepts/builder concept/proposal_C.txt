@@ -1,0 +1,323 @@
+A Design for the Slice Channel
+The approach in one sentence: a builder works from an immutable, hash-pinned brief that is compiled ahead of time by a planner. The brief quotes authority verbatim and ships executable acceptance checks. The builder decides nothing about whether it is done. It proposes "done", and a frozen gate decides. Everything else in the design follows from four separations:
+
+authority is kept apart from guidance;
+the stable context is kept apart from the volatile context;
+the claim of being done is kept apart from the verdict;
+what the builder remembers is kept apart from what it reports.
+I made four changes to your setup. Each is defended where it comes up, and all are listed again in §8.
+
+A planner agent writes briefs. It runs once per milestone, plus whenever it is re-triggered. This is not a human, so the "no human per slice" constraint holds.
+The verdict is computed outside the builder, by running one frozen command. Someone has to run it. I ask the control host to do so, and I argue below that this is mechanical, not review.
+Some acceptance checks are sealed. They live outside the repository, because the builder can read everything inside it.
+The documents get stable anchors and are edited in place when a human overrules them. They are not overlaid with errata.
+Part 1: The artefacts
+There are five artefacts, and each has exactly one writer:
+
+Artefact    Location    Writer  Mutability
+Brief   slices/M04/S07/brief.md planner immutable per revision; its sha256 is its identity
+Visible checks + gate   slices/M04/S07/checks/, gate.sh planner frozen, hash-pinned in brief
+Sealed checks   outside repo, e.g. /gate-store/M04/S07/ planner builder cannot read
+Workspace state .slice/state.md in builder workspace    builder overwritten each wake, hard-capped
+Inbox messages / handoff    inbox/ (typed JSON), slices/M04/S07/handoff.yaml on branch  builder append-only messages; one handoff
+1.1 The brief
+The front matter is machine-checked; the body is for the model.
+
+Markdown
+
+---
+slice: M04-S07
+rev: 2
+supersedes: sha256:4be1...            # null on rev 1
+base_commit: 7f3c9e1
+branch: slice/M04-S07
+depends_on:
+  - {slice: M04-S03, commit: 7f3c9e1, handoff: slices/M04/S03/handoff.yaml}
+spec_basis:                           # every authority this brief relies on, pinned
+  - {ref: "tech#auth.session.refresh", sha256: 9c1e...}
+  - {ref: "func#login.session-expiry", sha256: 22ab...}
+  - {ref: "DEC-0031",                  sha256: e07d...}
+write_set: ["src/auth/session/**", "tests/auth/session/**"]
+read_set:  ["src/auth/token.ts", "src/http/middleware.ts#L40-L120"]
+forbidden: ["slices/**", "docs/**", "decisions/**"]
+budget:
+  soft_iterations: 10                 # planner's estimate; exceeding it is noted in handoff
+  hard_iterations: 25                 # must ABANDON at this point
+  stall_window: 4                     # wakes with no change in passing-check set and no new finding
+  kill_repeat_limit: 2                # killed mid-step on the same step this many times -> ABANDON
+gate:
+  command: "slices/M04/S07/gate.sh"
+  checks_sha256: 51d0...              # hash over checks/ + gate.sh
+  sealed_checks: 6                    # count only; contents not visible
+---
+§1 Objective. One sentence, describing observable behaviour, with no "and" joining two independently checkable behaviours.
+
+Expired access tokens presented with a valid refresh token are transparently reissued
+by the session middleware, per §3.
+
+§2 Intent (non-binding, tiebreaker only). At most two sentences, quoted from the vision document with a ref. The brief states that this section is used only to choose between two options that are both inside §8 Latitude. It exists so the builder does not open a 40-page vision document to resolve a naming choice.
+
+§3 Binding text. Verbatim excerpts from the spec and from decisions. Never paraphrased.
+
+text
+
+> [tech#auth.session.refresh @9c1e]
+> Refresh MUST be single-use. A refresh token presented twice invalidates the entire
+> session family and returns 401 with code SESSION_REVOKED.
+
+> [DEC-0031 @e07d]
+> Sliding expiry is rejected. Absolute session lifetime is 12h regardless of activity.
+The rule printed at the top of the section: "This text is authoritative. If code, terrain (§7), or checks (§5) disagree with it, raise a DISCREPANCY. Do not resolve it yourself."
+
+§4 Contract. The exact interfaces this slice provides and consumes: signatures, error types, status codes, event names. These are copied from the tech spec or from an upstream slice's handoff.yaml. This section is where the planner spends the most care, because a wrong interface propagates into every dependent slice.
+
+text
+
+PROVIDES  refreshSession(req: Request): Promise<SessionResult>
+          SessionResult = {ok: true, token: AccessToken} | {ok: false, code: "SESSION_REVOKED" | "SESSION_EXPIRED"}
+CONSUMES  TokenStore.consume(refreshId: string): Promise<boolean>   # from M04-S03, handoff line 12
+EMITS     audit event "session.revoked" {familyId, reason}
+§5 Acceptance. A table of checks. Every check exists, runs, and fails at base_commit, unless a reason is given.
+
+id  asserts location    at base
+AC-01   expired access + valid refresh → new access token, 200  checks/refresh.spec.ts:12   FAIL
+AC-02   refresh token reused → 401 SESSION_REVOKED, family invalidated  checks/refresh.spec.ts:40   FAIL
+AC-03   session older than 12h → 401 SESSION_EXPIRED even if refreshed recently checks/refresh.spec.ts:71   FAIL
+INV-1   tests/auth/** remains green —   PASS
+INV-2   diff confined to write_set  gate    —
+The section ends with a note on sealed checks: "6 sealed checks exercise §4 with inputs you cannot see. They test the contract, not your tests. Do not search for them."
+
+§6 Out of scope and decided against. Negative space, with refs. Examples: "Sliding expiry (DEC-0031)." "Changing token format (tech#auth.tokens.format, owned by M05)." "Rate limiting of refresh (M04-S09)."
+
+§7 Terrain (non-binding, as of base_commit). The planner's map of the code: entry points as file:symbol, conventions with one example location each, and known pitfalls. It is labelled as possibly wrong. Correcting it is expected, and corrections are reported, not escalated (see Q4).
+
+§8 Latitude.
+
+May decide: internal naming, helper decomposition, test fixtures within tests/auth/session/, and the internal data structure for family tracking.
+Must not decide (raise a DISCREPANCY instead): anything in §4, any new dependency, any schema migration, and anything touching forbidden.
+§9 Further reading. Pointers, never copies. Each pointer comes with a trigger condition:
+
+text
+
+tech#auth.tokens.storage   read only if: TokenStore.consume semantics are unclear from §4
+func#login.errors          read only if: you need a user-facing message string
+The pointers are followed with tools/spec-get <ref>. That script prints the section, verifies its hash against the current document, and appends the fetch to .slice/log/fetches. A fetch is legitimate, but it is metered, and repeated fetches of the same ref signal that the brief omitted something.
+
+1.2 The wake protocol
+The wake protocol is not in the brief. It lives in the builder's system prompt, byte-identical for every builder in the workshop, so it caches across all builders.
+
+Run tools/brief-verify. It checks the brief sha, the checks sha, and the current hash of every spec_basis ref. On a mismatch, write STALE to the inbox and exit.
+Read .slice/state.md.
+If in_progress is set, a previous wake was killed mid-step: increment kills_on_step.
+If kills_on_step has reached kill_repeat_limit, ABANDON.
+If the current tree hash equals state.last_gate.tree, reuse the recorded gate result. Otherwise run the gate.
+Pick one failing check, or one open finding. Before any action that could be long, write in_progress: <step>.
+Run the gate. Overwrite the state file. Clear in_progress.
+Decide what to do next:
+If everything passes, run the falsification step (Q3), then write the handoff and send DONE_CLAIM.
+Otherwise, check the stall and budget rules, then continue or exit.
+1.3 Workspace state
+The state file .slice/state.md is builder-owned and overwritten, never appended. It has a hard cap of about 1,200 tokens, and the gate rejects a larger file.
+
+YAML
+
+brief_sha: 7a2f...
+iteration: 6
+in_progress: null            # or "running full auth suite" etc.
+kills_on_step: 0
+last_gate: {tree: c41b..., pass: [AC-01, INV-1, INV-2], fail: [{id: AC-02, at: "refresh.spec.ts:44", why: "family not invalidated"}]}
+stall_counter: 1
+map:                          # derived knowledge, so next wake reads spans, not files
+  - "src/auth/session/middleware.ts:88-140  refresh path; calls TokenStore.consume at :112"
+  - "TokenStore.consume returns false on reuse, does NOT throw (terrain §7 says throws: wrong)"
+plan: ["add family revocation in consume-false branch", "emit session.revoked", "AC-03 absolute expiry"]
+assumptions: [A1]             # details in handoff draft
+open_discrepancies: []
+next_action: "implement family revocation at middleware.ts:112"
+Raw tool output goes to .slice/log/. The protocol says not to read it routinely.
+
+1.4 Gate output
+The output is capped at 40 lines, and it is the only test output the builder reads by default:
+
+text
+
+GATE brief=7a2f tree=c41b result=FAIL visible=1/3 inv=ok confine=ok
+FAIL AC-02 checks/refresh.spec.ts:44  expected family revoked; found 2 live tokens
+FAIL AC-03 checks/refresh.spec.ts:71  expected 401 SESSION_EXPIRED got 200
+(full output: .slice/log/gate-0006.txt)
+The builder's local gate run skips the sealed checks. The host's run includes them.
+
+1.5 Inbox messages
+Messages are typed and schema-validated. Free text is allowed only inside evidence.
+
+JSON
+
+{"type": "DISCREPANCY|ASSUMPTION|STALE|DONE_CLAIM|ABANDON",
+ "slice": "M04-S07", "brief_sha": "7a2f...", "iteration": 6,
+ "code": "BRIEF_VS_AUTHORITY|SELF_CONTRADICTION|CONTRADICTS_DECISION|OUTSIDE_LATITUDE|...",
+ "blocking": true,
+ "evidence": [{"kind": "quote", "ref": "tech#auth.session.refresh@9c1e", "text": "..."},
+              {"kind": "code", "at": "src/auth/token.ts:31", "text": "..."}],
+ "proposal": "one sentence"}
+Part 2: Answers
+1. Sizing
+A slice is admissible if and only if all six of the following hold. The planner applies them mechanically, and most can be linted.
+
+Closed acceptance. Every acceptance criterion is an executable check that exists and fails at base_commit. If you cannot write the failing check now, you have not finished planning. This is the core rule; the other five mostly catch cases where it was satisfied dishonestly.
+Zero open external decisions. Every interface the slice creates or alters appears in §4, and §8 "May decide" contains only choices invisible outside the write-set. Lint: if the objective or the checks contain decide, choose, design, evaluate, investigate, figure out, or as appropriate, reject the slice.
+One component boundary. The write_set sits inside one component as the tech spec defines components. If it crosses a boundary, it does so only through interfaces fully specified in §4.
+Context fit. The brief plus the read_set is at most about 35% of the builder's context window. This leaves room for edits, gate output, and reasoning without the state file having to substitute for comprehension.
+Merged dependencies only. Every depends_on is merged at base_commit. A slice never depends on a sibling that is still in flight.
+No partition. If the checks split into two groups with disjoint write-sets, the slice is two slices.
+There is also a post-hoc test that feeds back into the planner, not the builder. A slice is retrospectively classed as a planning failure if any of the following happens:
+
+it exceeds soft_iterations × 2;
+it raises a blocking DISCREPANCY that the planner upholds;
+it is abandoned for any reason other than the environment.
+These are counted per planner revision. They are your quality signal on planning, and the only scoring in the system.
+
+2. Iteration cost
+The dominant driver is per-wake re-derivation, not the brief. A good brief runs 3–8k tokens. A builder with no memory that re-explores the repository and re-reads raw test output burns 20–100k tokens per wake. That cost recurs every wake, and it grows as the codebase grows. In a naive Ralph setup the brief is the visible cost and re-derivation is the real one.
+
+These are the measures aimed specifically at wake two and later:
+
+Byte-stable prefix order. The context is assembled in this order: shared protocol (identical across all builders), then the brief (immutable per revision), then the state file (small), then live work. With prompt caching, the first two are near-free after the first wake. This depends on the harness supporting caching across subprocess invocations within the cache lifetime. If yours does not, this is the single highest-value harness change you can make, and it is worth stating to whoever owns the harness.
+Derived knowledge goes in the state file. The map field records file:line-range — what it is, so wake two reads 50 lines instead of five files. Terrain corrections land there once and are never rediscovered.
+Gate output is summarised to 40 lines by the gate, not by the model. Raw logs exist but are not read by default.
+A tree-hash memo. If nothing changed since the last gate run (a common outcome after a kill), the gate is not re-run.
+Verbatim authority in the brief. The builder never needs to open the three documents. spec-get exists, but it is metered and conditional, so reading a whole document is a deviation you can see in the logs.
+Overwrite, never append. The classic Ralph progress.md, appended every iteration, makes iteration n cost O(n). A capped, overwritten state file keeps every wake O(1).
+One unit of progress per wake (one failing check or one finding). This bounds the size of a single wake, keeps kills cheap, and makes stall detection meaningful.
+Where I deliberately spend tokens up front, in the planner, once per slice:
+
+Writing the checks. This is the most expensive part of brief authoring. A check written after implementation tests the implementation; a check written before tests the contract.
+Verbatim excerpts with hashes. These cost more tokens than summaries. A paraphrase that drifts by one modal verb ("should" for "MUST") costs a full rework cycle, plus an audit slice to catch it.
+§4 Contract. A wrong signature costs every dependent slice.
+§6 Decided against. By your criterion of "what it needs", this is information the builder does not strictly need. In practice it is the cheapest rework prevention in the brief. Competent builders reinvent rejected alternatives constantly, because rejected alternatives are usually the obvious ones.
+§7 Terrain. The planner explores the repository once so that 25 wakes do not each explore it.
+3. The stopping condition
+The builder never decides it is done. It decides it is ready to claim. The sequence is:
+
+The local gate passes: visible checks, invariants, write-set confinement, a valid state file, and unchanged hashes for the brief and checks.
+A falsification step, required by the protocol. The builder writes down one concrete way its implementation could pass every visible check and still violate §3 or §4. It then writes a test for that case in tests/ and runs it. If the test fails, the builder keeps working. If it passes, the test stays and is reported in the handoff. This is weak but cheap (one iteration), and it catches the commonest form of overfitting to visible checks.
+The builder writes the handoff and sends DONE_CLAIM.
+The host runs gate.sh in a clean checkout of the branch, with the sealed checks included, and records the exit code. An exit code of 0 means mergeable. A non-zero code is written back into the workspace as gate_result.txt (visible checks named, sealed failures as counts plus contract section only), and the loop resumes.
+On whether step 4 makes the host a reviewer: it does not. The host runs a frozen command chosen by someone else and compares an integer, which puts it in the same class as "kill on timeout". It exercises no judgement. If you will not let the host do even this, the merge pipeline's CI must run it. The verdict cannot be computed by the process being judged, and any design that lets it be is a design with no quality control.
+
+When the check passes but the work is wrong, by construction neither the builder nor the gate can detect it. So the design spreads the detection over time:
+
+Sealed checks blunt overfitting. They exercise the same contract as the visible checks, through different inputs.
+Dependent slices exercise upstream work. Their gates include their own checks against the upstream slice's §4, so a defective slice tends to surface as a failing dependent gate, which the dependent builder reports as a DISCREPANCY naming the upstream slice.
+Audit slices. The planner periodically emits an ordinary slice whose objective is "break M04-S07". Its acceptance is either a new failing test against M04-S07's §3 and §4, or "no defect within budget". The audit builder's attack surface is the original slice's assumptions list. A found defect becomes a fix slice.
+Feedback. Audit findings are attributed to the original brief's checks, not to the builder. A defect that passed the gate means the checks were too weak, and that is a planner metric. This is how quality judgement emerges without the host growing a reviewer: it lives in slices and in planner accountability.
+4. The brief is wrong
+There are four cases, and they are handled differently. Not all drift is equal.
+
+Case    Detection   Action  Blocking?   Cost
+Terrain wrong (§7 says consume throws; it returns false)    builder, while working  correct its own map, record in handoff terrain_corrections  no  ~0
+Brief excerpt stale vs. current doc brief-verify hash mismatch, wake step 1 STALE to inbox, exit    yes one tiny wake + planner reissue
+Contradiction: §3 vs §5, §4 vs consumed code, or the objective vs §6/DEC    builder DISCREPANCY with quotes + file:line, set state PARKED, exit yes one wake + planner turn + resume
+Ambiguity inside latitude   builder ASSUMPTION to inbox and to handoff, continue    no  ~0
+Ambiguity outside latitude  builder DISCREPANCY (OUTSIDE_LATITUDE)  yes as above
+Correcting terrain is not silent drift correction, because terrain was declared non-authoritative and the correction is reported. What the builder never does is edit binding text, edit checks, or work around a contradiction in authority. The gate enforces the last two by hash.
+
+The loop is not dead-ended. The host routes blocking messages to a planner run. That is a job trigger, not a review. The planner does one of three things:
+
+Reissues the brief as rev N+1 with a new sha and supersedes set.
+Rejects the discrepancy by issuing rev N+1 whose only change is an added §3 note citing why. The discrepancy is answered in-band, as authority, not as a chat message.
+Escalates to a human, if the contradiction is in the spec itself. That is a spec change (Q5), which is human territory by definition and happens per spec conflict, not per slice.
+On resume, the builder sees that state.brief_sha differs from the brief, runs a reconcile step (keep the work, re-verify, re-run the gate), and continues. The workspace survives across revisions.
+
+Cost: a blocking discrepancy costs the wake that writes it, one planner run, and one resume wake with a cache miss on the brief, typically one to two wakes' worth of tokens. False discrepancies are bounded: a builder whose discrepancies are rejected twice on the same slice must ABANDON instead of raising a third.
+
+5. The specification is overruled
+The change lives in the document itself, with its rationale in an append-only decision record, and a lint makes disagreement between the two a build failure.
+
+Every decision is a file, decisions/DEC-NNNN.md, with this front matter:
+
+YAML
+
+id: DEC-0031
+status: accepted                    # or superseded-by: DEC-0044
+amends:
+  - {ref: "tech#auth.session.lifetime", pre_sha256: 1f0a..., post_sha256: 77c2...}
+rejected_alternatives: ["sliding expiry"]
+decided_by: <human>
+The same commit edits the document section and adds the decision. There is no errata file and no overlay. The document is always the current truth; the decision record is the why and the when.
+
+The lint runs in CI on any change to docs/ or decisions/. It fails if:
+
+a decision's post_sha256 does not match the current section and has not been superseded by a later decision on the same ref;
+a document section changed with no decision whose post_sha256 matches (an explicit editorial: true decision is the escape for typo fixes).
+Briefs pin section hashes. A section change makes every brief that pins it stale, mechanically. The planner gets a list of affected briefs by grepping spec_basis and reissues them. In-flight builders hit STALE at their next wake.
+
+rejected_alternatives feed directly into §6 of briefs. This is how "already decided against" becomes visible to builders without a human writing it per slice.
+
+This requires one small change to your documents: stable anchors, meaning heading IDs. If even that is unacceptable, anchors can be heading paths with hashes over normalised section text. That works, but heading renames then look like content changes. The documents otherwise stay where they are and stay canonical. If anything they become more canonical, because they no longer lie.
+
+6. The escape hatch
+The builder ABANDONs when any of these holds:
+
+the hard iteration budget is reached;
+the stall window is exceeded: no change in the passing-check set and no new map entry for N wakes;
+it was killed on the same step kill_repeat_limit times. It detects this itself through the in_progress marker, so silent deaths are visible to the builder even though they are invisible to it at the moment of death;
+the environment makes the work impossible: a missing tool, or a need for network;
+it has had two rejected discrepancies on the same issue.
+It leaves behind:
+
+an ABANDON message with a reason code, at most 10 lines of what was tried, and the passing-check set at its best point;
+a proposed split, if it can see one;
+the workspace pushed to abandoned/M04-S07/r2.
+Partial work is preserved, not merged.
+
+Who finds out:
+
+The host drains the message into the event log and triggers the planner. The planner splits, re-specifies, or escalates.
+Humans find out through a milestone digest that the planner emits: counts of abandons, discrepancies, and audit failures by reason code. A digest line looks like "M04: 3 abandons, 2 of them KILLED_REPEATEDLY on the integration suite". Humans look when a pattern crosses a threshold, not per event. That is the only human attention point, and it scales with problems, not with slices.
+The silent-death case: a builder killed with no message is simply restarted by the Ralph loop. The repeat-kill rule turns a persistent death into an ABANDON within kill_repeat_limit wakes.
+7. What the builder hands back
+It hands back three things:
+
+The diff, on the branch. This is the actual deliverable. Changed files are not listed anywhere else; the diff is the list.
+The verdict, computed by the host's gate run, not by the builder.
+handoff.yaml, capped at about 40 lines. Empty fields are normal and good.
+YAML
+
+brief_sha: 7a2f...
+final_commit: 9e04...
+iterations: 8                         # vs soft budget 10
+contract_deviations: []               # anything provided/changed beyond §4; should be empty
+assumptions:
+  - {id: A1, what: "family = all tokens sharing original login's sessionId",
+     where: "src/auth/session/family.ts:14", ambiguous_in: "tech#auth.session.refresh"}
+terrain_corrections:
+  - "TokenStore.consume returns false on reuse, does not throw (§7 was wrong)"
+falsification_test: "tests/auth/session/concurrent-refresh.spec.ts: two simultaneous refreshes"
+deferred:                             # noticed, out of scope, not done
+  - "middleware.ts:201 swallows TokenStore errors as 500; unrelated to this slice"
+Readers:
+
+The planner consumes assumptions and contract_deviations when writing dependent briefs, since these become their §4 sources. It uses terrain_corrections to fix the terrain in future briefs and deferred as backlog candidates.
+Audit slices use assumptions as their attack surface.
+Nobody reads a narrative, because there isn't one.
+.slice/state.md and the logs are discarded at merge. Working memory is not a deliverable.
+
+Part 3: What I would refuse
+8a. Common instincts that are harmful
+Summarising the spec for the agent. A paraphrase is a second, unversioned authority that drifts from the first. Quote verbatim and pin by hash, or point.
+Retrieval-augmented generation (RAG) over the documents at wake time. It is non-deterministic, re-paid every wake, and each wake may retrieve different "authority". The brief is that retrieval, done once, by the planner, and frozen.
+The appended progress log. It is the default Ralph pattern, and it is O(n) context growth by design. Use overwrite with a cap.
+Letting the builder declare completion, or "fix" a failing test by editing it. Either collapses the stopping condition into the builder's opinion.
+An LLM-as-judge in the loop deciding "done". It is expensive, unanchored, and it agrees with confident work. Put the judgement into checks written in advance, plus adversarial audit slices whose output is a failing test, which is the only falsifiable thing a judge can produce.
+Vision preambles "for alignment". Strategic intent does not help anyone implement token refresh. It is two sentences at most, used only as a tiebreaker.
+Builder-to-builder communication, or builders reading each other's branches for context. Coordination goes through §4 and handoffs, or it becomes an invisible dependency.
+Free-text inboxes. An untyped inbox becomes a chat channel to a human who isn't there. Typed messages with evidence are routable, countable, and digestible.
+Builders editing the spec or the decisions directory, even "just to fix a typo". Authority flows down only.
+8b. Where I think your framing is wrong
+"Until it declares the slice done." It should never declare done; it should claim. I changed this.
+"The control host does very little and will not be extended." I agree it must not judge. But something outside the builder must run the frozen gate, and sealed checks must live outside the repository. I added one mechanical action (run a command and record an exit code) and one storage location. If you refuse both, then CI owns them. If you refuse that too, you have no quality signal at all, and the rest of this design cannot compensate.
+"Iteration count is high and unpredictable, which is the entire problem." Iteration count is a symptom. The problem is that each wake re-derives what the last wake knew, and that slices arrive under-specified. Make the brief closed and the state file carry derived knowledge, and iteration count becomes both lower and boundable. Hence the budgets in the front matter, which make "unpredictable" a planning-failure signal, not a fact of life.
+"Everything it needs and nothing it does not." It needs negative space it would not ask for: what is decided against, what is out of scope, and what it may not decide. Omitting these is the most common way "give it less" turns into rework.
+"Written once, not going to be rewritten." If a human can overrule them, they will change. The only question is whether the change lands in the document or beside it. Beside it means two authorities that will eventually disagree. I made the documents editable under a decision-plus-lint discipline, and added anchors.
+"Read access to the whole repository." This is fine for code. But it means anything you want the builder not to know, such as sealed checks or other slices' audit plans, cannot live in the repository. Your threat model should say so explicitly.
+Where the judgement lives. "Any judgement of quality has to come out of what you design here" is correct, and the answer is that it lives in two places only: in checks written before the work and in audit slices written after it. Both are ordinary slices and artefacts. Neither requires a reviewer role, and both are attributable to the planner, which is where quality failures actually originate.

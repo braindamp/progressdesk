@@ -1,0 +1,46 @@
+i want you to spawn a few agents with skills that are all about the latest gauntlet loops and ralph loops and all about the latest and greatest development frameworks. 
+ make 5 agents essentially all skills that are necessary in evaluating a good concept.
+ Make them differ a bit in their approach, one is a hostile tech architect, one is an expert scrum master/agile coach, expert in the "fuzzy front end" of product development. 
+  
+
+I want you/any team of agents you spawned to look at the documents in D:\Coding\progressDesk4-build\ 
+and prepare its development in the progressDesk4-build folder. 
+
+For this, I want you to go through following steps:
+ 
+plan:
+PHASE1: historic research and context preparation.
+we are collecting useful material from earlier project iterations that may still serve the now -to - be-designed project well.
+
+PHASE 2: 
+a new ralph loop inspired builder project will be created in D:\Coding\progressDesk4-build.
+
+PHASE 3:
+this project will then be executed to produce PRODUCE D:\Coding\progressDesk.
+ 
+We start now  in PHASE 1. 
+for that, I want you to study visp, fusp, tesp.  in "D:\Coding\progressDesk4-build\ProgressDesk project definition".
+
+Form an idea of what we are planning to build. DO NOT EXECUTE YET. 
+go through all the software that you will find in 
+
+A) search in the reference folders for any code and document examples that might come in handy when progressDesk is designed. Place these in D:\Coding\progressDesk4-build\ProgressDesk project definition\code examples and reusable concepts
+add an introductory document as well
+
+B) ALSO look at code and examples that may be useful for phase 2 where we will be setting up the ralph project for buidling progressdesk.
+remember this is NOT for designing the builder project. That will be the next phase.
+
+START NOW with PHASE 1. Once completed, report back and we go to phase 2, then 3.
+
+Spawn any team of experts as you see fit. No token limitations but there may be some errors from the server , we will notice when we move along.
+one more note. 
+
+Last comment:
+WHILE YOU ARE WORKING, be sure to leave breadcrumbs in a breadcrumbs.md file so that we can always pick up after a crash and proceed from there.
+GO now.
+
+make iterations, because 
+
+I am mainly interested in the process of playing with concepts, identifying features, the first phase of creating a project vision.For this initial phase of playing with concepts, brainstorming features, and defining a project vision,
+we need a Product Discovery Facilitator, a Design Sprint Facilitator, or an Agile Product Coach.Experts in the "fuzzy front end" of product development. 
+Who  focus purely on taking abstract ideas, mapping them visually, and turning them into a concrete product strategy.

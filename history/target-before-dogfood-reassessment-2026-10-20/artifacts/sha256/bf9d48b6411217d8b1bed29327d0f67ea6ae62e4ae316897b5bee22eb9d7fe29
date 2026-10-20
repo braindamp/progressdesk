@@ -1,0 +1,1 @@
+{"taskId": "greeting-file", "milestoneId": "M1", "slice": "greeting.txt exists at the product root containing exactly the line: hello from progressdesk"}

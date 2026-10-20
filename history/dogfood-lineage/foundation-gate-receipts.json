@@ -1,0 +1,71 @@
+{
+  "sourceJournal": "D:\\Coding\\progressDesk4-build\\builder\\.ralph-journal.jsonl",
+  "sourceJournalSha256": "b8faac06996afa8d3786c2eacb322bb393bf9f84b8a7d9a5cdb649479c95c3de",
+  "sourceChecklistSha256": "de19876e9b27c194a247c18cc4f5b8392966597e70208f9b6c70f97d3ee75a6a",
+  "journalEvents": 186,
+  "uniqueTickedItems": 35,
+  "gateTicks": [
+    {
+      "itemId": "MS1.GATE",
+      "commit": "f1eba5877a6dc409ded57d5a6551babf736bab01",
+      "timestamp": "2026-09-25T07:07:05.377859+00:00",
+      "recordedCheck": {
+        "gate": "pass",
+        "note": "GATE suite green at delivered commit f1eba58 (fresh clone)"
+      }
+    },
+    {
+      "itemId": "MS2.GATE",
+      "commit": "06c6403",
+      "timestamp": "2026-09-25T07:35:12.546402+00:00",
+      "recordedCheck": {
+        "files": [
+          "tests/test_ms2_gate.py"
+        ]
+      }
+    },
+    {
+      "itemId": "MS3.GATE",
+      "commit": "2111d68",
+      "timestamp": "2026-09-25T07:59:28.703070+00:00",
+      "recordedCheck": {
+        "files": [
+          "tests/test_ms3_gate.py"
+        ]
+      }
+    },
+    {
+      "itemId": "MS4.GATE",
+      "commit": "2bd0900",
+      "timestamp": "2026-09-25T08:19:40.485028+00:00",
+      "recordedCheck": {
+        "files": [
+          "src/progressdesk/lifecycle.py",
+          "src/progressdesk/recovery.py"
+        ]
+      }
+    },
+    {
+      "itemId": "MS5.GATE",
+      "commit": "6803193",
+      "timestamp": "2026-09-25T08:26:49.910807+00:00",
+      "recordedCheck": {
+        "files": [
+          "src/progressdesk/propagation.py",
+          "tests/test_ms5_gate.py"
+        ]
+      }
+    },
+    {
+      "itemId": "MS6.GATE",
+      "commit": "493cac3",
+      "timestamp": "2026-09-25T08:34:58.576789+00:00",
+      "recordedCheck": {
+        "files": [
+          "tests/test_ms6_gate.py"
+        ]
+      }
+    }
+  ],
+  "limit": "These are historical recorded gate ticks and source commits, not a new rerun or a claim that later refactors retained the same behavior."
+}

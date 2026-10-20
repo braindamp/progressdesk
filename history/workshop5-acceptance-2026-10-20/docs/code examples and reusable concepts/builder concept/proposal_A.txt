@@ -1,0 +1,50 @@
+The core insight: **the three documents are planning artifacts, not builder artifacts.** The builder should never see them wholesale. Your job is to *compile* them into a per-slice work order that fits in a page or two, and make everything else pull-based.
+
+## The transformation pipeline
+
+Think of it as compression with different targets:
+
+- **Vision doc** → compresses to a 2–3 sentence "why" blurb in the slice brief. The builder needs just enough context to make reasonable micro-decisions when the spec is silent — not the strategic narrative.
+- **Functional spec** → compiles into **executable acceptance criteria**. Prose specs are ambiguous and expensive; tests are unambiguous and a Ralph loop can self-verify against them. This is the single highest-leverage move: give the builder failing tests and a stopping condition (`tests green = done`) instead of paragraphs of behavior description.
+- **Technical spec** → splits into two things: **contracts** (exact signatures, types, schemas, file paths the slice must conform to) and **chunked references** (ADRs, per-topic docs the builder *can* read but doesn't have to).
+
+## Anatomy of a slice brief
+
+```markdown
+# Slice 4.2: Session refresh endpoint
+
+Why: Users get logged out mid-work; this is the top retention blocker.
+
+In scope: POST /auth/refresh, token rotation, test fixtures
+Out of scope: rate limiting, multi-device revocation (slice 4.4)
+
+Contract:
+  refreshSession(token: RefreshToken): Result<Session, AuthError>
+  Errors: INVALID_TOKEN | TOKEN_EXPIRED (see src/auth/errors.ts)
+
+Acceptance: `npm test slices/4.2` — all green, no skips
+Patterns to follow: src/auth/login/ (copy this structure)
+If stuck: docs/adr-011-token-rotation.md, docs/adr-003-error-handling.md
+Done when: tests pass, lint clean, changes committed to branch slice-4.2
+```
+
+Key properties: everything is a **pointer or a contract**, nothing is an essay. Out-of-scope is explicit because Ralph loops are prone to yak-shaving and scope creep — the fence matters as much as the target.
+
+## Pull, don't push
+
+Split the big docs into small greppable units (ADRs for technical decisions, per-feature files for functional behavior). The brief references them by filename. The builder reads them **only if stuck**. This means you pay tokens for information actually needed, not information that might be needed. A 40-page tech spec read five times per slice across ten slices is catastrophic; three ADRs read once each is trivial.
+
+## Loop mechanics that prevent burn
+
+1. **Fresh context per slice.** Never let one builder session carry across slices. The degraded context at the end of a long loop is worse than no context. Each slice = clean agent + brief + repo state.
+2. **Externalize state to disk.** A `PROGRESS.md` or slice-status file records what's done and what's next. The next agent resumes from the file, not from replayed history. This is the Ralph loop's memory system — the loop is stateless; the filesystem is the state.
+3. **A separate cheap verification pass.** After the builder finishes, a reviewer pass reads *only* the diff against the acceptance criteria. This catches drift without keeping a supervisor riding along in the builder's context the whole time.
+4. **Make the codebase self-documenting.** "Copy the pattern in `src/auth/`" costs ~50 tokens; describing the pattern in prose costs 500 and gets misread anyway. Convention-heavy repos dramatically shrink the brief.
+
+## The one thing people get wrong
+
+Slice sizing. A slice must be completable within one context window's worth of loop iterations — roughly "a few hours of agent work." If a slice needs the builder to hold ten files and three subsystems in mind simultaneously, that's a planning failure, not a builder failure. Slice until the brief fits on one page *naturally*, not by aggressive summarization.
+
+---
+
+The philosophy in one line: **push the minimum viable contract, enable pull for everything else, and make the exit condition executable.** The best spec is the one the builder never has to read — because it was compiled into tests, types, and pointers before the loop started.
