@@ -1,0 +1,787 @@
+{
+  "purpose": "Successful factory commissioning; not final ProgressDesk product acceptance",
+  "sourceState": "ab8b4c4 plus this commit Pi launcher/configuration and JSON stream integration; no other factory changes during run",
+  "operatorAccount": "codexlab",
+  "runtimeRoot": "D:\\Coding\\progressDesk6-workshop\\scratch\\commission-pi",
+  "catalogSource": "https://openrouter.ai/api/v1/models",
+  "catalogModel": {
+    "id": "minimax/minimax-m3.1-flash:free",
+    "pricing": {
+      "prompt": "0",
+      "completion": "0"
+    },
+    "context_length": 1000000,
+    "top_provider": {
+      "context_length": 1000000,
+      "max_completion_tokens": 524288,
+      "is_moderated": false
+    }
+  },
+  "result": {
+    "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+    "result": {
+      "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+      "status": "all_milestones_accepted",
+      "selection": {
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "status": "all_milestones_accepted"
+      },
+      "completedSteps": [
+        {
+          "taskId": "format-status",
+          "result": {
+            "runId": "f52534ac-2358-4317-a042-ffe47aff5a2d",
+            "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+            "status": "completed",
+            "hasCandidate": true,
+            "candidateId": "d4906aae-555c-44a1-b742-10d29b2e9587",
+            "wallMs": 31144,
+            "nudges": 0,
+            "detail": "Implemented format_summary(project_id, status) in the round's status_cli.py, returning exactly f'{project_id}: {status}'. The seed exit_code was left byte-identical, as the slice requires. Acceptance: format_summary('project-17', 'accepted') == 'project-17: accepted'.\n\nImplemented format_summary(project_id, status) in the round's status_cli.py, returning exactly f'{project_id}: {status}'. The seed exit_code was left byte-identical, as the slice requires. Acceptance: format_summary('project-17', 'accepted') == 'project-17: accepted'.",
+            "milestoneGate": {
+              "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+              "milestoneId": "status-cli",
+              "evaluated": true,
+              "status": "failed",
+              "reason": "integration gate failed",
+              "evidenceRefs": [
+                "sha256:66abd8b4a8837caf4fd871b80f0882d1cc341269b10752fe9acd3205d21fd955",
+                "sha256:b3626ca21b9e859f1a7804ee0d88d17351cbe0b32f73bee61a4eef9da25f4d9e",
+                "sha256:11a516a03f836983ef50c3b629258aa44714378d579fa0d16c4ed740c8e2becf"
+              ],
+              "assemblyManifestRef": "sha256:66abd8b4a8837caf4fd871b80f0882d1cc341269b10752fe9acd3205d21fd955",
+              "gateAttemptId": "a06d4dac06224ab2a7ec6c570943c2b4"
+            }
+          }
+        },
+        {
+          "milestoneId": "status-cli",
+          "correction": {
+            "status": "corrected",
+            "addedTaskIds": [
+              "be2b2365f07a49b39957885c2dd1c8fb"
+            ],
+            "planRevision": 2,
+            "planDigest": "sha256:726f5b59d2c68dc2685471f1d007d33c6bde232adad68be070b6c5bbf263972d",
+            "file": "D:\\Coding\\progressDesk6-workshop\\scratch\\commission-pi\\projects\\4e248d04-a4b9-5f1b-bed9-787cc865f705\\features\\status-cli.json"
+          }
+        },
+        {
+          "taskId": "be2b2365f07a49b39957885c2dd1c8fb",
+          "result": {
+            "runId": "f85b1482-88c9-4242-a9e6-0b5db5c0d668",
+            "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+            "status": "completed",
+            "hasCandidate": true,
+            "candidateId": "5a4b9871-9b1b-4a7a-9872-e39ca71e2607",
+            "wallMs": 15112,
+            "nudges": 0,
+            "detail": "Corrected status_cli.exit_code: 'accepted' now returns 0 and 'failed' returns 1 (via an EXIT_CODES mapping, unknown statuses default to 1). format_summary left untouched, still returns 'project-17: accepted'. Only status_cli.py was changed.\n\nCorrected status_cli.exit_code: 'accepted' now returns 0 and 'failed' returns 1 (via an EXIT_CODES mapping, unknown statuses default to 1). format_summary left untouched, still returns 'project-17: accepted'. Only status_cli.py was changed.",
+            "milestoneGate": {
+              "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+              "milestoneId": "status-cli",
+              "evaluated": true,
+              "status": "accepted",
+              "reason": null,
+              "evidenceRefs": [
+                "sha256:42a7e13f233ef8c143a359a60939b932ae400afd134efa98275372cae6af711d",
+                "sha256:b3626ca21b9e859f1a7804ee0d88d17351cbe0b32f73bee61a4eef9da25f4d9e",
+                "sha256:11a516a03f836983ef50c3b629258aa44714378d579fa0d16c4ed740c8e2becf"
+              ],
+              "assemblyManifestRef": "sha256:42a7e13f233ef8c143a359a60939b932ae400afd134efa98275372cae6af711d",
+              "gateAttemptId": "fc360972753c458f871dd437a9461b2a"
+            }
+          }
+        }
+      ]
+    },
+    "milestone": {
+      "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+      "milestoneId": "status-cli",
+      "state": "accepted",
+      "missingTaskIds": [],
+      "deliveredTaskIds": [
+        "format-status",
+        "be2b2365f07a49b39957885c2dd1c8fb"
+      ],
+      "failureCount": 1,
+      "correctionCount": 1,
+      "correctionLimit": 3,
+      "planRevision": 2,
+      "planDigest": "sha256:726f5b59d2c68dc2685471f1d007d33c6bde232adad68be070b6c5bbf263972d",
+      "signoffPolicy": "automatic",
+      "receipts": {
+        "format-status": {
+          "taskId": "format-status",
+          "runId": "f52534ac-2358-4317-a042-ffe47aff5a2d",
+          "candidateId": "d4906aae-555c-44a1-b742-10d29b2e9587",
+          "closedSequence": 48,
+          "files": {
+            "status_cli.py": "sha256:85f7b0ca95038b7ecf2329e893c6059a7b6a5e6acb84431fbd07b02152b65724"
+          }
+        },
+        "be2b2365f07a49b39957885c2dd1c8fb": {
+          "taskId": "be2b2365f07a49b39957885c2dd1c8fb",
+          "runId": "f85b1482-88c9-4242-a9e6-0b5db5c0d668",
+          "candidateId": "5a4b9871-9b1b-4a7a-9872-e39ca71e2607",
+          "closedSequence": 98,
+          "files": {
+            "status_cli.py": "sha256:dc71b624c5b8144445654d7014d473b68b4c2d128978abd83bd635370f3c3763"
+          }
+        }
+      },
+      "jackSubmissions": [
+        {
+          "sequence": 64,
+          "operation": "milestone_correction",
+          "invocationId": "jack-correct-19f8cb271be04143",
+          "attempt": 1,
+          "status": "approved",
+          "reason": "LAYA approved; host application pending",
+          "planRevision": 1,
+          "planDigest": "sha256:c16553e5a90b6dbaad46176cdb4f05ae533eabaf2d1f6711a3f3cff9ac654e4b"
+        },
+        {
+          "sequence": 65,
+          "operation": "milestone_correction",
+          "invocationId": "jack-correct-19f8cb271be04143",
+          "attempt": 1,
+          "status": "applied",
+          "reason": "corrective features applied",
+          "planRevision": 1,
+          "planDigest": "sha256:c16553e5a90b6dbaad46176cdb4f05ae533eabaf2d1f6711a3f3cff9ac654e4b"
+        }
+      ]
+    },
+    "identity": {
+      "factorySource": "D:\\Coding\\progressDesk6-workshop\\src\\progressdesk",
+      "factoryRoot": "D:\\Coding\\progressDesk6-workshop",
+      "productRoot": "D:\\Coding\\progressDesk6-workshop\\scratch\\commission-pi",
+      "python": "C:\\Python313\\python.exe"
+    }
+  },
+  "events": [
+    {
+      "sequence": 11,
+      "type": "dispatch.rejected",
+      "runId": null,
+      "payloadRef": "sha256:675b0ecdd6ad200826cfc296783622ed00e144b936f89048c50917ee1ae15e3e",
+      "payload": {
+        "code": "go_missing",
+        "milestoneId": "status-cli",
+        "reason": "GO for the approved plan is not recorded",
+        "role": "DEXTER",
+        "schemaVersion": 1
+      }
+    },
+    {
+      "sequence": 17,
+      "type": "dispatch.authorized",
+      "runId": "ask-cleaning_laya-2996fb1ce1",
+      "payloadRef": "sha256:6f53ff5a58e65f18e7e4d879a05a5e4e270a8f847ba366267ac07aa9e211f503",
+      "payload": {
+        "declaredScope": null,
+        "milestoneId": null,
+        "parentDefinitionRefs": {
+          "FUSP": "942d9fa6-a53f-4491-8e49-95153ece7787@1",
+          "TESP": "9711f17e-fbb7-48c7-aa80-b44460bf6c5a@1",
+          "VISP": "b0e731ca-51b1-4a81-8f6d-602d216176f6@1"
+        },
+        "planRef": "sha256:a6bd0812a42dd9571a76a9ebed4d70f179491c01a5cda2dcbaaf46191edddc66",
+        "policyRef": "sha256:0fa22835e068cb1613bb8fbca4e2182e3ae3a41899bd80502f63ec9f09cfc4e2",
+        "role": "CLEANING_LAYA",
+        "schemaVersion": 1,
+        "taskContractDigest": null
+      }
+    },
+    {
+      "sequence": 18,
+      "type": "usage.recorded",
+      "runId": "ask-cleaning_laya-2996fb1ce1",
+      "payloadRef": "sha256:daa0dc055f28765c50bc647ca89534d126a43ce11572e65495fa61f2a7cfad6c",
+      "payload": {
+        "cachedTokens": null,
+        "cost": null,
+        "estimated": false,
+        "executor": "systemone",
+        "exit": null,
+        "inputTokens": 112,
+        "model": "english",
+        "outputTokens": 0,
+        "provider": "local",
+        "reasoningTokens": null,
+        "role": "CLEANING_LAYA",
+        "runId": "ask-cleaning_laya-2996fb1ce1",
+        "schemaVersion": 1,
+        "sessionRef": null,
+        "status": "completed",
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:CLEANING_LAYA",
+        "totalTokens": null,
+        "usageAvailable": true,
+        "wallMs": 1045
+      }
+    },
+    {
+      "sequence": 20,
+      "type": "dispatch.authorized",
+      "runId": null,
+      "payloadRef": "sha256:be0d2e032998e146ead7b8505ec9d065a5a29e3e4079401648ee1023025a8cf4",
+      "payload": {
+        "declaredScope": {
+          "description": "Only status_cli.py. Implement format_summary; preserve exit_code in this feature.",
+          "tools": [
+            "glob",
+            "grep",
+            "read",
+            "write"
+          ]
+        },
+        "milestoneId": "status-cli",
+        "parentDefinitionRefs": {
+          "FUSP": "942d9fa6-a53f-4491-8e49-95153ece7787@1",
+          "TESP": "9711f17e-fbb7-48c7-aa80-b44460bf6c5a@1",
+          "VISP": "b0e731ca-51b1-4a81-8f6d-602d216176f6@1"
+        },
+        "planRef": "sha256:a6bd0812a42dd9571a76a9ebed4d70f179491c01a5cda2dcbaaf46191edddc66",
+        "policyRef": "sha256:0fa22835e068cb1613bb8fbca4e2182e3ae3a41899bd80502f63ec9f09cfc4e2",
+        "role": "DEXTER",
+        "schemaVersion": 1,
+        "taskContractDigest": "sha256:52eab95149d7382fa20e9d93621489bc9afcfe33bb1209e064e718552dbde73b"
+      }
+    },
+    {
+      "sequence": 37,
+      "type": "usage.recorded",
+      "runId": "f52534ac-2358-4317-a042-ffe47aff5a2d",
+      "payloadRef": "sha256:30d586a9d55a4bb77203bd295db90cff34c20d411c1420ec9abbcfafc5ba235a",
+      "payload": {
+        "cachedTokens": 106724,
+        "cost": 0,
+        "estimated": false,
+        "executor": "pi",
+        "exit": 0,
+        "inputTokens": 35715,
+        "model": "minimax/minimax-m3.1-flash:free",
+        "outputTokens": 1516,
+        "provider": "openrouter",
+        "reasoningTokens": 318,
+        "role": "DEXTER",
+        "runId": "f52534ac-2358-4317-a042-ffe47aff5a2d",
+        "schemaVersion": 1,
+        "sessionRef": "f52534ac-2358-4317-a042-ffe47aff5a2d",
+        "status": "completed",
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:format-status",
+        "totalTokens": 143955,
+        "usageAvailable": true,
+        "wallMs": 31144
+      }
+    },
+    {
+      "sequence": 45,
+      "type": "dispatch.authorized",
+      "runId": "ask-cleaning_laya-e4e1cd4177",
+      "payloadRef": "sha256:6f53ff5a58e65f18e7e4d879a05a5e4e270a8f847ba366267ac07aa9e211f503",
+      "payload": {
+        "declaredScope": null,
+        "milestoneId": null,
+        "parentDefinitionRefs": {
+          "FUSP": "942d9fa6-a53f-4491-8e49-95153ece7787@1",
+          "TESP": "9711f17e-fbb7-48c7-aa80-b44460bf6c5a@1",
+          "VISP": "b0e731ca-51b1-4a81-8f6d-602d216176f6@1"
+        },
+        "planRef": "sha256:a6bd0812a42dd9571a76a9ebed4d70f179491c01a5cda2dcbaaf46191edddc66",
+        "policyRef": "sha256:0fa22835e068cb1613bb8fbca4e2182e3ae3a41899bd80502f63ec9f09cfc4e2",
+        "role": "CLEANING_LAYA",
+        "schemaVersion": 1,
+        "taskContractDigest": null
+      }
+    },
+    {
+      "sequence": 46,
+      "type": "usage.recorded",
+      "runId": "ask-cleaning_laya-e4e1cd4177",
+      "payloadRef": "sha256:ca660b9a6e35747ce8c499840f34847c6e94e03890cbf72d8b795d4a2ba5c550",
+      "payload": {
+        "cachedTokens": null,
+        "cost": null,
+        "estimated": false,
+        "executor": "systemone",
+        "exit": null,
+        "inputTokens": 132,
+        "model": "english",
+        "outputTokens": 0,
+        "provider": "local",
+        "reasoningTokens": null,
+        "role": "CLEANING_LAYA",
+        "runId": "ask-cleaning_laya-e4e1cd4177",
+        "schemaVersion": 1,
+        "sessionRef": null,
+        "status": "completed",
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:CLEANING_LAYA",
+        "totalTokens": null,
+        "usageAvailable": true,
+        "wallMs": 707
+      }
+    },
+    {
+      "sequence": 48,
+      "type": "round.closed",
+      "runId": "f52534ac-2358-4317-a042-ffe47aff5a2d",
+      "payloadRef": "sha256:53d170ed02d3c94bca8e4d636f96df612ef0bbfc6bfedc1a89bb7feb7f34556e",
+      "payload": {
+        "taskId": "format-status",
+        "milestoneId": "status-cli",
+        "outcome": "success",
+        "candidateHash": "sha256:98d425a6a90d51bf4f0c32a5b55ea2e7e6ddcc62544c91a65fe1ec83f3f052cc",
+        "files": {
+          "status_cli.py": "sha256:85f7b0ca95038b7ecf2329e893c6059a7b6a5e6acb84431fbd07b02152b65724"
+        }
+      }
+    },
+    {
+      "sequence": 49,
+      "type": "dispatch.authorized",
+      "runId": null,
+      "payloadRef": "sha256:3ecb969d394ea0179569304e059798b262a9ea1716ceabf00c0b821d82af2de7",
+      "payload": {
+        "declaredScope": null,
+        "milestoneId": "status-cli",
+        "parentDefinitionRefs": {
+          "FUSP": "942d9fa6-a53f-4491-8e49-95153ece7787@1",
+          "TESP": "9711f17e-fbb7-48c7-aa80-b44460bf6c5a@1",
+          "VISP": "b0e731ca-51b1-4a81-8f6d-602d216176f6@1"
+        },
+        "planRef": "sha256:a6bd0812a42dd9571a76a9ebed4d70f179491c01a5cda2dcbaaf46191edddc66",
+        "policyRef": "sha256:0fa22835e068cb1613bb8fbca4e2182e3ae3a41899bd80502f63ec9f09cfc4e2",
+        "role": "DEE_DEE",
+        "schemaVersion": 1,
+        "taskContractDigest": null
+      }
+    },
+    {
+      "sequence": 54,
+      "type": "usage.recorded",
+      "runId": "evaluator-5868b16cf9764cccbb067a5f448077fc",
+      "payloadRef": "sha256:58e00835fe0716827f698c2408f821ae9f2d94a97caaa2e8c21e2147a4fac9ee",
+      "payload": {
+        "cost": null,
+        "estimated": false,
+        "executor": "declared-command",
+        "exit": 0,
+        "inputTokens": null,
+        "model": null,
+        "outputTokens": null,
+        "provider": "local",
+        "role": "DEE_DEE",
+        "runId": "evaluator-5868b16cf9764cccbb067a5f448077fc",
+        "schemaVersion": 1,
+        "status": "completed",
+        "taskRef": "D:\\Coding\\progressDesk6-workshop\\scratch\\commission-pi\\projects\\4e248d04-a4b9-5f1b-bed9-787cc865f705\\milestones\\status-cli\\evaluator-runs\\a06d4dac06224ab2a7ec6c570943c2b4\\evaluator-0",
+        "usageAvailable": false,
+        "wallMs": 472
+      }
+    },
+    {
+      "sequence": 55,
+      "type": "milestone.integration-completed",
+      "runId": null,
+      "payloadRef": "sha256:00d171c3d4decbd5133b7f332f7dca6d484961d9ebaeb5c6e40ebcd8e429dea9",
+      "payload": {
+        "attemptId": "a06d4dac06224ab2a7ec6c570943c2b4",
+        "evidenceRefs": [
+          "sha256:66abd8b4a8837caf4fd871b80f0882d1cc341269b10752fe9acd3205d21fd955",
+          "sha256:b3626ca21b9e859f1a7804ee0d88d17351cbe0b32f73bee61a4eef9da25f4d9e",
+          "sha256:11a516a03f836983ef50c3b629258aa44714378d579fa0d16c4ed740c8e2becf"
+        ],
+        "findings": [
+          "failed milestone must map to exit code 1; current seed incorrectly returns 0"
+        ],
+        "milestoneId": "status-cli",
+        "schemaVersion": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "sequence": 57,
+      "type": "dispatch.authorized",
+      "runId": "jack-correct-19f8cb271be04143",
+      "payloadRef": "sha256:cec37fc8c1324352ab1c47edfb656941ef136bb7edd5c1aa08b83ed3be10aaeb",
+      "payload": {
+        "declaredScope": null,
+        "milestoneId": null,
+        "parentDefinitionRefs": {
+          "FUSP": "942d9fa6-a53f-4491-8e49-95153ece7787@1",
+          "TESP": "9711f17e-fbb7-48c7-aa80-b44460bf6c5a@1",
+          "VISP": "b0e731ca-51b1-4a81-8f6d-602d216176f6@1"
+        },
+        "planRef": "sha256:a6bd0812a42dd9571a76a9ebed4d70f179491c01a5cda2dcbaaf46191edddc66",
+        "policyRef": "sha256:0fa22835e068cb1613bb8fbca4e2182e3ae3a41899bd80502f63ec9f09cfc4e2",
+        "role": "JACK_THE_SPLITTER",
+        "schemaVersion": 1,
+        "taskContractDigest": null
+      }
+    },
+    {
+      "sequence": 61,
+      "type": "usage.recorded",
+      "runId": "jack-correct-19f8cb271be04143",
+      "payloadRef": "sha256:8575e004ec01199f32dc3eb67e751b55463ddc762f37a2aaa8cf980e11bb3f40",
+      "payload": {
+        "cachedTokens": 186,
+        "cost": 0,
+        "estimated": false,
+        "executor": "pi",
+        "exit": 0,
+        "inputTokens": 5463,
+        "model": "minimax/minimax-m3.1-flash:free",
+        "outputTokens": 200,
+        "provider": "openrouter",
+        "reasoningTokens": 84,
+        "role": "JACK_THE_SPLITTER",
+        "runId": "jack-correct-19f8cb271be04143",
+        "schemaVersion": 1,
+        "sessionRef": "jack-correct-19f8cb271be04143",
+        "status": "completed",
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:JACK_THE_SPLITTER",
+        "totalTokens": 5849,
+        "usageAvailable": true,
+        "wallMs": 6132
+      }
+    },
+    {
+      "sequence": 62,
+      "type": "dispatch.authorized",
+      "runId": "ask-cleaning_laya-a7102c00e0",
+      "payloadRef": "sha256:6f53ff5a58e65f18e7e4d879a05a5e4e270a8f847ba366267ac07aa9e211f503",
+      "payload": {
+        "declaredScope": null,
+        "milestoneId": null,
+        "parentDefinitionRefs": {
+          "FUSP": "942d9fa6-a53f-4491-8e49-95153ece7787@1",
+          "TESP": "9711f17e-fbb7-48c7-aa80-b44460bf6c5a@1",
+          "VISP": "b0e731ca-51b1-4a81-8f6d-602d216176f6@1"
+        },
+        "planRef": "sha256:a6bd0812a42dd9571a76a9ebed4d70f179491c01a5cda2dcbaaf46191edddc66",
+        "policyRef": "sha256:0fa22835e068cb1613bb8fbca4e2182e3ae3a41899bd80502f63ec9f09cfc4e2",
+        "role": "CLEANING_LAYA",
+        "schemaVersion": 1,
+        "taskContractDigest": null
+      }
+    },
+    {
+      "sequence": 63,
+      "type": "usage.recorded",
+      "runId": "ask-cleaning_laya-a7102c00e0",
+      "payloadRef": "sha256:eabf95db464967cbacafefc92ad88c83cd60d497bff162d846836898b91da16a",
+      "payload": {
+        "cachedTokens": null,
+        "cost": null,
+        "estimated": false,
+        "executor": "systemone",
+        "exit": null,
+        "inputTokens": 249,
+        "model": "english",
+        "outputTokens": 0,
+        "provider": "local",
+        "reasoningTokens": null,
+        "role": "CLEANING_LAYA",
+        "runId": "ask-cleaning_laya-a7102c00e0",
+        "schemaVersion": 1,
+        "sessionRef": null,
+        "status": "completed",
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:CLEANING_LAYA",
+        "totalTokens": null,
+        "usageAvailable": true,
+        "wallMs": 1127
+      }
+    },
+    {
+      "sequence": 64,
+      "type": "jack.submission",
+      "runId": null,
+      "payloadRef": "sha256:ae0e980bac7a13a49ddef6412bcf2dae13578e2b40792333758295dd38960c06",
+      "payload": {
+        "applied": null,
+        "attempt": 1,
+        "decision": {
+          "above": true,
+          "detail": "p=0.911 via english",
+          "model": "english",
+          "probability": 0.911,
+          "question": "Does this describe a list of actionable corrective features for the stated milestone problem?",
+          "threshold": 0.5,
+          "usage": {
+            "input_tokens": 249,
+            "output_tokens": 0,
+            "state_tokens": 207,
+            "state_tokens_dropped": 0,
+            "truncated": false,
+            "truncated_questions": []
+          }
+        },
+        "invocationId": "jack-correct-19f8cb271be04143",
+        "milestoneId": "status-cli",
+        "operation": "milestone_correction",
+        "planDigest": "sha256:c16553e5a90b6dbaad46176cdb4f05ae533eabaf2d1f6711a3f3cff9ac654e4b",
+        "planRevision": 1,
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "proposalRef": "sha256:0253877cad81f832e158ac3641186bb170109ad9f6cb01f78e94c94ad4abe204",
+        "question": "Does this describe a list of actionable corrective features for the stated milestone problem?",
+        "questionVersion": 1,
+        "reason": "LAYA approved; host application pending",
+        "requestDigest": "sha256:5e21c89dfa7c4f38d746b591d3232c15b4376f61c0b2bc049de07f79e92ac91f",
+        "schemaVersion": 1,
+        "status": "approved"
+      }
+    },
+    {
+      "sequence": 65,
+      "type": "jack.submission",
+      "runId": null,
+      "payloadRef": "sha256:90b4cf7f256769f98d4d5046d825406e99dd761351ce3aef62d2043ca71ec0bf",
+      "payload": {
+        "applied": {
+          "addedTaskIds": [
+            "be2b2365f07a49b39957885c2dd1c8fb"
+          ],
+          "file": "D:\\Coding\\progressDesk6-workshop\\scratch\\commission-pi\\projects\\4e248d04-a4b9-5f1b-bed9-787cc865f705\\features\\status-cli.json",
+          "planDigest": "sha256:726f5b59d2c68dc2685471f1d007d33c6bde232adad68be070b6c5bbf263972d",
+          "planRevision": 2,
+          "status": "corrected"
+        },
+        "attempt": 1,
+        "decision": {
+          "above": true,
+          "detail": "p=0.911 via english",
+          "model": "english",
+          "probability": 0.911,
+          "question": "Does this describe a list of actionable corrective features for the stated milestone problem?",
+          "threshold": 0.5,
+          "usage": {
+            "input_tokens": 249,
+            "output_tokens": 0,
+            "state_tokens": 207,
+            "state_tokens_dropped": 0,
+            "truncated": false,
+            "truncated_questions": []
+          }
+        },
+        "invocationId": "jack-correct-19f8cb271be04143",
+        "milestoneId": "status-cli",
+        "operation": "milestone_correction",
+        "planDigest": "sha256:c16553e5a90b6dbaad46176cdb4f05ae533eabaf2d1f6711a3f3cff9ac654e4b",
+        "planRevision": 1,
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "proposalRef": "sha256:0253877cad81f832e158ac3641186bb170109ad9f6cb01f78e94c94ad4abe204",
+        "question": "Does this describe a list of actionable corrective features for the stated milestone problem?",
+        "questionVersion": 1,
+        "reason": "corrective features applied",
+        "requestDigest": "sha256:5e21c89dfa7c4f38d746b591d3232c15b4376f61c0b2bc049de07f79e92ac91f",
+        "schemaVersion": 1,
+        "status": "applied"
+      }
+    },
+    {
+      "sequence": 66,
+      "type": "dispatch.authorized",
+      "runId": null,
+      "payloadRef": "sha256:300b9828d4cfb5217cce69165c273109403567cd74644c0229a06fe9ebc4fab0",
+      "payload": {
+        "declaredScope": {
+          "description": "Only status_cli.py. Correct the existing exit_code function so 'accepted' returns 0 and 'failed' returns 1. Preserve format_summary and do not add unrelated behavior.",
+          "tools": [
+            "glob",
+            "grep",
+            "read",
+            "write"
+          ]
+        },
+        "milestoneId": "status-cli",
+        "parentDefinitionRefs": {
+          "FUSP": "942d9fa6-a53f-4491-8e49-95153ece7787@1",
+          "TESP": "9711f17e-fbb7-48c7-aa80-b44460bf6c5a@1",
+          "VISP": "b0e731ca-51b1-4a81-8f6d-602d216176f6@1"
+        },
+        "planRef": "sha256:a6bd0812a42dd9571a76a9ebed4d70f179491c01a5cda2dcbaaf46191edddc66",
+        "policyRef": "sha256:0fa22835e068cb1613bb8fbca4e2182e3ae3a41899bd80502f63ec9f09cfc4e2",
+        "role": "DEXTER",
+        "schemaVersion": 1,
+        "taskContractDigest": "sha256:469a161b81aac3890792123a6c7b1bf9f5aa2c0bff2f2a019debc75adcadff20"
+      }
+    },
+    {
+      "sequence": 87,
+      "type": "usage.recorded",
+      "runId": "f85b1482-88c9-4242-a9e6-0b5db5c0d668",
+      "payloadRef": "sha256:7a07ee13e2b8a97353e41701d793e98cd0a027b4e0bb34bb108e3dca6626c1c4",
+      "payload": {
+        "cachedTokens": 36096,
+        "cost": 0,
+        "estimated": false,
+        "executor": "pi",
+        "exit": 0,
+        "inputTokens": 8466,
+        "model": "minimax/minimax-m3.1-flash:free",
+        "outputTokens": 939,
+        "provider": "openrouter",
+        "reasoningTokens": 269,
+        "role": "DEXTER",
+        "runId": "f85b1482-88c9-4242-a9e6-0b5db5c0d668",
+        "schemaVersion": 1,
+        "sessionRef": "f85b1482-88c9-4242-a9e6-0b5db5c0d668",
+        "status": "completed",
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:be2b2365f07a49b39957885c2dd1c8fb",
+        "totalTokens": 45501,
+        "usageAvailable": true,
+        "wallMs": 15112
+      }
+    },
+    {
+      "sequence": 95,
+      "type": "dispatch.authorized",
+      "runId": "ask-cleaning_laya-7636c64a36",
+      "payloadRef": "sha256:6f53ff5a58e65f18e7e4d879a05a5e4e270a8f847ba366267ac07aa9e211f503",
+      "payload": {
+        "declaredScope": null,
+        "milestoneId": null,
+        "parentDefinitionRefs": {
+          "FUSP": "942d9fa6-a53f-4491-8e49-95153ece7787@1",
+          "TESP": "9711f17e-fbb7-48c7-aa80-b44460bf6c5a@1",
+          "VISP": "b0e731ca-51b1-4a81-8f6d-602d216176f6@1"
+        },
+        "planRef": "sha256:a6bd0812a42dd9571a76a9ebed4d70f179491c01a5cda2dcbaaf46191edddc66",
+        "policyRef": "sha256:0fa22835e068cb1613bb8fbca4e2182e3ae3a41899bd80502f63ec9f09cfc4e2",
+        "role": "CLEANING_LAYA",
+        "schemaVersion": 1,
+        "taskContractDigest": null
+      }
+    },
+    {
+      "sequence": 96,
+      "type": "usage.recorded",
+      "runId": "ask-cleaning_laya-7636c64a36",
+      "payloadRef": "sha256:f49d7d5209db651b1febb24bdcddb5ab396ff9426648aa7338ce5c27024abb20",
+      "payload": {
+        "cachedTokens": null,
+        "cost": null,
+        "estimated": false,
+        "executor": "systemone",
+        "exit": null,
+        "inputTokens": 132,
+        "model": "english",
+        "outputTokens": 0,
+        "provider": "local",
+        "reasoningTokens": null,
+        "role": "CLEANING_LAYA",
+        "runId": "ask-cleaning_laya-7636c64a36",
+        "schemaVersion": 1,
+        "sessionRef": null,
+        "status": "completed",
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:CLEANING_LAYA",
+        "totalTokens": null,
+        "usageAvailable": true,
+        "wallMs": 683
+      }
+    },
+    {
+      "sequence": 98,
+      "type": "round.closed",
+      "runId": "f85b1482-88c9-4242-a9e6-0b5db5c0d668",
+      "payloadRef": "sha256:4dfa2ad05a0ccc87061fdc93afa8e42da94584ee4169795e6f73a2ae0920bb14",
+      "payload": {
+        "taskId": "be2b2365f07a49b39957885c2dd1c8fb",
+        "milestoneId": "status-cli",
+        "outcome": "success",
+        "candidateHash": "sha256:fc1cd519aefb8f6f607a8826e46b70f04f27c20fd9c1cae02bf66d4352de908c",
+        "files": {
+          "status_cli.py": "sha256:dc71b624c5b8144445654d7014d473b68b4c2d128978abd83bd635370f3c3763"
+        }
+      }
+    },
+    {
+      "sequence": 99,
+      "type": "dispatch.authorized",
+      "runId": null,
+      "payloadRef": "sha256:3ecb969d394ea0179569304e059798b262a9ea1716ceabf00c0b821d82af2de7",
+      "payload": {
+        "declaredScope": null,
+        "milestoneId": "status-cli",
+        "parentDefinitionRefs": {
+          "FUSP": "942d9fa6-a53f-4491-8e49-95153ece7787@1",
+          "TESP": "9711f17e-fbb7-48c7-aa80-b44460bf6c5a@1",
+          "VISP": "b0e731ca-51b1-4a81-8f6d-602d216176f6@1"
+        },
+        "planRef": "sha256:a6bd0812a42dd9571a76a9ebed4d70f179491c01a5cda2dcbaaf46191edddc66",
+        "policyRef": "sha256:0fa22835e068cb1613bb8fbca4e2182e3ae3a41899bd80502f63ec9f09cfc4e2",
+        "role": "DEE_DEE",
+        "schemaVersion": 1,
+        "taskContractDigest": null
+      }
+    },
+    {
+      "sequence": 104,
+      "type": "usage.recorded",
+      "runId": "evaluator-756f3916cdd74c18ad081f1bdb7f9d0d",
+      "payloadRef": "sha256:60b25bd60299d4560008a4beb46147d596600ca99bc6e91e1a6656b2f403b64a",
+      "payload": {
+        "cost": null,
+        "estimated": false,
+        "executor": "declared-command",
+        "exit": 0,
+        "inputTokens": null,
+        "model": null,
+        "outputTokens": null,
+        "provider": "local",
+        "role": "DEE_DEE",
+        "runId": "evaluator-756f3916cdd74c18ad081f1bdb7f9d0d",
+        "schemaVersion": 1,
+        "status": "completed",
+        "taskRef": "D:\\Coding\\progressDesk6-workshop\\scratch\\commission-pi\\projects\\4e248d04-a4b9-5f1b-bed9-787cc865f705\\milestones\\status-cli\\evaluator-runs\\fc360972753c458f871dd437a9461b2a\\evaluator-0",
+        "usageAvailable": false,
+        "wallMs": 562
+      }
+    },
+    {
+      "sequence": 105,
+      "type": "milestone.integration-completed",
+      "runId": null,
+      "payloadRef": "sha256:edc63ef767f3d802b245e82e8d204bea16a982b8315d16179074aefc96f1ab8e",
+      "payload": {
+        "attemptId": "fc360972753c458f871dd437a9461b2a",
+        "evidenceRefs": [
+          "sha256:42a7e13f233ef8c143a359a60939b932ae400afd134efa98275372cae6af711d",
+          "sha256:b3626ca21b9e859f1a7804ee0d88d17351cbe0b32f73bee61a4eef9da25f4d9e",
+          "sha256:11a516a03f836983ef50c3b629258aa44714378d579fa0d16c4ed740c8e2becf"
+        ],
+        "findings": [],
+        "milestoneId": "status-cli",
+        "schemaVersion": 1,
+        "status": "passed"
+      }
+    },
+    {
+      "sequence": 106,
+      "type": "milestone.accepted",
+      "runId": null,
+      "payloadRef": "sha256:340773e9137df2e9bfffd5defa0a24c5fb87c3b8db165f43f9955d29fa715d89",
+      "payload": {
+        "attemptId": "fc360972753c458f871dd437a9461b2a",
+        "evidenceRefs": [
+          "sha256:42a7e13f233ef8c143a359a60939b932ae400afd134efa98275372cae6af711d",
+          "sha256:b3626ca21b9e859f1a7804ee0d88d17351cbe0b32f73bee61a4eef9da25f4d9e",
+          "sha256:11a516a03f836983ef50c3b629258aa44714378d579fa0d16c4ed740c8e2becf"
+        ],
+        "milestoneId": "status-cli",
+        "schemaVersion": 1,
+        "signoffPolicy": "automatic",
+        "status": "accepted"
+      }
+    }
+  ],
+  "coverageLimits": [
+    "One command-evaluated milestone with two actual Pi builder sessions and a fresh Pi JACK correction session.",
+    "Genuine local LAYA approved the correction on submission 1; probability 0.911; no truncation.",
+    "Does not demonstrate the separate binary feature-split operation, qualitative-model QA, live STOP or final product promotion.",
+    "Pi sandbox declaration remains none; tool allowlists are not operating-system filesystem isolation."
+  ]
+}

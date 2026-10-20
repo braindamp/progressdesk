@@ -241,11 +241,19 @@ class Runtime:
                 try:
                     from .transport import pi_transport
 
+                    pi_executable = self.execution.get("piExecutable")
+                    if isinstance(pi_executable, list):
+                        if not pi_executable or not all(isinstance(part, str) and part for part in pi_executable):
+                            raise SpawnError("config_invalid", "piExecutable must contain nonempty launcher arguments")
+                        pi_executable = tuple(pi_executable)
+                    elif pi_executable is not None and not isinstance(pi_executable, str):
+                        raise SpawnError("config_invalid", "piExecutable must be a path or launcher argument list")
                     registry.register(
                         pi_transport(
                             broker=self.broker,
                             terminator=terminator,
                             project_id=project_id,
+                            executable=pi_executable,
                             prepare=prepare,
                         )
                     )

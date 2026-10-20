@@ -78,7 +78,10 @@ Then the next milestone proceeds. Neither decision automatically implements
 or changes the framework. The approved work must enter an accepted execution
 plan through the normal planning process.
 
-## Verified here / not verified here
+## Earlier verification snapshot
+
+The following describes earlier work. The successful Pi commissioning described
+under Workshop 6 operation below supersedes its transport and LAYA limitations.
 
 The Python modules import and compile. Disposable event-backed checks covered
 VISP submission, owner signoff, lesson propagation, processing SHARPENER actions
@@ -111,8 +114,14 @@ python -m progressdesk.runtime --root D:\Coding\progressDesk6-workshop desk.iden
 
 `desk.identity` reports the loaded factory source and the product root; the
 `--root` argument alone is not evidence of which package is running. Configure
-roles in `config\assignments.json` and the OpenCode executable in
-`config\execution.json`.
+roles in `config\assignments.json` and harness launcher paths in
+`config\execution.json`. The current generative assignment is Pi with
+`openrouter/minimax/minimax-m3.1-flash:free`, running as `codexlab`.
+The existing user's `OPENROUTER_API_KEY` supplies authentication; credentials
+are not stored in this repository. `config\pi-models.json` contains the
+non-secret model entry merged into that user's existing Pi `models.json`
+because Pi's current catalog does not yet list it. Preserve other entries
+when configuring another machine. The configured response cap is 32,768 tokens.
 
 Owner milestone operations:
 
@@ -134,5 +143,12 @@ builder calls, nudges and infrastructure faults. Command acceptance also uses
 the broker and records its execution. `config\execution.json` declares the
 verified-free model references; an unavailable free provider returns
 `blocked_capacity`. See `docs\WORKSHOP6_COMPOSITION.md` for evidence, the bounded
-commissioning command, and remaining gaps. Do not infer successful commissioning
-from this description of the code.
+commissioning command, and remaining gaps.
+
+**Live commissioning passed on October 20:** Pi delivered a feature, command
+acceptance found the seeded defect, fresh JACK proposed a corrective feature,
+local LAYA approved it, Pi delivered the correction, and unchanged milestone
+acceptance passed. Receipts are in
+`history\workshop6-continuation-2026-10-20\pi-commissioning-evidence.json`.
+This establishes that lifecycle on the small commissioning product; final
+ProgressDesk product acceptance and promotion remain open.

@@ -83,6 +83,7 @@ class ParsedRun:
     session_ref: str | None = None
     detail: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
+    error: str = ""
 
 
 def pi_jsonl(text: str) -> ParsedRun:
@@ -95,6 +96,7 @@ def pi_jsonl(text: str) -> ParsedRun:
     session: str | None = None
     parts: list[str] = []
     usage: dict[str, Any] = {}
+    error = ""
 
     for raw in text.split("\n"):
         line = raw.rstrip("\r")
@@ -114,6 +116,10 @@ def pi_jsonl(text: str) -> ParsedRun:
             message = record.get("message")
             if not isinstance(message, dict) or message.get("role") != "assistant":
                 continue
+            if message.get("stopReason") in {"error", "aborted"}:
+                error = str(message.get("errorMessage") or message["stopReason"])
+            else:
+                error = ""  # Pi may recover through its own provider retry.
             for block in message.get("content") or ():
                 if isinstance(block, dict) and block.get("type") == "text":
                     if isinstance(block.get("text"), str):
@@ -121,10 +127,12 @@ def pi_jsonl(text: str) -> ParsedRun:
             raw_usage = message.get("usage")
             if isinstance(raw_usage, dict):
                 usage = merge_usage(usage, {
-                    "inputTokens": raw_usage.get("input_tokens") or raw_usage.get("inputTokens"),
-                    "outputTokens": raw_usage.get("output_tokens") or raw_usage.get("outputTokens"),
-                    "cachedTokens": raw_usage.get("cached_tokens") or raw_usage.get("cachedTokens"),
-                    "totalTokens": raw_usage.get("total_tokens") or raw_usage.get("totalTokens"),
+                    "inputTokens": raw_usage.get("input", raw_usage.get("input_tokens", raw_usage.get("inputTokens"))),
+                    "outputTokens": raw_usage.get("output", raw_usage.get("output_tokens", raw_usage.get("outputTokens"))),
+                    "cachedTokens": raw_usage.get("cacheRead", raw_usage.get("cached_tokens", raw_usage.get("cachedTokens"))),
+                    "reasoningTokens": raw_usage.get("reasoning"),
+                    "totalTokens": raw_usage.get("totalTokens", raw_usage.get("total_tokens")),
+                    "cost": (raw_usage.get("cost") or {}).get("total") if isinstance(raw_usage.get("cost"), dict) else None,
                     "estimated": False,
                 })
 
@@ -133,6 +141,7 @@ def pi_jsonl(text: str) -> ParsedRun:
         session_ref=session,
         detail=f"{len(parts)} assistant message(s)",
         usage=usage,
+        error=error,
     )
 
 
@@ -175,7 +184,9 @@ def pi_argv(
         # a caller that means to build passes the tools it granted.
         argv += ["--no-tools"]
     argv += ["--session-dir", str(session_dir)]
-    argv += ["--continue"] if resume else ["--session-id", session_id]
+    # Bind every continuation to this exact invocation, even if another file
+    # appears in the directory. A fresh JACK invocation has a fresh run ID.
+    argv += ["--session-id", session_id]
     argv += ["--", f"@{pack}"]
     return tuple(argv)
 
@@ -373,6 +384,20 @@ class CommandTransport:
                        "blockedCapacity": bool(terminal_fault and terminal_fault.startswith("blocked_capacity:"))},
                 usage=dict(parsed.usage),
             )
+        if parsed.error:
+            # Pi JSON mode can exit zero after an assistant error. Never turn
+            # that event into a delivery or silently nudge unavailable capacity.
+            capacity = any(word in parsed.error.lower() for word in (
+                "rate limit", "too many requests", "insufficient quota", "usage limit", "429",
+            ))
+            return ResultEnvelope(
+                run_id=req.run_id, kind=self.kind, sandbox=self.sandbox,
+                status="infra-fault" if capacity or not _looks_like_transport_fault(parsed.error) else "interrupted",
+                session_ref=parsed.session_ref, output=parsed.output,
+                wall_ms=wall_ms, exit_code=code,
+                detail=("blocked_capacity: " if capacity else "") + parsed.error[:400],
+                watch={"blockedCapacity": capacity}, usage=dict(parsed.usage),
+            )
         if code != 0:
             # A non-zero exit is the only case where the text on stderr is
             # evidence. On a clean exit it is not: a harness that logs "read 500
@@ -481,5 +506,6 @@ def pi_transport(
         sandbox=sandbox,
         runtime_family="node",
         prepare=prepare,
+        build_env=lambda _req: {"PYTHONDONTWRITEBYTECODE": "1"},
     )
 

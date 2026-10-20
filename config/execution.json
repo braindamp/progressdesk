@@ -1,7 +1,12 @@
 {
   "schemaVersion": 1,
   "expectedUser": "codexlab",
+  "piExecutable": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "C:\\Users\\codexlab\\.pi\\agent\\bin\\pi-launcher.js"
+  ],
   "freeModelRefs": [
+    "openrouter/minimax/minimax-m3.1-flash:free",
     "opencode/deepseek-v4.1-flash-free",
     "local/laya-systemone"
   ],

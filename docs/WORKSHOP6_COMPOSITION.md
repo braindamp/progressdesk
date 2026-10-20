@@ -122,9 +122,9 @@ records its clearance.
 
 ## Still open
 
-- A broker-delivered real feature and the complete acceptance/correction loop
-  on one milestone. Public project formation and GO now have live evidence;
-  model capacity blocked the builder before it returned any candidate.
+- The separate binary feature-split operation and qualitative model QA still
+  need live evidence. The command acceptance/correction lifecycle passed on
+  October 20 through Pi; see the latest evidence below.
 - Startup source/product identity is exposed by `desk.identity`, but the process
   does not yet emit it automatically on every launcher path.
 - OpenCode permits `bash` at the adapter boundary even when a role is given no
@@ -139,8 +139,9 @@ records its clearance.
 
 ## Continuation: integration changes and current evidence
 
-**State: core acceptance-factory integration is implemented in code; live
-end-to-end commissioning is incomplete. This is not final ProgressDesk acceptance.**
+**State: core acceptance-factory integration and the focused command-evaluated
+acceptance/correction lifecycle have live evidence through Pi. This is not final
+ProgressDesk acceptance.**
 
 The continuation adds:
 
@@ -200,7 +201,7 @@ The continuation adds:
   acceptance. Earlier commissioning results above describe the earlier code,
   not proof that every subsequent change works.
 
-### Next bounded run, after the owner makes OpenCode available
+### Commissioning command
 
 Run the live commissioning driver as `codexlab` with a new state directory:
 
@@ -212,6 +213,37 @@ The declared seed intentionally has a wrong exit-code mapping. The required
 sequence is real builder delivery, failed milestone acceptance, fresh JACK,
 self-contained LAYA approval, corrective delivery, and acceptance under the
 same criteria. This is one focused commissioning project, not a test suite or
-final product acceptance. Do not start more model runs until the owner confirms
-availability. Target promotion and the remaining VISP product milestones follow
-successful factory commissioning; they have not happened.
+final product acceptance. The owner subsequently authorized Pi and the run below
+completed. Target promotion and the remaining VISP product milestones have not
+happened.
+
+### Successful Pi commissioning (latest evidence)
+
+- Pi 0.87.1 ran as `codexlab`, through the broker, using the exact OpenRouter
+  model `minimax/minimax-m3.1-flash:free`. The public provider catalog reports
+  zero input/output prices. All three Pi session usage records report cost 0.
+  The existing environment key was used without copying it into this repository.
+- Pi's refreshed catalog lacked this new model. Its non-secret entry is
+  preserved in `config/pi-models.json` and was merged into the user's existing
+  configuration. Global defaults and other provider entries were preserved.
+  The launcher is configurable as an interpreter/JavaScript argument prefix.
+- `scratch/commission-pi/result.json` reports `all_milestones_accepted`:
+  initial delivery → failed command acceptance → fresh JACK correction → genuine
+  LAYA approval → corrective delivery → passed unchanged command acceptance.
+  There was one acceptance failure and one correction cycle. No intermediate
+  product test or model review was added.
+- JACK's first submission was approved by the local English decision model
+  with probability 0.911. The input used 249 tokens and was not truncated.
+  The host journal records approval before applying plan revision 2.
+- The Pi JSON adapter records actual input/output/cache/reasoning/total usage
+  and provider-reported cost. It recognizes assistant errors even when Pi's
+  JSON mode exits zero, and pins continuations to the exact invocation ID.
+- Sanitized receipts, evaluator verdicts, JACK submissions and usage rows:
+  [pi-commissioning-evidence.json](../history/workshop6-continuation-2026-10-20/pi-commissioning-evidence.json).
+
+This run used command acceptance, not the separate qualitative-model evaluator.
+It did not exercise JACK's binary split path or live STOP. Pi still declares
+`sandbox: none`; tool allowlists do not establish hard filesystem confinement.
+The later error-recovery parser adjustment was syntax checked after this run;
+no provider fault was deliberately induced. Final product acceptance, the human
+acceptance surface, self-improvement obligations and promotion remain open.
