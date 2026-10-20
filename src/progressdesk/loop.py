@@ -1023,7 +1023,8 @@ class RoundDispatcher:
         except Exception as exc:  # noqa: BLE001 - a bad table is a refusal, not a crash
             raise SpawnError("no_assignment", f"role {role!r} is not configured: {exc}") from exc
 
-    def _pack(self, packet: Any, run: str = "", project_id: str = "") -> ContextPack:
+    def _pack(self, packet: Any, run: str = "", project_id: str = "",
+              projection: tuple[str, str] | None = None) -> ContextPack:
         """Deliver the self-contained task contract, not only its outcome.
 
         This is the actual design-time task data. No checklist/state-machine view,
@@ -1036,10 +1037,14 @@ class RoundDispatcher:
             sections.append(ContextSection(
                 "your brief", self._read_brief("DEXTER"), ROLE_BRIEF_BUDGET,
             ))
-        lessons = _lessons_for("DEXTER", self.root)
+        # The lessons section is a bounded, declared projection of the lesson
+        # log, never the log itself (F-M7, TESP 11.5).
+        if projection is None:
+            projection = lesson_projection("DEXTER", self.root)
+        lessons, _digest = projection
         if lessons:
             sections.append(ContextSection(
-                "lessons (not tasks)", "\n---\n" + lessons + "\n---", LESSON_BUDGET,
+                "lessons (not tasks)", lessons, LESSON_BUDGET,
             ))
         sections.append(ContextSection("outcome", _text(getattr(packet, "outcome", "")), TASK_SECTION_BUDGET))
         sections.append(ContextSection("scope", _text(getattr(packet, "scope", "")), TASK_SECTION_BUDGET))
