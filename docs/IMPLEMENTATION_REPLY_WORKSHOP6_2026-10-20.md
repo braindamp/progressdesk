@@ -108,22 +108,34 @@ The normal correction path is:
 
 ```text
 failed milestone acceptance
-  -> reasoning model reviews the milestone plan and acceptance findings
+  -> fresh JACK instance reviews the milestone plan and acceptance findings
   -> proposes corrective features within the approved milestone scope
   -> host records them in the ordinary feature plan
   -> builders execute them through the usual build/status path
   -> assemble the changed product and rerun the declared milestone gate
 ```
 
-Implement this as a bounded planning responsibility, reusing the definition/planning path where suitable. Give it the milestone plan, original acceptance obligations, failed candidate/evaluator identities, recorded findings, and relevant delivery history or frozen source needed to diagnose the failure. It must be able to consider earlier features; do not assume the last builder caused the problem.
+JACK owns this bounded corrective-planning responsibility as well as feature splitting, through separate explicit operations and request/result formats. Give the fresh corrective-planning instance the milestone plan, original acceptance obligations, failed candidate/evaluator identities, recorded findings, and relevant delivery history or frozen source needed to diagnose the failure. It must be able to consider earlier features; do not assume the last builder caused the problem. Reuse the ordinary host-managed planning/feature path to apply its proposal.
 
 Its normal output is executable corrective feature contracts: outcomes, scope, interfaces and relevant acceptance obligations, with the existing tool/authority metadata preserved. Host code applies the resulting plan changes. The planner cannot silently weaken the milestone, rewrite past acceptance evidence, grant itself capabilities, or repair the product outside the normal builder path. JACK continues to handle non-delivery of ordinary or corrective features.
 
 Expose the same reasoning/planning operation for direct owner invocation and steering. The owner must be able to demand reasoning-model involvement; it is not restricted to an automatic trigger. An explicit steering request does not introduce routine intermediate product testing. Use a model capable of the required reasoning within declared free capacity; never substitute LAYA's compact classification for this planning work or silently escalate to paid capacity.
 
-Within approved scope, corrective planning and dispatch proceed without asking the owner to approve every repair. A proposed change to the product contract, milestone acceptance obligations or architecture returns through the existing human decision boundary. DEE_DEE judges, the reasoning model proposes corrective features, builders implement them, and the deterministic host records and applies transitions.
+Within approved scope, corrective planning and dispatch proceed without asking the owner to approve every repair. A proposed change to the product contract, milestone acceptance obligations or architecture returns through the existing human decision boundary. DEE_DEE judges, fresh JACK proposes corrective features, builders implement them, and the deterministic host records and applies transitions.
 
 All currently identified owner policy questions are now answered. Further genuine architecture/scope choices come back to the owner when evidence exposes them; routine implementation, import repairs and equivalent source reconciliation remain the implementing agent's work.
+
+### D. Fresh JACK for each exception
+
+The owner rejected project-long JACK conversations. BUILD FOR SUCCESS means both feature splitting and failed-milestone replanning are exception work; neither justifies accumulating conversational state that can drift.
+
+- **Feature split:** start a fresh JACK session for each split decision. Supply the failed feature's complete contract, non-delivery evidence and necessary interfaces/milestone constraints. Return two executable halves or a towel. Do not load earlier JACK conversations.
+- **Milestone correction:** start a separate fresh JACK session for each replanning invocation, including direct owner invocations. Supply the broader milestone and failure context described in section 2C. Return corrective feature proposals through the host; this operation is not restricted to two halves.
+- Build each context from current authoritative project records. A fresh session can still receive the relevant earlier feature and acceptance evidence; it does not depend on memory from a previous JACK.
+- Preserve existing resumption for a transport interruption **within the same invocation**. That continuation does not authorize reusing a completed invocation's session for another split or milestone replanning call.
+- Do not implement project-long JACK processes, a reusable JACK conversation registry, or context-saving infrastructure for these exception paths. Update JACK's existing `SPLIT only` mandate explicitly to cover its two operations and their distinct context needs.
+
+The earlier recommendation to introduce persistent project conversations for JACK and SHARPENER is withdrawn. This decision introduces no new session-lifetime policy for SHARPENER; preserve its existing approved invocation behavior unless the owner separately changes it. SHARPENER remains the framework-improvement role, not the milestone repair planner.
 
 ## 3. Combined findings to carry into implementation
 
@@ -188,7 +200,7 @@ Bring across OpenCode and report handling together with their runtime dependenci
 
 Verify specialist transitions through their concrete operations:
 
-- JACK receives the complete feature contract and failure context; the host applies exactly two ordered feature contracts or records a towel.
+- For a split, fresh JACK receives the complete feature contract and failure context; the host applies exactly two ordered feature contracts or records a towel. Milestone correction uses JACK's separate fresh-session planning operation from sections 2C/2D.
 - Mechanical housekeeping performs mechanical actions; genuine LAYA assesses the room. Unresolved cleanup reaches SCHOTTY with sufficient tools and the actual workspace/evidence paths.
 - SHARPENER observes before cleanup and can teach or propose through host operations. It does not build product features or authorize framework implementation.
 - SCHOTTY cleans and preserves committed output. POLICE receives typed concrete violation evidence, decides serious boundary violations and invokes the connected stop mechanism; do not port an unbounded raw-transcript investigation into its mandate. SHARPENER is spared on the POLICE workshop-stop path. The owner's unconditional stop remains separate in authority and can stop SHARPENER too.
@@ -249,7 +261,7 @@ The next report should identify the chosen composition and working location, the
 | Genuine LAYA installation | Client protocol and historical measurement claims exist; exact serving environment, model identity/weights, startup and supported context limits remain unestablished | Recover the actual tool; no arbitrary replacement or simulated service |
 | Coherent source composition | Donors are identified; their combined imports, event schemas, policies and role calls have not been demonstrated as workshop 6 | Resolve in code; preserve required responsibilities; report a real scope change |
 | Acceptance coverage | The old standard is demonstrably weak; a complete executable mapping of accepted ProgressDesk outcomes has not yet been approved/commissioned | Prepare the mapping from existing scope; expose unclear criteria instead of inventing a private definition of success |
-| Qualitative QA and corrective planning | Mandates are approved in section 2C; their connected implementation and live evidence remain to be produced | Preserve the QA/planner/builder separation, unchanged acceptance obligations, and direct owner access to reasoning |
+| Qualitative QA and corrective planning | Mandates are approved in sections 2C/2D; their connected implementation and live evidence remain to be produced | Preserve the QA/JACK/builder separation, fresh JACK sessions, unchanged acceptance obligations, and direct owner access to reasoning |
 | Runtime identity and capability | Requested account/model are known; no assumption about a new workshop's actual logon, free capacity or hard confinement is justified | Verify actual execution; no paid fallback or false isolation claim |
 | Live completion | Narrow target delivery evidence exists; a full 6-built, independently accepted and promoted product does not | Distinguish commissioning, acceptance and finalization; report unresolved evidence plainly |
 
