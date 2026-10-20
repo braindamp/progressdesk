@@ -18,3 +18,10 @@ __pycache__/
 /projects/
 /store/
 /scratch/
+
+# Local dependencies for the maintained diagram renderer.
+/tools/node_modules/
+
+# Maintained framework diagram source and its published render.
+!/framework_processflow.mmd
+!/framework_processflow.png

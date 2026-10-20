@@ -1,5 +1,13 @@
 # ProgressDesk — POLICE and SHARPENER normal-build integration
 
+## Framework process flow
+
+[View the process diagram](framework_processflow.png) · [Editable Mermaid source](framework_processflow.mmd)
+
+The diagram describes the intended, owner-approved agent process. Keep the Mermaid source and PNG updated together when that process changes. Regenerate with `npm --prefix tools install`, then `npm --prefix tools run render:flow`.
+
+## Historical package instructions
+
 Apply **after** the accepted `ProgressDesk_SHARPENER_PreSCHOTTY` package. Full
 file replacements. Stop ProgressDesk first, use git to preserve your previous
 sources, then extract this ZIP and run:

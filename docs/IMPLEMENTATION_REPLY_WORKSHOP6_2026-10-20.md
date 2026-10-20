@@ -250,6 +250,8 @@ Then continue the remaining VISP obligations through the same plant. Keep post-p
 
 Proceed autonomously within these decisions. Keep updates about functional progress, concrete blockers and design changes brief. Bring a newly discovered high-level architecture/scope decision to the owner before implementing that decision. Do not send routine setup choices or every reversible code repair back for confirmation.
 
+Keep the repository-root `framework_processflow.mmd` as maintained, tracked source and regenerate `framework_processflow.png` when an approved process change affects it. Carry this maintenance rule into workshop 6. Both files stay outside ignored runtime directories; the diagram shows intended approved flow, not proof that implementation has passed acceptance.
+
 Keep the implementation record proportional: source commits, provenance needed to reproduce the plant, and actual execution evidence. Fix demonstrated issues in code. Stop optional checking once the remaining concrete risk is settled.
 
 The next report should identify the chosen composition and working location, the actual LAYA recovery finding, the first concrete code completion, and the next useful milestone. It should distinguish what ran from what remains inferred. It should not ask the owner to reapprove workshop 6 or replace LAYA with a wrapper.

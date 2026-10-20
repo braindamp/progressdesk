@@ -1,0 +1,93 @@
+%% Maintained diagram source. Render with: npm --prefix tools run render:flow
+%% This describes the intended, owner-approved process, not commissioning evidence.
+flowchart TD
+    Owner["Owner: vision and VISP/FUSP approval"]
+    Plan["Definition pipeline: milestone plan, features and fixed acceptance criteria"]
+    GO["Owner: milestone GO"]
+    Dispatch["Host + kernel: authorize next feature"]
+    Builder["DEXTER: fresh builder session"]
+    Status["Host: capture delivery, run housekeeping and check operational status"]
+    Laya{"LOCAL LAYA: room ready?"}
+    Delivered{"Feature delivered?"}
+    Remaining{"Features remain?"}
+    QA["DEE_DEE: independent acceptance of assembled milestone"]
+    Passed{"Acceptance passed?"}
+    Accepted["Host: record accepted milestone"]
+    More{"Milestones remain?"}
+    Product["Deliver accepted product"]
+
+    Owner --> Plan
+    Plan --> GO
+    GO --> Dispatch
+    Dispatch --> Builder
+    Builder --> Status
+    Status --> Laya
+    Laya -->|Ready| Delivered
+    Delivered -->|Yes| Remaining
+    Remaining -->|Yes| Dispatch
+    Remaining -->|No| QA
+    QA --> Passed
+    Passed -->|Yes| Accepted
+    Accepted --> More
+    More -->|Yes| GO
+    More -->|No| Product
+
+    Split["Fresh JACK: split undelivered feature into two, or towel"]
+    ApplySplit["Host: apply two ordinary features"]
+    Replan["Fresh JACK: reason over milestone plan and failed acceptance"]
+    ApplyCorrection["Host: add corrective features within approved scope"]
+    Blocked["Red light: stop and expose the blocker"]
+
+    Delivered -->|No| Split
+    Split -->|Two deliverable halves| ApplySplit
+    ApplySplit --> Dispatch
+    Split -->|Cannot split| Blocked
+    Passed -->|No, correction budget remains| Replan
+    Replan -->|Corrective features| ApplyCorrection
+    ApplyCorrection --> Dispatch
+    Replan -->|Contract change required| Owner
+    Replan -->|Cannot proceed| Blocked
+    Passed -->|Correction budget exhausted| Blocked
+
+    Sharpener["SHARPENER: observe, learn and propose improvements"]
+    Schotty["SCHOTTY: restore the room and preserve committed work"]
+    Recheck{"LOCAL LAYA: room ready after cleanup?"}
+    Police{"POLICE: evidence establishes a boundary violation?"}
+    PoliceStop["Host: stop workshop execution; spare SHARPENER"]
+    Review["Owner: review VISP proposal"]
+
+    Status -.->|Reported issues or lessons| Sharpener
+    Status -->|Concrete boundary concern| Police
+    Laya -->|Needs expert cleanup| Sharpener
+    Sharpener -->|Cleanup needed| Schotty
+    Sharpener -->|Suspected serious violation| Police
+    Sharpener -->|Framework VISP proposal; no LAYA filter| Review
+    Sharpener -.->|Approved-scope lessons| Lessons["Host: apply lessons and instructions"]
+    Schotty -->|Cleaned| Recheck
+    Schotty -->|Blocked| Blocked
+    Schotty -->|Evidence of SHARPENER overreach| Police
+    Recheck -->|Ready| Delivered
+    Recheck -->|Not ready| Blocked
+    Police -->|Yes| PoliceStop
+    Police -->|No| Laya
+    Laya -->|Service unavailable| Infra["Infrastructure blocker; preserve evidence"]
+    Recheck -->|Service unavailable| Infra
+    QA -->|Evaluator unavailable| Infra
+
+    UserReason["Owner: explicitly request milestone reasoning"] --> Replan
+    UserStop["Owner: unconditional STOP at any time"] --> StopAll["Host: stop all workshop-owned roles, including SHARPENER"]
+    Product --> Research["SHARPENER: post-project research"]
+    Research -->|Improvement VISP| Review
+
+    classDef owner fill:#dbeafe,stroke:#2563eb,color:#172554;
+    classDef normal fill:#dcfce7,stroke:#15803d,color:#14532d;
+    classDef control fill:#f1f5f9,stroke:#64748b,color:#0f172a;
+    classDef exception fill:#fef3c7,stroke:#b45309,color:#78350f;
+    classDef acceptance fill:#ede9fe,stroke:#7c3aed,color:#3b0764;
+    classDef stop fill:#fee2e2,stroke:#dc2626,color:#7f1d1d;
+    class Owner,GO,Review,UserReason owner;
+    class Builder,Delivered,Remaining,Accepted,More,Product normal;
+    class Plan,Dispatch,Status,ApplySplit,ApplyCorrection,Lessons control;
+    class Laya,Split,Replan,Sharpener,Schotty,Recheck,Police,Research exception;
+    class QA,Passed acceptance;
+    class Blocked,PoliceStop,Infra,UserStop,StopAll stop;

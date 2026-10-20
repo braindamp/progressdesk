@@ -1,0 +1,11 @@
+{
+  "name": "progressdesk-diagram-tools",
+  "private": true,
+  "scripts": {
+    "render:flow": "node render_framework_processflow.cjs"
+  },
+  "dependencies": {
+    "@viz-js/viz": "3.25.0",
+    "sharp": "0.35.5"
+  }
+}
