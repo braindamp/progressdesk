@@ -2,6 +2,12 @@
 
 Date: 20 October 2026. Prepared after successful factory commissioning.
 
+**Owner scope clarification:** read
+`docs/DEVELOPMENT_FULL_DELIVERY_PROGRESSDESK_2026-10-20.md` as the operative
+development assignment. Complete the entire core through workshop 6 and deliver
+`D:\Coding\progressDesk`; do not stop after the next milestone. New modules
+remain parked. This handover supplies setup and evidence, not a narrower goal.
+
 ## 1. Objective and working location
 
 Complete ProgressDesk according to the VISP and the owner's recorded amendments.
@@ -130,7 +136,7 @@ Inside that shell:
 Set-Location D:\Coding\progressDesk6-workshop
 whoami
 $env:PYTHONPATH='D:\Coding\progressDesk6-workshop\src'
-& 'C:\Program Files\nodejs\node.exe' 'C:\Users\codexlab\.pi\agent\bin\pi-launcher.js' --provider openrouter --model 'minimax/minimax-m3.1-flash:free' '@docs/HANDOVER_PI_CONTINUATION_2026-10-20.md' 'Continue from this handover. Begin with section 7. Complete one bounded product milestone, preserve the approved architecture, and report actual evidence and remaining obligations.'
+& 'C:\Program Files\nodejs\node.exe' 'C:\Users\codexlab\.pi\agent\bin\pi-launcher.js' --provider openrouter --model 'minimax/minimax-m3.1-flash:free' '@docs/DEVELOPMENT_FULL_DELIVERY_PROGRESSDESK_2026-10-20.md' 'Execute the full P0-P8 assignment. Use workshop 6 to build, independently accept and deliver D:\Coding\progressDesk. Continue across milestones until the core is delivered; park new modules. Read the setup handover as needed.'
 ```
 
 This is the **development agent** editing the factory/product work as scoped.
@@ -177,9 +183,14 @@ run used this interpreter; do not silently rewrite the supported-version promise
 - No paid fallback. No credential publication. No target promotion before
   independent acceptance. No model certification of its own final success.
 
-## 7. Next useful work: complete the real product, one milestone at a time
+## 7. Full development assignment
 
-**First assignment:** identify and complete the next unmet *real ProgressDesk*
+The complete P0–P8 execution order, acceptance coverage and final stopping rule
+are in `DEVELOPMENT_FULL_DELIVERY_PROGRESSDESK_2026-10-20.md` alongside this file.
+The earlier suggestions below are context, not permission to stop after one
+milestone or to replace the factory-built target with a manually built product.
+
+**Initial implementation area:** identify and complete unmet *real ProgressDesk*
 acceptance outcome from the VISP, starting with its required owner acceptance
 surface (M12). Reuse existing code before deciding what is missing. Engine and
 CLI/API come first; do not start GUI polish.
@@ -210,9 +221,10 @@ CLI/API come first; do not start GUI polish.
 7. Preserve committed delivery on failure, route correction normally, then
    rerun the same milestone criteria. Stop optional checking when the concrete
    risk is resolved. Deliver code, short provenance and actual outcome evidence.
-8. After qualified output, compare target changes and perform a declared
-   promotion. Prefer dogfood delivery; proportionate manual integration is
-   permitted with honest provenance and independent acceptance of the result.
+8. Continue through all core obligations, then compare target changes and
+   perform the declared promotion of qualified workshop-built output. Do not
+   author missing target features by hand during integration. The owner's
+   latest instruction requires the product to be built using workshop 6.
 
 There is no need to finish a broad validation campaign before starting useful
 product work. If a chosen product milestone actually needs the binary JACK split,
@@ -228,7 +240,7 @@ qualitative QA or STOP path below, exercise and repair that path in context.
 | Other specialist paths | Core code was connected, but this success run does not demonstrate every SCHOTTY/POLICE/SHARPENER action or self-improvement obligation. |
 | Acceptance coverage | A full executable mapping of the actual accepted ProgressDesk outcomes is still needed. The old acceptance standard was weak. |
 | Owner surface | Existing operations need inventory against M12; usability and owner acceptance are not established by the commissioning fixture. |
-| Improvement/model selection | Sharpener, ModelScout, attribution-driven improvement and remaining VISP obligations stay in scope. Inventory actual code; do not assume each is absent or finished. |
+| Improvement/model selection | Existing SHARPENER observer/research/propagation and attribution remain core. ModelScout and competitions are explicitly parked by the owner until the core target is finalized. |
 | Source identity | `desk.identity` works. Automatic emission on every launcher path is still a recorded gap. |
 | Runtime environment | Shared user and declared `sandbox: none`; Python support-range mismatch remains visible. |
 | Pi error parser | Successful stream/usage path ran. A subsequent small adjustment resets an earlier error after Pi recovers; syntax checked, no deliberately induced provider-fault run. |
@@ -265,7 +277,9 @@ and a second builder delivery using real tools and reports. That is evidence
 for bounded implementation assignments. It does **not** establish ability to
 independently reconstruct the whole framework or resolve architectural unknowns.
 
-Keep the next assignment dry and focused. On completion report: actual code
+Keep individual features dry and focused while completing the entire delivery.
+After a milestone continue automatically to the next incomplete package.
+On final completion report: actual code
 changed, actual acceptance result, commit, and concrete remaining issue/next
 feature. On a blocker preserve evidence and identify the needed input. Do not
 invent a successful result, a new role, a new gate or a different product vision.

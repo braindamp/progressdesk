@@ -102,6 +102,12 @@ or test files were added.
 
 ## Workshop 6 operation
 
+**Development assignment:** follow
+[the full core-delivery instruction](docs/DEVELOPMENT_FULL_DELIVERY_PROGRESSDESK_2026-10-20.md).
+Workshop 6 must build and deliver `D:\Coding\progressDesk`; continue through all
+remaining packages to accepted target delivery. New modules remain parked.
+The [Pi handover](docs/HANDOVER_PI_CONTINUATION_2026-10-20.md) supplies setup.
+
 Start the genuine local decision service, then run the CLI from this checkout:
 
 ```powershell
