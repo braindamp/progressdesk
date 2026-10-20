@@ -4,7 +4,7 @@
 
 **Purpose:** Combine both investigations and the owner's subsequent decisions into instructions for the implementing agent.
 
-**Status:** Ready for implementation. The owner approved workshop 6, required the genuine local LAYA decision service, and resolved the two remaining design questions in section 2. Begin the approved work; no further design decision has been identified as necessary before starting.
+**Status:** Approved composition, genuine LAYA recovery and deterministic acceptance work can start. The final audit identified two further role-policy decisions in section 2C; these have been put to the owner and are not silently delegated to the implementing agent. Qualitative QA and corrective-task planning must follow the recorded answers before those paths are enabled. This document is a bounded implementation handoff, not evidence of a fully settled or completed framework.
 
 Read with [the research handoff](RESEARCH_HANDOFF_DOGFOOD_RECOVERY_2026-10-20.md) and [your forensic reply](REPLY_RESEARCH_HANDOFF_DOGFOOD_RECOVERY_2026-10-20.md). This reply supersedes their conflicting recommendations. The older implementation plan is not ready to execute unchanged.
 
@@ -45,8 +45,10 @@ Your earlier recommendation to default to the LLM role and make SystemOne option
 - Host code applies role effects. A readable answer, a `routed` status or an instruction in a brief is not an applied split, cleanup, lesson or stop.
 - One gateway, one durable event truth, one candidate assembly path and one milestone acceptance lifecycle. Preserve the distinction between orchestration and the underlying milestone phase service; do not create parallel phase machines.
 - Prefer OpenCode with the requested **DeepSeek V4.1 Flash Free**, preferably running under `codexlab`. Check actual identity and available model configuration. Do not infer either from a path or `expectedUser`.
+- Use available free capacity. Do not silently substitute a paid model or paid service. Record attribution and actual usage for every role/transport invocation, including failed and infrastructure-fault runs; unavailable usage is unknown, not invented zero. A free model still has token, time and resource usage.
 - Prefer dogfood delivery into the target. A proportionate manual integration is allowed with explicit provenance and the same independent acceptance; do not describe it as automated dogfood delivery.
 - Engine and CLI/API completion precede GUI polish. Usable human acceptance remains required. Post-project improvement remains in final VISP scope, following the acceptance bootstrap.
+- The human's unconditional stop remains available independently of model judgment, signoff and successful journal writes. It stops all workshop-owned execution in its requested scope, including SHARPENER when the owner says stop everything, while sparing unrelated human processes. POLICE's specific instruction to spare SHARPENER does not limit the owner's authority.
 
 ## 2. Final owner clarifications, checked against the VISP
 
@@ -87,7 +89,14 @@ Use the one housekeeping/status path and the existing roles. This clarification 
 
 Carry these explicit owner amendments into workshop 6's operative contract. Preserve donor specifications as historical sources rather than silently treating contradictory older prose as current instructions.
 
-No other new owner decision has been identified as necessary to start the approved composition and service recovery. Surface a genuine new architecture/scope choice when evidence exposes it. Routine implementation, import repairs and source reconciliation are the implementing agent's work.
+### C. Two policy decisions exposed by the final audit
+
+These are genuinely unresolved in the governing material, rather than routine code choices:
+
+1. **Qualitative QA authority.** VISP section 9 explicitly leaves QA's allowed evidence, assertions, rejection grounds, independence and cost under-defined. The owner has been asked whether to approve a bounded DEE_DEE role: judge only qualitative criteria fixed in the approved contract; read only the frozen product, declared inputs and recorded evaluator evidence; use a separate session within a declared free-model budget; cite evidence; neither alter criteria nor repair the product. The alternative is deterministic acceptance first, with qualitative acceptance left pending. Do not interpret "model judgment where needed" elsewhere as permission to invent this mandate.
+2. **Correction ownership.** A failed acceptance event does not itself define an executable repair. The owner has been asked whether the host should dispatch DEXTER with structured findings and unchanged acceptance criteria as a bounded corrective assignment, with JACK handling non-delivery, or whether the existing planning responsibility should first turn findings into corrective features. The deterministic runner may schedule and apply results; it must not acquire investigative or planning judgment.
+
+The questions do not block approved composition, local-service recovery or commissioning deterministic acceptance. They do block silently choosing the corresponding role policy. Update this section with the owner's answers before implementing the affected behavior. Other genuine architecture/scope choices also come back to the owner when evidence exposes them; routine implementation, import repairs and equivalent source reconciliation remain the implementing agent's work.
 
 ## 3. Combined findings to carry into implementation
 
@@ -123,6 +132,8 @@ Inspect existing paths and local changes before creation. Create a separate chec
 
 Separate factory source, execution state, builder workspace, frozen product, acceptance instruments and evaluator scratch. Startup must identify the loaded factory source and product root. A root argument alone does not establish which `progressdesk` package is running.
 
+Pin the factory version while it executes and evaluates a candidate. A strong sweep must not blindly pull/install target or GitHub HEAD over the running factory. Accepted runtime updates and proven-fix propagation use explicit versions and the existing approval/precondition rules at a clean boundary. Do not mix candidate construction with a live factory upgrade.
+
 ### Step 2. Recover the genuine LAYA service alongside composition work
 
 Use the preserved support files and original installation/client history to locate the real package, model weights, serving command, environment and account used. Repair an observed installation/serving problem where necessary. An installation log ending during torch extraction does not establish that no other successful installation existed.
@@ -144,6 +155,8 @@ If recovery needs an unavailable model artifact, a paid service, or an architect
 
 Connect the minimum required kernel authorization to the public gateway, actual broker dispatch and owner operations. Reuse valid scheduler/GO checks while keeping authorization in one place. These contract checks do not become feature-quality testing or a second supervisor.
 
+Establish caller authority from the trusted host/owner channel, not a request field claiming `owner`, `human` or an allowed producer. Bind signoff and GO to the actual approved revisions. The active installed kernel/policy is outside builder and SHARPENER instruction-write authority; production kernel source under construction can still be a legitimate candidate deliverable.
+
 Bring across OpenCode and report handling together with their runtime dependencies. Prefer `codexlab` as requested; confirm the process's actual identity. Report the supported sandbox posture accurately. Do not create per-role accounts or a new prevention framework without an observed need and an approved design change.
 
 Verify specialist transitions through their concrete operations:
@@ -151,18 +164,26 @@ Verify specialist transitions through their concrete operations:
 - JACK receives the complete feature contract and failure context; the host applies exactly two ordered feature contracts or records a towel.
 - Mechanical housekeeping performs mechanical actions; genuine LAYA assesses the room. Unresolved cleanup reaches SCHOTTY with sufficient tools and the actual workspace/evidence paths.
 - SHARPENER observes before cleanup and can teach or propose through host operations. It does not build product features or authorize framework implementation.
-- SCHOTTY cleans and preserves committed output. POLICE decides serious boundary violations and invokes the connected stop mechanism. SHARPENER is spared as required by the owner.
+- SCHOTTY cleans and preserves committed output. POLICE receives typed concrete violation evidence, decides serious boundary violations and invokes the connected stop mechanism; do not port an unbounded raw-transcript investigation into its mandate. SHARPENER is spared on the POLICE workshop-stop path. The owner's unconditional stop remains separate in authority and can stop SHARPENER too.
 - DEE_DEE receives the frozen deliverable and declared contract, with actual evaluator capabilities. Remove references to deleted capabilities when replacing them with a working equivalent.
 
 Connect round completion to the operational status handling in section 2B. Establish readiness and handle observed role-boundary findings before dispatching the next feature. This checks the production environment and the agent's mandate; product-result evaluation remains at the milestone.
+
+Run the same necessary housekeeping/readiness path at startup and restart, before the first dispatch. Preserve the owner's broad authorized read scope; do not silently turn a role's compact input contract into an invented machine-wide read restriction. Declared `sandbox: none` and shared identity are not hard filesystem isolation.
 
 Keep exceptions terminal when they cannot proceed. Do not invent a post-POLICE automatic restart protocol.
 
 ### Step 4. Establish meaningful milestone acceptance early
 
-Assemble the complete product from a named immutable source seed and host-committed changes. Cover deletion/rename when needed by actual product changes. Keep acceptance code and its receipts outside the frozen product.
+Assemble the complete product from a named immutable source seed and host-committed changes. Cover deletion/rename when needed by actual product changes. Keep the trusted evaluator instruments used to judge this candidate, evaluator scratch and their receipts outside the frozen product. **ProgressDesk's own production acceptance implementation being built is part of the product and must remain inside the candidate.** Do not exclude it under a blanket "acceptance code is external" rule.
+
+The approved acceptance contract determines the method, examples and standard. The factory executes that contract; it does not invent or weaken the standard to certify its own work. Map the accepted VISP/FUSP outcomes to concrete milestone criteria/evidence and expose uncovered or subjective conditions before relying on them. An implementation agent may prepare executable instruments for already approved criteria, but unresolved quality judgments or changed product requirements return to the external acceptance authority/owner.
+
+Freeze the relevant product manifest, approved contract revision, evaluator/input references and delivery identities for each gate attempt. At dispatch, capture the effective feature identity/revision and scope; editing the feature file must not make an old receipt certify changed work or silently weaken the approved milestone. Preserve manual reordering/editing of unfinished features as agreed; do not introduce old-journal compatibility, split ancestry or a rollback graph.
 
 Run the candidate independently with a clean import environment. Establish that its imported package and entry point come from the candidate, not workshop 6's identically named package. Capture process result and relevant behavioral evidence in the host. Deterministic criteria use executable results; model judgment is reserved for criteria that require it.
+
+Enabling qualitative model judgment additionally requires the owner decision and mandate in section 2C. Keep its session separate from the builder's; a separate session/model role is not by itself proof of OS isolation. Check that the product and declared evaluator identities remain the ones actually evaluated, and bind acceptance/promotion to those exact bytes and contract evidence.
 
 Commission the instrument with a relevant positive case and a deliberately broken behavior that must fail for the expected reason. This establishes the acceptance capability; it is not a broad testing campaign or a gate between ordinary features. A source snapshot used to commission the instrument must carry its real provenance, without fabricated builder reports.
 
@@ -172,13 +193,17 @@ Use one existing milestone phase service with coherent orchestration around it. 
 
 Through the public CLI/API, declare the project, milestone, accepted contract and GO; prepare its editable feature list and seed. Obtain a real host-committed feature from 6's actual broker/OpenCode path, then proceed toward the milestone.
 
-After the milestone's required deliveries, run its declared acceptance against the frozen assembly. A failed gate must lead to executable corrective feature work within the existing approved milestone scope, a changed candidate, and the same gate again. A proposal outside approved scope follows the existing human decision boundary. An evaluator infrastructure outage does not consume a product correction attempt.
+After the milestone's required deliveries, run its declared acceptance against the frozen assembly. Product failure leads to executable corrective work using the owner-selected responsibility from section 2C, within the existing approved milestone scope, followed by a changed candidate and the same declared criteria/gate. Preserve the milestone's explicit correction budget and honest terminal non-success when exhausted. Do not silently introduce unlimited repair or arbitrary new limits on recursive JACK splitting. A proposal outside approved scope follows the existing human decision boundary.
+
+Missing tooling, a runner/setup crash or an unavailable evaluator is an infrastructure outcome, not a negative product verdict and not a consumed product correction. Conversely, a declared evaluator observing the candidate crash or violate a required behavior may legitimately report product failure. Do not classify every nonzero exit/exception as either product failure or infrastructure without this distinction. If the acceptance standard itself is wrong or insufficient, return the criterion/policy change to its external authority; never tailor it silently to obtain a pass or recycle old evidence after a material change.
 
 Record an actual verdict and evidence. A correction event with no runnable next operation is incomplete implementation.
 
 ### Step 6. Produce and integrate the final target
 
 Use the working plant for the remaining acceptance/product milestones. Promote a qualified candidate into the target through a declared dogfood delivery when practical. Compare concurrent target changes before applying output. Record any manual integration honestly and independently evaluate the resulting target.
+
+Promote the exact accepted product and its recorded manifest. Do not promote mutable scratch or a subsequently modified assembly under an earlier acceptance receipt. The active factory, candidate implementation and product recipient remain distinct through promotion; updating the active trusted kernel is an explicit installation act under owner authority.
 
 Then continue the remaining VISP obligations through the same plant. Keep post-project improvement and the required human acceptance surface visible in final scope; GUI polish and explicitly parked work follow the functional milestones.
 
@@ -189,3 +214,16 @@ Proceed autonomously within these decisions. Keep updates about functional progr
 Keep the implementation record proportional: source commits, provenance needed to reproduce the plant, and actual execution evidence. Fix demonstrated issues in code. Stop optional checking once the remaining concrete risk is settled.
 
 The next report should identify the chosen composition and working location, the actual LAYA recovery finding, the first concrete code completion, and the next useful milestone. It should distinguish what ran from what remains inferred. It should not ask the owner to reapprove workshop 6 or replace LAYA with a wrapper.
+
+## 7. Known unknowns that must remain visible
+
+| Item | Current knowledge and next evidence | Policy boundary |
+|---|---|---|
+| Genuine LAYA installation | Client protocol and historical measurement claims exist; exact serving environment, model identity/weights, startup and supported context limits remain unestablished | Recover the actual tool; no arbitrary replacement or simulated service |
+| Coherent source composition | Donors are identified; their combined imports, event schemas, policies and role calls have not been demonstrated as workshop 6 | Resolve in code; preserve required responsibilities; report a real scope change |
+| Acceptance coverage | The old standard is demonstrably weak; a complete executable mapping of accepted ProgressDesk outcomes has not yet been approved/commissioned | Prepare the mapping from existing scope; expose unclear criteria instead of inventing a private definition of success |
+| Qualitative QA and corrective planning | Two explicit owner questions are in section 2C | No implicit role-authority decision by the implementer |
+| Runtime identity and capability | Requested account/model are known; no assumption about a new workshop's actual logon, free capacity or hard confinement is justified | Verify actual execution; no paid fallback or false isolation claim |
+| Live completion | Narrow target delivery evidence exists; a full 6-built, independently accepted and promoted product does not | Distinguish commissioning, acceptance and finalization; report unresolved evidence plainly |
+
+The handoff covers the direction and next implementation responsibilities. It does not certify that these unknowns are already solved or that no further implementation finding can require owner steering.
