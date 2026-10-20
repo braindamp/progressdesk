@@ -234,7 +234,13 @@ def _with(outcome: "DispatchOutcome", **changes: Any) -> "DispatchOutcome":
 #
 # He cannot kill a process or restore a git ref. That is deliberate -- those are
 # named operations, added when he reports he needs one and SHARPENER proposes it.
-LESSON_BUDGET = 600
+# TESP 11.5 names no "lessons" row: the brief row is 1.5 K tokens, which is
+# about 6000 bytes, and it is regenerated per phase rather than appended. The
+# lessons section of the context pack is that brief: a projection of the
+# lesson log, computed to fit, never the log itself (F-M7: lessons are the
+# substrate, not a running log).
+BRIEF_BUDGET = 6_000
+LESSON_BUDGET = BRIEF_BUDGET
 LESSONS_DIR = paths.LESSONS
 
 
@@ -246,6 +252,66 @@ def _lessons_for(role: str, root: Path | None = None) -> str:
         return path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def lesson_entries(role: str, root: Path | None = None) -> list[str]:
+    """The lesson log for a role, oldest first. The substrate: never trimmed."""
+    root = Path(root or os.environ.get("PROGRESSDESK_ROOT", "."))
+    path = root / LESSONS_DIR / f"{role}.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def lesson_projection(
+    role: str, root: Path | None = None, budget: int = BRIEF_BUDGET,
+) -> tuple[str, str]:
+    """A bounded, declared projection of the lesson log (F-M7, TESP 11.5).
+
+    Returns ``(text, digest)``. The text never exceeds ``budget``: it carries
+    the newest lessons that fit and a footer that says how many were left out
+    and where the rest lives. Nothing is silently cut, the log is never
+    trimmed, and two rounds over an unchanged log carry byte-identical briefs.
+    """
+    import hashlib
+
+    root = Path(root or os.environ.get("PROGRESSDESK_ROOT", "."))
+    entries = lesson_entries(role, root)
+    if not entries:
+        return "", ""
+    lessons_path = root / LESSONS_DIR / f"{role}.md"
+    log_path = paths.event_log(root)
+    reserve = 512
+
+    def render(kept: list[str], omitted: int) -> str:
+        footer = (
+            f"Showing {len(kept)} of {len(entries)} lessons (newest first) within the "
+            f"{budget}-byte brief budget.\n"
+            f"{omitted} earlier lesson(s) are not shown. The complete list is in "
+            f"{lessons_path};\nthe log of every lesson taught is in {log_path}. "
+            "Read them if you need more."
+        )
+        body = "\n".join(kept)
+        return "\n---\n" + (body + "\n" if body else "") + footer + "\n---"
+
+    kept: list[str] = []
+    used = 0
+    for line in reversed(entries):
+        size = len(line.encode("utf-8")) + 1
+        if used + size + reserve > budget:
+            break
+        kept.append(line)
+        used += size
+    kept.reverse()  # newest first
+    omitted = len(entries) - len(kept)
+    text = render(kept, omitted)
+    while len(text.encode("utf-8")) > budget and kept:
+        kept.pop()  # drop the oldest shown lesson
+        omitted += 1
+        text = render(kept, omitted)
+    return text, "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 JANITOR_TOOLS = ("read", "write", "glob", "grep")
@@ -407,6 +473,10 @@ class RoundDispatcher:
         # The run-to-task binding was settled before the adapter was chosen.
         # Recording it here, once the round has actually been dispatched, keeps
         # "dispatched" meaning what it says: this run is going out.
+        # The lessons brief is a projection of the lesson log, derived here and
+        # carried with the round: two rounds over an unchanged log carry
+        # byte-identical briefs (F-M7's hash-pinning, made concrete).
+        projection = lesson_projection("DEXTER", self.root)
         self._log.record(
             "round.dispatched",
             producer="manager",
@@ -414,24 +484,49 @@ class RoundDispatcher:
                 "taskId": task_id,
                 "milestoneId": milestone_id,
                 "slice": str(getattr(packet, "outcome", ""))[:200],
+                "lessonsProjectionDigest": projection[1],
                 "authorization": authorization,
             }).encode("utf-8"),
             project_id=project_id,
             task_ref=task_id,
             run_id=run,
         )
-        request = self._request(project_id, task_ref, packet, run, tools, budget, role)
-        actual_role = request.role
+        # D1: the request is built inside the guarded region. SpawnRequest
+        # renders the context pack, so an over-budget pack raises here; a
+        # framework fault must never leave a round open and unaccounted.
+        actual_role = role
         try:
+            request = self._request(project_id, task_ref, packet, run, tools, budget,
+                                     role, projection)
+            actual_role = request.role
             envelope = self.spawner.spawn(request, kind=adapter)
         except SpawnError as exc:
-            # The start is already journaled: it must also be closed.
-            refused = DispatchOutcome(
-                run_id=run, project_id=project_id, task_ref=task_ref,
-                status="infra-fault", detail=f"seam refused the dispatch: {exc}",
-            )
-            self._close_round(project_id, refused, task_id, milestone_id)
-            return refused
+            # D2: a section the framework itself generated may not be the
+            # reason a dispatch dies. Re-project once and retry; only then is
+            # it an infra-fault that burns budget and nothing else.
+            if getattr(exc, "code", "") == "context_over_budget":
+                retry_projection = lesson_projection("DEXTER", self.root,
+                                                     max(600, BRIEF_BUDGET // 2))
+                try:
+                    request = self._request(project_id, task_ref, packet, run, tools,
+                                             budget, role, retry_projection)
+                    actual_role = request.role
+                    envelope = self.spawner.spawn(request, kind=adapter)
+                except SpawnError as retry_exc:
+                    refused = DispatchOutcome(
+                        run_id=run, project_id=project_id, task_ref=task_ref,
+                        status="infra-fault",
+                        detail=f"seam refused the dispatch: {retry_exc}",
+                    )
+                    self._close_round(project_id, refused, task_id, milestone_id)
+                    return refused
+            else:
+                refused = DispatchOutcome(
+                    run_id=run, project_id=project_id, task_ref=task_ref,
+                    status="infra-fault", detail=f"seam refused the dispatch: {exc}",
+                )
+                self._close_round(project_id, refused, task_id, milestone_id)
+                return refused
 
         # What the builder said while it worked, read back from the log. It is
         # here, not in the envelope, because he may have said it long before the
@@ -884,13 +979,14 @@ class RoundDispatcher:
         self,
         project_id: str, task_ref: str, packet: Any, run: str,
         tools: tuple[str, ...], budget: Budget | None, role: str = "DEXTER",
+        projection: tuple[str, str] | None = None,
     ) -> SpawnRequest:
         provider, model = self._model(role)
         return SpawnRequest(
             run_id=run,
             task_ref=f"{project_id}:{task_ref}",
             role=role,
-            context_pack=self._pack(packet, run, project_id),
+            context_pack=self._pack(packet, run, project_id, projection),
             tool_allowlist=tools,
             budget=budget or Budget(),
             model_spec=ModelSpec(provider=provider, model=model),

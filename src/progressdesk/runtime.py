@@ -347,14 +347,14 @@ class Runtime:
             # was built to remove.
             sections.append(ContextSection("your brief", read_brief(role), brief_budget))
             # Lessons, below the brief and fenced so they are not read as tasks.
-            # The same injection the round path does, because a role consulted
-            # rather than dispatched used to never see a lesson at all.
-            from .loop import _lessons_for, LESSON_BUDGET
-            lessons = _lessons_for(role, self.root)
+            # The same projection the round path does: a bounded, declared view
+            # of the lesson log, computed to fit its budget, never the log
+            # itself (F-M7, TESP 11.5).
+            from .loop import lesson_projection, LESSON_BUDGET
+            lessons, _digest = lesson_projection(role, self.root)
             if lessons:
                 sections.append(ContextSection(
-                    "lessons (not tasks)",
-                    "\n---\n" + lessons + "\n---", LESSON_BUDGET,
+                    "lessons (not tasks)", lessons, LESSON_BUDGET,
                 ))
         if cast:
             sections.append(ContextSection("the other roles", _cast_briefs(role), 40_000))

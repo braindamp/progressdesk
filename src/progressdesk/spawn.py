@@ -167,9 +167,12 @@ class ContextSection:
     def render(self) -> str:
         if self.size > self.byte_budget:
             # Fails the spawn. Silent truncation is how context rot starts.
+            # The diagnostic carries size, budget and excess separately: a
+            # reader who is told only the size cannot tell what is over.
             raise SpawnError(
                 "context_over_budget",
-                f"section {self.name!r} is {self.size} bytes over a {self.byte_budget} byte budget",
+                f"section {self.name!r} is {self.size} bytes against a "
+                f"{self.byte_budget} byte budget ({self.size - self.byte_budget} over)",
             )
         return f"## {self.name}\n\n{self.text}"
 
