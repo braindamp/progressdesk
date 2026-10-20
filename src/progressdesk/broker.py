@@ -601,6 +601,9 @@ class ProjectRun:
             self._closed = True
 
 
+SHARPENER_PROJECT = "__sharpener__"
+
+
 class ProjectRunRegistry:
     """In-memory live ownership; the event log remains the durable identity."""
 
@@ -608,14 +611,15 @@ class ProjectRunRegistry:
         self._lock = threading.RLock()
         self._runs: dict[str, list[ProjectRun]] = {}
         self._closed: set[str] = set()
+        self._workshop_stopped = False
 
     def is_closed(self, project_id: str) -> bool:
         with self._lock:
-            return project_id in self._closed
+            return project_id in self._closed or (self._workshop_stopped and project_id != SHARPENER_PROJECT)
 
     def register(self, project_id: str, run: ProjectRun) -> None:
         with self._lock:
-            if project_id in self._closed:
+            if self.is_closed(project_id):
                 raise BrokerError("project dispatch is closed")
             self._runs.setdefault(project_id, []).append(run)
 
@@ -628,6 +632,12 @@ class ProjectRunRegistry:
         with self._lock:
             self._closed.add(project_id)
             return tuple(self._runs.get(project_id, ()))
+
+    def close_workshop(self) -> tuple[ProjectRun, ...]:
+        with self._lock:
+            self._workshop_stopped = True
+            return tuple(run for project, runs in self._runs.items()
+                         if project != SHARPENER_PROJECT for run in runs)
 
     def reopen_project(self, project_id: str) -> None:
         with self._lock:
@@ -646,6 +656,14 @@ class PoliceTerminationAuthority:
 
     def terminate_project(self, broker: Broker, project_id: str) -> tuple[ProjectRun, ...]:
         runs = broker._close_project_dispatch(project_id)
+        for run in runs:
+            self.terminate(run)
+        return runs
+
+
+    def terminate_workshop(self, broker: Broker) -> tuple[ProjectRun, ...]:
+        with broker._dispatch_lock:
+            runs = broker.runs.close_workshop()
         for run in runs:
             self.terminate(run)
         return runs

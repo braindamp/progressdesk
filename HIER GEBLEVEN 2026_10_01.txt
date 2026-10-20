@@ -1,7 +1,7 @@
 progressdesk nu eigenlijk praktisch helemaal afgebouwd, en dit is het laatste project, build 4 etc geintegreerd, Fable ook.
 
 we waren goed onderweg en rollen zoals SHARPENER, POLICE waren nog niet helemaal goed gedefinieerd.
-toen begonnen we met een logische keten waar LAYA een rol speelt, 
+toen begonnen we met een logische keten waar LAYA een rol speelt,
 idee: checken of rare dingen opvallen etc, maar toen kwam er enkel nog B.S. uit het model.
 
 HANDOVER is van kort daarvoor, ook niet helmaal te vertrouwen. het beste gewoon in de code kijken, die laatste modellen klaarstomen
@@ -11,3 +11,45 @@ en dan verder.
 de logica van hoe de verschillende rollen samenhangen zou al WEL praktisch helemaal erin zitten, dus vraag een model dit uit te schetsen en take it from here.
 
 PS maar die hele setup waar LAYA demo een request krijgt is TOTALE B.S., is gewoon eoa json file in gedumpt ,slaat nergens op.
+
+AFTER SOL UPDATES:
+
+The `project.features.init` verb normally fills these entries from the actual declared tasks. This example is illustrative. Keep the declared feature's metadata (tool references, limits, signoffs) when manually editing an actual plan.
+
+## Behavior
+
+- One milestone = one ordered file, read afresh when selecting each feature.
+- A builder success commits its delivered files to the event journal and immutable artifact store. The next unfinished feature runs. No per-feature acceptance.
+- Builder failure calls JACK. JACK returns two smaller feature contracts. The host updates the **one feature file** atomically: revised current entry followed immediately by its new sibling. If either subsequently fails, JACK splits that entry again. Order is always by list position, never by the feature ID's spelling.
+- SCHOTTY restores the room and discards uncommitted workspace scratch. It does **not** know JACK, drain splits, or touch the feature file.
+- At the end of the list, independent milestone QA runs against the assembled committed deliverable and the accepted evaluator.
+- The feature file contains no `done` checkmarks. Committed delivery status and artifact references live in the journal; feature *order and descriptions* live in the file.
+- There is deliberately **no** rollback, split ancestry, splitting audit trail, old-journal compatibility, or special handling for manually changing already committed features. This is intended for **new projects**; do not use it to resume prior-stage journals.
+
+## Demonstrated / not demonstrated
+
+A disposable-runtime demonstration passed: three nested splits, an ordinary text-file reorder, seven committed feature outputs, and exactly one successful milestone-QA invocation after full assembly. Python imports and compilation passed. These are isolated lifecycle checks, not per-feature QA checks.
+
+**Still requires a real run on your machine:** Windows broker/Pi, CLEANING_LAYA's decision service, and DEE_DEE's live external milestone evaluator. Existing known gaps (POLICE project termination integration, end-of-project SHARPENER, automatic failed-QA correction) are not silently declared finished by this package.
+
+Files are the truth. Each milestone has one editable JSON feature list.
+
+
+
+JACK only splits. The host inserts two ordinary features into that list. Repeated nested splitting works identically.
+
+
+
+SCHOTTY only cleans. No split history, branch tracking, draining or rollback.
+
+
+
+The journal records execution and committed builder artifacts, not feature ordering.
+
+
+
+Milestone QA runs after the last feature commits. No feature-level acceptance testing.
+
+
+
+Removed the obsolete task_splits.py module and its related operations.

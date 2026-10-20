@@ -157,19 +157,19 @@ class FloorSweep:
 
     # -- the entry point --------------------------------------------------
     def run(self, project_id: str, *, strength: str = LIGHT) -> SweepReport:
+        """Repair an incomplete append before any pass reads the strict event log."""
         if strength not in STRENGTHS:
             raise ValueError(f"strength must be one of {STRENGTHS}, not {strength!r}")
         report = SweepReport(project_id=project_id, strength=strength)
-        self._reconcile_liveness(report)
-        self._sweep_debris(report)
-        self._sweep_escaped(report)
         self._discard_torn_tail(report)
-        if strength == STRONG:
-            self._reset_environment(report)
+        if not any(action.blocked for action in report.actions):
+            self._reconcile_liveness(report)
+            self._sweep_debris(report)
+            self._sweep_escaped(report)
+            if strength == STRONG:
+                self._reset_environment(report)
         self._record(
-            report,
-            "sweep",
-            f"{strength}: {len(report.traces)} trace(s)",
+            report, "sweep", f"{strength}: {len(report.traces)} trace(s)",
             blocked=bool(report.traces),
         )
         return report
@@ -384,28 +384,33 @@ class Sweep:
         self.script = FloorSweep(log, artifacts, workspace=workspace)
 
     def work_left(self, project_id: str) -> list[str]:
-        """Declared tasks that have not delivered. Read from the log, not the board."""
-        from .delivery import task_delivered
+        """Find declared tasks without a successful, host-closed round.
 
-        events = [e.to_dict() if hasattr(e, "to_dict") else e
-                  for e in self.script.log.read_all()]
+        The historical implementation imported an absent delivery.py module. This
+        derives a conservative status from existing journal facts without making a
+        delivery decision or running any quality check.
+        """
         declared: list[str] = []
-        for event in events:
-            if event.get("type") != "task.declared" or event.get("projectId") != project_id:
+        completed: set[str] = set()
+        for event in self.script.log.read_all():
+            if event.projectId != project_id:
                 continue
-            ref = event.get("payloadRef")
-            if not ref:
+            if event.type not in ("task.declared", "round.closed"):
                 continue
             try:
-                payload = json.loads(
-                    self.script.artifacts.get_bytes(ref.split(":", 1)[1]).decode("utf-8")
-                )
-            except (OSError, ValueError, IndexError, UnicodeDecodeError):
+                payload = json.loads(self.script.artifacts.get_bytes(
+                    event.payloadRef.split(":", 1)[1]
+                )) if event.payloadRef else {}
+            except (OSError, ValueError, UnicodeDecodeError, IndexError):
                 continue
-            task_id = str(payload.get("taskId") or payload.get("taskDefinitionRef") or "")
-            if task_id:
-                declared.append(task_id)
-        return [t for t in dict.fromkeys(declared) if not task_delivered(events, project_id, t)]
+            task_id = payload.get("taskId")
+            if not task_id:
+                continue
+            if event.type == "task.declared":
+                declared.append(str(task_id))
+            elif payload.get("outcome") == "success" and payload.get("candidateHash"):
+                completed.add(str(task_id))
+        return [task_id for task_id in dict.fromkeys(declared) if task_id not in completed]
 
     def after_slice(self, project_id: str) -> SweepReport:
         report = self.script.run(project_id, strength=LIGHT)

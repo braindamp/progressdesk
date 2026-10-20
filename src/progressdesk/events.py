@@ -242,6 +242,16 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    "project.workspace-seeded": {
+        "producers": frozenset({"desk"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "milestone.contract-bound": {
+        "producers": frozenset({"desk"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
     "milestone.integration-started": {
         "producers": frozenset({"manager"}),
         "payload_required": True,
@@ -373,6 +383,16 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "producers": frozenset({"manager"}),
         "payload_required": True,
         "project_scoped": False,
+    },
+    "visp.queued": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    "visp.dismissed": {
+        "producers": frozenset({"desk"}),
+        "payload_required": True,
+        "project_scoped": True,
     },
     "proposal.intent": {
         "producers": frozenset({"manager"}),
@@ -553,7 +573,7 @@ def _event_file_lock(path: Path) -> Iterator[None]:
             import msvcrt
 
             if lock_path.stat().st_size == 0:
-                handle.write(b"\\0")
+                handle.write(b"\0")
                 handle.flush()
             handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
@@ -586,11 +606,19 @@ class EventLog:
     """
 
     def __init__(self, events_path: Path, artifacts: ArtifactStore) -> None:
+        """Recover a torn final append *before* strict replay is attempted.
+
+        This is the first event-log reader used by Runtime.create(). Waiting for
+        FloorSweep to repair the tail is too late: construction would already fail.
+        The recovery routine serializes itself under the ordinary event-file lock,
+        preserves removed bytes as an artifact, and emits recovery.completed.
+        Interior corruption still raises from the strict parser.
+        """
         self.events_path = Path(events_path)
         self.artifacts = artifacts
         self._last_sequence = 0
         if self.events_path.exists():
-            self._scan_existing()
+            self.recover_incomplete_tail()
 
     def _parse_events(self, raw: bytes, source: str) -> list[Event]:
         """Parse, validate, deduplicate, and order raw event-log bytes."""
@@ -769,6 +797,7 @@ class EventLog:
                 producer=producer,
                 payload=payload,
                 project_id=project_id,
+                task_ref=task_ref,
                 run_id=run_id,
                 cause_id=cause_id,
             )

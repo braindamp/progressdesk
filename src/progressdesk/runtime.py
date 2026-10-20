@@ -14,7 +14,6 @@ import importlib
 import json
 import os
 import threading
-import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,7 +21,7 @@ from typing import Any, Callable, Mapping
 
 from . import paths
 from .artifacts import ArtifactStore
-from .broker import Broker, PoliceTerminationAuthority
+from .broker import Broker, PoliceTerminationAuthority, SHARPENER_PROJECT
 from .definitions import Definitions
 from .decide import READS_AS_PROBLEM, Decision, SystemOneExecutor, Unreachable
 from .desk import ProgressDeskOperations, ProjectService
@@ -31,8 +30,7 @@ from .harness import HarnessConfig, HarnessError, TaskPacket
 from .floor_sweep import Cleaner, Sweep
 from .spawn import Budget, ContextPack, ContextSection, ModelSpec, SpawnRequest
 from .lab import LabNeedDetermination, LabReferralService, SimulatedLabReferral
-from .loop import (AGENTS, GATE_FLOOR, PROPOSES, PROGRESSDESK_IS,
-                     dispatcher_for, judge_change, read_brief)
+from .loop import _cast_briefs, AGENTS, dispatcher_for, read_brief
 from .police import FailureClassification, Observation, PoliceService
 from .planning import PlanningSession
 from .spawn import ExecutorRegistry, ManualExecutor, SpawnError, Spawner
@@ -149,7 +147,7 @@ class Runtime:
     sweep: Sweep | None = None
     cleaner: Cleaner | None = None
     ask: Callable[..., str] | None = None
-    split_task: Callable[..., tuple[str, str]] | None = None
+    split_task: Callable[..., Any] | None = None
     _spawner_lock: threading.Lock = field(default_factory=threading.Lock)
 
     # -- construction ----------------------------------------------------
@@ -195,11 +193,13 @@ class Runtime:
             sweep=sweep,
             cleaner=None,
             ask=None,
-            split_task=split_task(definitions, log),
-                _write_lock=threading.Lock(),
+            split_task=None,
+            _write_lock=threading.Lock(),
         )
         runtime.cleaner = Cleaner(sweep, runtime.decide_in_room)
         runtime.ask = runtime.ask_role
+        from .feature_list import FeatureList
+        runtime.split_task = FeatureList(runtime).apply
         return runtime
 
     # -- the spawn seam ---------------------------------------------------
@@ -219,6 +219,9 @@ class Runtime:
                             broker=self.broker,
                             terminator=PoliceTerminationAuthority().terminate,
                             project_id=project_id,
+                            prepare_workspace=lambda run: __import__(
+                                "progressdesk.workspace", fromlist=["ProjectWorkspace"]
+                            ).ProjectWorkspace(self).prepare_round(project_id, run),
                         )
                     )
                 except SpawnError:
@@ -273,6 +276,10 @@ class Runtime:
     ) -> Any:
         """Put one role's context in front
     """
+        requested_project = project_id
+        if role == "SHARPENER":
+            project_id = SHARPENER_PROJECT
+            state = f"Source project: {requested_project}\n" + state
         adapter, definition = self._adapter(project_id, role, expecting=expecting)
         sections = []
         if brief_budget:
@@ -284,7 +291,7 @@ class Runtime:
             # The same injection the round path does, because a role consulted
             # rather than dispatched used to never see a lesson at all.
             from .loop import _lessons_for, LESSON_BUDGET
-            lessons = _lessons_for(role)
+            lessons = _lessons_for(role, self.root)
             if lessons:
                 sections.append(ContextSection(
                     "lessons (not tasks)",
@@ -293,8 +300,13 @@ class Runtime:
         if cast:
             sections.append(ContextSection("the other roles", _cast_briefs(role), 40_000))
         sections.append(ContextSection("what you are looking at", state, state_budget))
+        run_id = f"ask-{role.lower()}-{uuid.uuid4().hex[:10]}"
+        if role == "SHARPENER":
+            inbox = paths.projects(self.root) / project_id / "rounds" / run_id / "report"
+            inbox.mkdir(parents=True, exist_ok=True)
+            sections.append(ContextSection("host action inbox", str(inbox), 2_048))
         request = SpawnRequest(
-            run_id=f"ask-{role.lower()}",
+            run_id=run_id,
             task_ref=f"{project_id}:{role}",
             role=role,
             context_pack=ContextPack(tuple(sections)),
@@ -306,7 +318,20 @@ class Runtime:
             sandbox=adapter.sandbox,
             question=question or READS_AS_PROBLEM,
         )
-        return self.spawner_for(project_id).spawn(request, kind=definition.transport)
+        if role != "SHARPENER":
+            return self.spawner_for(project_id).spawn(request, kind=definition.transport)
+        stop = threading.Event()
+        def receive() -> None:
+            while not stop.wait(0.5):
+                self.drain_sharpener_reports()
+        watcher = threading.Thread(target=receive, name="sharpener-actions", daemon=True)
+        watcher.start()
+        try:
+            return self.spawner_for(project_id).spawn(request, kind=definition.transport)
+        finally:
+            stop.set()
+            watcher.join()
+            self.drain_sharpener_reports(force=True)
 
     def ask_role(
         self,
@@ -319,6 +344,9 @@ class Runtime:
     ) -> str:
         """Ask a role that answers in words
     """
+        if role == "SHARPENER":
+            cast = True
+            tools = tools or ("read", "write", "glob", "grep")
         return self._dispatch(
             project_id, role, state=context, expecting="prose", cast=cast, tools=tools
         ).output or ""
@@ -384,6 +412,10 @@ class Runtime:
                 "task_mismatch",
                 f"run {run_id} is bound to task {bound_task}, not {task_id}.",
             )
+        # A terminal report closes the builder's reporting channel. Without
+        # this check a later success could override an already filed abort.
+        if any(r.get("terminal") for r in self.reports_for(run_id)):
+            raise CommandError("run_already_terminal", f"run {run_id} already has a terminal report")
         event = self.log.record(
             "builder.reported",
             producer="manager",
@@ -403,6 +435,7 @@ class Runtime:
             ).encode("utf-8"),
             run_id=run_id,
             project_id=project,
+            task_ref=bound_task or None,
         )
         return {
             "recorded": event.id,
@@ -411,24 +444,27 @@ class Runtime:
             "message": "recorded." + (" This session is now closed." if terminal else ""),
         }
 
-    def drain_reports(self) -> int:
-        """Move whatever the builders left into the event log. Returns the count.
+    def drain_reports(self, *, force: bool = False) -> int:
+        """Commit completed write-tool report JSON into the event log.
 
-        Runs on a timer and at round boundaries, so a report is journalled
-        whether the round finished, was cut off, or never came back. The run comes
-        from the round directory the request was found in, never from the body.
+        Background pumping waits for a file to settle. At a child exit, the
+        dispatcher calls with force=True because the process can no longer be
+        halfway through its write. Never delete a request before the event
+        append acknowledges; malformed requests remain inspectable evidence.
         """
         from .report import pending
 
         taken = 0
-        for round_dir, path in pending(self._round_dirs()):
+        for round_dir, path in pending(self._round_dirs(), min_age_seconds=0 if force else 1.0):
             try:
                 request = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError, UnicodeDecodeError):
-                path.unlink(missing_ok=True)      # unreadable is not worth keeping
                 continue
-            path.unlink(missing_ok=True)
-            kind = str(request.get("kind", ""))
+            if not isinstance(request, dict):
+                continue
+            kind = request.get("kind")
+            if round_dir.parent.parent.name == SHARPENER_PROJECT:
+                continue
             if kind not in REPORTS:
                 continue
             try:
@@ -437,10 +473,29 @@ class Runtime:
                     str(request.get("description", "")),
                     title=str(request.get("title", "")),
                 )
-                taken += 1
             except CommandError:
-                continue                          # refused: the builder sees it next time
+                continue
+            path.unlink(missing_ok=True)
+            taken += 1
         return taken
+
+    def drain_sharpener_reports(self, *, force: bool = False) -> int:
+        from .report import pending
+        boxes = paths.projects(self.root) / SHARPENER_PROJECT / "rounds"
+        if not boxes.exists():
+            return 0
+        requests = pending(list(boxes.iterdir()), min_age_seconds=0 if force else 1.0)
+        requests.sort(key=lambda item: 0 if item[1].name.startswith("police") else 1)
+        done = 0
+        for _, path in requests:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                self.drain_sharpener_action(payload)
+            except (OSError, ValueError, CommandError):
+                continue
+            path.unlink(missing_ok=True)
+            done += 1
+        return done
 
     def _round_dirs(self) -> list[Path]:
         """Every round that could hold a request."""
@@ -466,9 +521,6 @@ class Runtime:
                 continue
         return out
 
-    # -- proposing a change ---------------------------------------------
-    INTENT_WORDS = 80
-
     def teach(self, role: str, lesson: str, *, from_role: str = "") -> dict[str, Any]:
         """Keep a lesson for one role. SHARPENER decides which; code only writes."""
         role = str(role or "").strip()
@@ -491,7 +543,7 @@ class Runtime:
                 sort_keys=True,
             ).encode("utf-8"),
         )
-        return self.rebuild_lessons()
+        return self.rebuild_lessons(self.root)
 
     def rebuild_lessons(self, root: Path | None = None) -> dict[str, Any]:
         """Rebuild every lessons/<ROLE>.md from the log. The files are a view."""
@@ -523,73 +575,76 @@ class Runtime:
             )
         return {"roles": sorted(taught), "written": len(taught)}
 
-    def propose_intent(self, intent: str, document: str, title: str = "") -> dict[str, Any]:
-        """A role saying what should change, and the document that says it.
+    def update_agent_brief(self, role: str, content: str) -> dict[str, Any]:
+        """SHARPENER may improve an agent's actual instructions."""
+        if role == "SHARPENER" or not role.isidentifier() or not content.strip():
+            raise CommandError("bad_brief", "name another role and give its complete brief")
+        target = AGENTS / (role + ".md")
+        if not target.is_file():
+            raise CommandError("unknown_role", role)
+        import tempfile
+        fd, name = tempfile.mkstemp(dir=target.parent, prefix=".brief-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as writer:
+                writer.write(content)
+            os.replace(name, target)
+        finally:
+            Path(name).unlink(missing_ok=True)
+        return {"role": role, "updated": str(target)}
 
-        Two fields, one call, so the thing that was judged and the thing that
-        gets filed cannot come apart. `intent` is capped because the judge is a
-        decision model with a small room and a long argument is not what she
-        reads: she separates facts cleanly to a few hundred tokens and never
-        recognises a long one. Eighty words is a starting point, not a
-        measurement.
+    def queue_visp(self, project_id: str, title: str, document: str) -> dict[str, Any]:
+        """Submit one framework VISP for the owner's next milestone review."""
+        if not title.strip() or not document.strip():
+            raise CommandError("empty_visp", "a VISP needs a title and full document")
+        ref = self._file_visp(title, document)
+        self.log.record("visp.queued", producer="manager", project_id=project_id,
+                        payload=json.dumps({"projectId": project_id, "vispRef": ref,
+                                            "title": title}).encode("utf-8"))
+        return {"status": "queued", "vispRef": ref, "projectId": project_id}
 
-        A request, like every report: the host validates, appends and fsyncs,
-        then answers. The words are already on the log whether she says yes or
-        no, so a refused proposal is still there to be read later.
-        """
-        if not isinstance(intent, str) or not intent.strip():
-            raise CommandError(
-                "no_intent",
-                "an intent is required: state what should change, in one line.",
-            )
-        if len(intent.split()) > self.INTENT_WORDS:
-            raise CommandError(
-                "intent_too_long",
-                f"the intent is capped at {self.INTENT_WORDS} words; "
-                f"yours was {len(intent.split())}. Say it shorter and send it again.",
-            )
-        if not isinstance(document, str) or not document.strip():
-            raise CommandError(
-                "no_document", "the document is required: say what you propose, in full."
-            )
-        self.log.record(
-            "proposal.intent",
-            producer="manager",
-            payload=json.dumps(
-                {
-                    "schemaVersion": 1,
-                    "title": title.strip()[:200],
-                    "intent": intent.strip(),
-                    "words": len(intent.split()),
-                    "document": document.strip()[:200_000],
-                },
-                sort_keys=True,
-            ).encode("utf-8"),
-        )
-        # She is asked about the intent, not the document. That is the whole
-        # point of the cap.
-        score = self.noul(intent.strip(), PROPOSES).probability
-        accepted = score >= GATE_FLOOR
-        reference = None
-        if accepted:
-            # Already judged, on the intent. Judging the same text again through
-            # the change gate would ask a proposal whether it already happened.
-            reference = self._file_visp(title or intent.split(".")[0], document)
-        return {
-            "recorded": True,
-            "words": len(intent.split()),
-            "score": round(score, 4),
-            "accepted": accepted,
-            "verdict": "proposes" if accepted else "not-a-change",
-            "visp": reference,
-            "message": (
-                "recorded, and filed as a draft for the owner."
-                if accepted else
-                "recorded, but this does not read as a change to the software. "
-                "It stays on the log."
-            ),
-        }
+    def pending_visps(self, project_id: str) -> list[dict[str, str]]:
+        queued = []
+        dismissed = set()
+        for event in self.log.read_all():
+            if event.projectId != project_id or event.type not in {"visp.queued", "visp.dismissed"}:
+                continue
+            record = json.loads(self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1]))
+            if event.type == "visp.queued":
+                queued.append(record)
+            else:
+                dismissed.add(record["vispRef"])
+        pending = []
+        for item in queued:
+            ref = item["vispRef"]
+            if ref in dismissed:
+                continue
+            identity, revision = ref.split("@")
+            definition = self.definitions.get(identity, int(revision))
+            if not self.definitions.is_signed_off(definition):
+                pending.append(item)
+        return pending
 
+    def drain_sharpener_action(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Execute a SHARPENER request through the control host."""
+        kind = payload.get("kind")
+        project_id = str(payload.get("projectId", ""))
+        if kind == "police":
+            from .loop import dispatcher_for
+            result = dispatcher_for(self, project_id)._police(
+                project_id, str(payload.get("description", "")))
+            return {"status": result.status, "detail": result.detail}
+        if kind == "lesson":
+            return self.teach(str(payload.get("role", "")),
+                              str(payload.get("description", "")), from_role="SHARPENER")
+        if kind == "instruction":
+            return self.update_agent_brief(str(payload.get("role", "")),
+                                           str(payload.get("document", "")))
+        if kind == "visp":
+            return self.queue_visp(project_id, str(payload.get("title", "")),
+                                   str(payload.get("document", "")))
+        raise CommandError("unknown_sharpener_action", str(kind))
+
+    # -- VISP drafts -----------------------------------------------------
     def _file_visp(self, title: str, content: str) -> str:
         """Put a VISP in the store, ungated. The caller has already judged it."""
         text = "\n".join(["# " + title, "", content.strip(), ""])
@@ -597,46 +652,6 @@ class Runtime:
             kind="VISP", content=text.encode("utf-8"), producer="sharpener",
         )
         return f"{definition.id}@{definition.revision}"
-
-    def propose_visp(self, title: str, content: str) -> dict[str, Any]:
-        """File what a role proposed as a VISP draft, and put it past the gate.
-
-Returns the verdict, not a reference. A reject is still filed; only a `real`
-    verdict surfaces.
-"""
-        text = "\n".join(["# " + title, "", content.strip(), ""])
-        definition = self.definitions.create(
-            kind="VISP", content=text.encode("utf-8"), producer="sharpener",
-        )
-        reference = f"{definition.id}@{definition.revision}"
-        record = "\n".join([
-            title, "", content.strip(), "", "progressdesk is: " + PROGRESSDESK_IS,
-        ])
-        try:
-            verdict, score = judge_change(self.noul, record)
-        except Exception:  # noqa: BLE001 - nobody answered
-            verdict, score = "undecided", 0.0
-        accepted = verdict == "real" and score >= GATE_FLOOR
-        self.log.record(
-            "visp.gated",
-            producer="manager",
-            payload=json.dumps(
-                {
-                    "schemaVersion": 1,
-                    "vispRef": reference,
-                    "verdict": verdict,
-                    "probability": round(score, 4),
-                    "accepted": accepted,
-                },
-                sort_keys=True,
-            ).encode("utf-8"),
-        )
-        return {
-            "verdict": verdict,
-            "probability": round(score, 4),
-            "accepted": accepted,
-            "visp": reference if accepted else None,
-        }
 
     def noul(self, state: str, question: str) -> Decision:
         """Put one yes/no question to the decision model, get a probability.
@@ -734,57 +749,105 @@ def _preflight(
     }
 
 def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
-    """The slice arrives as text and is the whole of what the builder is given.
+    """Dispatch one *declared* task, never an improvised outcome-only packet.
+
+    The feature contract lives in the editable milestone file. The caller
+    identifies it; it does not replace its scope, interfaces, or acceptance.
+    No evaluator runs here: acceptance remains a milestone-only operation.
     """
-    project_id = cmd.require("project_id")
-    slice_text = str(cmd.require("slice"))
-    # What the builder is allowed to do. Empty means no tools at all, not every
-    # default tool: the adapter declares sandbox none, so an agent holding a
-    # shell has nothing between it and the machine. The safety default is
-    # deliberate, and this is how a caller chooses otherwise on purpose.
+    project_id = str(cmd.require("project_id"))
+    task_id = str(cmd.require("task_id"))
+    milestone_id = str(cmd.require("milestone_id"))
+    # An accepted or evidence-awaiting milestone is frozen. Even a builder's
+    # normal tools cannot reopen the work under a signed milestone contract.
+    if any(e.type in {"milestone.accepted", "milestone.signoff-pending"}
+           and e.projectId == project_id and e.payloadRef
+           and json.loads(rt.artifacts.get_bytes(e.payloadRef.split(":", 1)[1])).get("milestoneId") == milestone_id
+           for e in rt.log.read_all()):
+        return {"projectId": project_id, "taskId": task_id,
+                "milestoneId": milestone_id, "status": "not-dispatched",
+                "delivered": False, "error": "milestone_frozen"}
+    previous_clearance = [json.loads(rt.artifacts.get_bytes(e.payloadRef.split(":", 1)[1]))
+                          for e in rt.log.read_all()
+                          if e.projectId == project_id and e.type == "floor_sweep.action" and e.payloadRef
+                          and json.loads(rt.artifacts.get_bytes(e.payloadRef.split(":", 1)[1])).get("operation") == "clearance"]
+    if previous_clearance and previous_clearance[-1].get("blocked"):
+        return {"projectId": project_id, "taskId": task_id,
+                "milestoneId": milestone_id, "status": "not-dispatched",
+                "delivered": False, "error": "room_not_cleared",
+                "detail": "Run project.room.clear when the decision service is available"}
     tools = tuple(str(item) for item in cmd.get("tools", ()))
-    # Declared requirements are arithmetic: granted must cover required, and
-    # code can settle that without a model. When nothing is declared the task
-    # may still be impossible, and only reading the slice can tell -- so that is
-    # the part CLEANING_LAYA is asked about.
     requires = tuple(str(item) for item in cmd.get("requires", ()))
     refusal = _preflight(project_id, tools, requires)
     if refusal is not None:
         return refusal
 
-    # Named or absent, never looked up.
-    milestone_id = str(cmd.get("milestone_id", "") or "")
-    task_id = str(cmd.get("task_id", "") or "")
-    if not milestone_id or not task_id:
-        need = "a milestone and a task" if not task_id else "a milestone"
+    # The feature file is authoritative; the journal records completed work.
+    from .feature_list import FeatureList, FeatureListError
+    try:
+        declared = FeatureList(rt).task(project_id, task_id, milestone_id)
+        if declared.get("milestoneId") != milestone_id:
+            declared = None
+    except FeatureListError:
+        declared = None
+    if declared is None:
         return {
-            "error": "ids_required",
-            "message": f"dispatch must name {need}; both are declared in the store",
+            "projectId": project_id, "taskId": task_id, "milestoneId": milestone_id,
+            "status": "not-dispatched", "delivered": False,
+            "error": "declared_task_contract_missing",
+            "detail": "The recorded task lacks outcome, scope, interfaces or acceptance. "
+                      "Do not dispatch a placeholder in its place.",
         }
+
+    def strings(value: Any) -> tuple[str, ...]:
+        if isinstance(value, (list, tuple)):
+            return tuple(str(x) for x in value if str(x).strip())
+        if isinstance(value, str) and value.strip():
+            return (value,)
+        return ()
+
+    # Optional legacy `slice` is a dispatch note, not an override of the
+    # signed/declared task. It is omitted when merely pointing to the task.
+    note = str(cmd.get("slice", "") or "").strip()
+    outcome = str(declared["outcome"])
+    if note and note not in outcome and not note.startswith("Work from the declared task"):
+        outcome += "\n\nDISPATCH NOTE (within declared scope; cannot change the contract):\n" + note
 
     packet = TaskPacket(
         task_id=task_id,
-        task_revision=1,
+        task_revision=int(declared.get("taskRevision", 1)),
         milestone_id=milestone_id,
-        parent_definition_refs=(),
-        outcome=slice_text,
-        scope=slice_text,
-        input_artifact_refs=(),
-        interfaces=(),
-        allowed_tool_refs=(),
-        skill_refs=(),
-        acceptance_conditions=(),
-        accepted_example_refs=(),
-        limits={},
+        parent_definition_refs=strings(declared.get("parentDefinitionRefs")),
+        outcome=outcome,
+        scope=str(declared["scope"]),
+        input_artifact_refs=strings(declared.get("inputArtifactRefs")),
+        interfaces=strings(declared["interfaces"]),
+        allowed_tool_refs=strings(declared.get("allowedToolRefs")),
+        skill_refs=strings(declared.get("skillRefs")),
+        acceptance_conditions=strings(declared["acceptance"]),
+        accepted_example_refs=strings(declared.get("acceptedExampleRefs")),
+        limits=dict(declared.get("limits") or {}),
     )
-
+    from .feature_list import TaskScheduler
+    eligibility = TaskScheduler(rt).dispatch_allowed(project_id, milestone_id, task_id)
+    if eligibility is not None:
+        return {"projectId": project_id, "taskId": task_id, "milestoneId": milestone_id,
+                "status": "not-dispatched", "delivered": False,
+                "error": "task_not_runnable", "detail": eligibility}
     outcome = dispatcher_for(rt, project_id).dispatch(
         project_id=project_id,
-        task_ref=slice_text[:80],
+        task_ref=task_id,
         packet=packet,
         task_id=task_id,
         tools=tools,
     )
+    # The normal path may trigger QA only after a delivered last feature.
+    # The flow checks every declared required task and sees no candidate as
+    # acceptance. An incomplete milestone yields waiting_tasks without tests.
+    milestone_gate = None
+    if outcome.has_candidate and outcome.status not in {"blocked", "infra-fault"}:
+        from .milestone_flow import MilestoneFlow
+        milestone_gate = MilestoneFlow(rt).maybe_evaluate(project_id, milestone_id)
     return {
         "runId": outcome.run_id,
         "projectId": outcome.project_id,
@@ -794,7 +857,87 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         "wallMs": outcome.wall_ms,
         "nudges": outcome.nudges,
         "detail": outcome.detail,
+        "milestoneGate": milestone_gate,
     }
+
+def _project_room_clear(rt: Runtime, cmd: Command) -> Any:
+    """One real LAYA check; never invent consent from a provider outage."""
+    project_id = str(cmd.require("project_id"))
+    if rt.cleaner is None:
+        return {"projectId": project_id, "status": "infra-fault",
+                "detail": "no room decision service configured"}
+    result = rt.cleaner.run(project_id, strength="light")
+    return {"projectId": project_id, "status": "restartable" if result.restartable else "blocked",
+            "decision": result.decision, "rationale": result.rationale,
+            "sweep": result.report.to_dict() if result.report else None}
+
+
+def _workspace_seed(rt: Runtime, cmd: Command) -> Any:
+    from .workspace import ProjectWorkspace
+    includes = cmd.require("include_paths")
+    if not isinstance(includes, (list, tuple)):
+        raise CommandError("bad_include_paths", "include_paths must be a JSON array")
+    return ProjectWorkspace(rt).seed(str(cmd.require("project_id")),
+                                     Path(str(cmd.require("source_directory"))), includes)
+
+
+def _workspace_status(rt: Runtime, cmd: Command) -> Any:
+    from .workspace import ProjectWorkspace
+    files = ProjectWorkspace(rt).snapshot(str(cmd.require("project_id")))
+    return {"projectId": str(cmd.require("project_id")), "fileCount": len(files),
+            "files": files}
+
+
+def _milestone_status(rt: Runtime, cmd: Command) -> Any:
+    from .milestone_flow import MilestoneFlow
+    return MilestoneFlow(rt).status(str(cmd.require("project_id")),
+                                     str(cmd.require("milestone_id")))
+
+
+def _milestone_contract_bind(rt: Runtime, cmd: Command) -> Any:
+    from .milestone_flow import MilestoneFlow
+    contract = cmd.require("contract")
+    if not isinstance(contract, dict):
+        raise CommandError("bad_contract", "contract must be a JSON object")
+    return MilestoneFlow(rt).bind(str(cmd.require("project_id")),
+                                  str(cmd.require("milestone_id")), contract)
+
+
+def _milestone_evaluate(rt: Runtime, cmd: Command) -> Any:
+    from .milestone_flow import MilestoneFlow
+    return MilestoneFlow(rt).evaluate(str(cmd.require("project_id")),
+                                      str(cmd.require("milestone_id")))
+
+
+def _milestone_signoff(rt: Runtime, cmd: Command) -> Any:
+    """Explicit owner confirmation of the *displayed* evidence digest.
+
+    The current local CLI is an owner-operated interface; this is not an
+    authenticated remote signature. Do not expose it over unauthenticated HTTP.
+    """
+    from .milestone_flow import MilestoneFlow
+    from .milestones import MilestoneService, MilestoneError
+
+    project_id = str(cmd.require("project_id"))
+    milestone_id = str(cmd.require("milestone_id"))
+    supplied_digest = str(cmd.require("evidence_digest"))
+    if cmd.get("transport", "cli") != "cli":
+        raise CommandError("owner_only", "milestone.signoff requires owner CLI access")
+    flow = MilestoneFlow(rt)
+    current = flow.status(project_id, milestone_id)
+    if current["state"] != "pending_signoff":
+        raise MilestoneError("no current milestone evidence awaits owner signoff")
+    class OwnerConfirmation:
+        def verify(self, checked_id: str, digest: str) -> bool:
+            return checked_id == milestone_id and digest == supplied_digest
+    service = MilestoneService(rt.log, rt.artifacts,
+        task_accepted=lambda _project, _task: False,
+        evaluator=lambda _spec, _inputs: (_ for _ in ()).throw(RuntimeError("no reevaluation permitted")),
+        signoff_authority=OwnerConfirmation())
+    result = service.complete_signoff(project_id, flow.contract(project_id, milestone_id))
+    return {"milestoneId": milestone_id, "status": result.status,
+            "evidenceRefs": list(result.evidence_refs)}
+
 
 def _project_events(rt: Runtime, cmd: Command) -> Any:
     events = rt.log.read_all()
@@ -909,6 +1052,98 @@ def _lab_result(rt: Runtime, cmd: Command) -> Any:
     ).to_dict()
 
 
+def _features_init(rt: Runtime, cmd: Command) -> Any:
+    """Create the editable milestone plan once from declared design tasks."""
+    from .feature_list import FeatureList
+    supplied = cmd.get("features")
+    if supplied is not None and not isinstance(supplied, list):
+        raise CommandError("bad_features", "features must be a JSON array")
+    return FeatureList(rt).init(str(cmd.require("project_id")),
+                                str(cmd.require("milestone_id")), supplied)
+
+
+def _features_show(rt: Runtime, cmd: Command) -> Any:
+    from .feature_list import FeatureList
+    project, mid = str(cmd.require("project_id")), str(cmd.require("milestone_id"))
+    plan = FeatureList(rt)
+    return {"file": str(plan.path(project, mid)), "features": plan.read(project, mid)}
+
+
+def _project_next(rt: Runtime, cmd: Command) -> Any:
+    from .feature_list import TaskScheduler
+    return TaskScheduler(rt).next(str(cmd.require("project_id")))
+
+
+def _project_step(rt: Runtime, cmd: Command) -> Any:
+    """Run precisely one next feature; do not run QA between features."""
+    from .feature_list import TaskScheduler
+    selection = TaskScheduler(rt).next(str(cmd.require("project_id")))
+    if selection.get("status") != "ready":
+        return selection
+    params = {"project_id": selection["projectId"], "milestone_id": selection["milestoneId"],
+              "task_id": selection["taskId"], "tools": cmd.get("tools", ["read", "write", "glob", "grep"]),
+              "requires": cmd.get("requires", [])}
+    return {"selected": selection, "result": _round_dispatch(rt, Command("round.dispatch", params))}
+
+
+def _visp_dismiss(rt: Runtime, cmd: Command) -> dict[str, Any]:
+    project_id = str(cmd.require("project_id"))
+    ref = str(cmd.require("visp_ref"))
+    rt.log.record("visp.dismissed", producer="desk", project_id=project_id,
+                  payload=json.dumps({"vispRef": ref}).encode("utf-8"))
+    return {"status": "dismissed", "vispRef": ref}
+
+
+def _project_run(rt: Runtime, cmd: Command) -> Any:
+    """Run the approved plan in order, stopping on any exceptional result.
+
+    No per-feature test, retry counter, speculative preflight, or synthetic
+    progress marker. Successful candidate delivery advances the next feature;
+    the *assembled milestone* alone invokes independent acceptance.
+    """
+    from .feature_list import TaskScheduler
+    project_id = str(cmd.require("project_id"))
+    outcomes: list[dict[str, Any]] = []
+    while True:
+        selection = TaskScheduler(rt).next(project_id)
+        if selection["status"] == "milestone_ready_for_qa":
+            try:
+                result = _milestone_evaluate(rt, Command("milestone.evaluate", {
+                    "project_id": project_id, "milestone_id": selection["milestoneId"]}))
+            except Exception as exc:
+                return {"projectId": project_id, "status": "qa_blocked",
+                        "reason": str(exc), "completedSteps": outcomes}
+            outcomes.append({"milestoneId": selection["milestoneId"], "gate": result})
+            if result.get("status") != "accepted":
+                return {"projectId": project_id, "status": result.get("status", "qa_stopped"),
+                        "completedSteps": outcomes}
+            continue
+        if selection["status"] != "ready":
+            return {"projectId": project_id, "status": selection["status"],
+                    "selection": selection, "completedSteps": outcomes}
+        params = {"project_id": project_id, "milestone_id": selection["milestoneId"],
+                  "task_id": selection["taskId"],
+                  "tools": cmd.get("tools", ["read", "write", "glob", "grep"]),
+                  "requires": cmd.get("requires", [])}
+        try:
+            result = _round_dispatch(rt, Command("round.dispatch", params))
+        except Exception as exc:
+            return {"projectId": project_id, "status": "dispatch_blocked",
+                    "reason": str(exc), "selection": selection, "completedSteps": outcomes}
+        outcomes.append({"taskId": selection["taskId"], "result": result})
+        if result.get("status") == "split":
+            continue  # JACK already inserted the new feature into the editable list
+        if not result.get("hasCandidate") or result.get("status") in {"infra-fault", "blocked"}:
+            return {"projectId": project_id, "status": result.get("status", "not_delivered"),
+                    "selection": selection, "completedSteps": outcomes}
+        gate = result.get("milestoneGate")
+        if gate is not None:
+            gate_state = gate.get("status", gate.get("state", "gate_stopped"))
+            if gate_state not in {"accepted", "waiting_tasks"}:
+                return {"projectId": project_id, "status": gate_state,
+                        "completedSteps": outcomes}
+
+
 _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "redlight.raise": lambda rt, cmd: raise_red_light(
         rt, cmd.require("project_id"), str(cmd.get("reason", "towel"))),
@@ -925,39 +1160,26 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "definition.signoff": _definition_signoff,
     "project.create": _project_create,
     "round.dispatch": _round_dispatch,
+    "project.features.init": _features_init,
+    "project.features.show": _features_show,
+    "project.next": _project_next,
+    "project.step": _project_step,
+    "project.run": _project_run,
+    "visp.pending": lambda rt, cmd: rt.pending_visps(str(cmd.require("project_id"))),
+    "visp.dismiss": lambda rt, cmd: _visp_dismiss(rt, cmd),
+    "project.room.clear": _project_room_clear,
+    "project.workspace.seed": _workspace_seed,
+    "project.workspace.status": _workspace_status,
+    "milestone.status": _milestone_status,
+    "milestone.contract.bind": _milestone_contract_bind,
+    "milestone.evaluate": _milestone_evaluate,
+    "milestone.signoff": _milestone_signoff,
     "project.abort": _project_abort,
     "project.events": _project_events,
 }
 
 
 
-
-
-def split_task(definitions: Definitions, log: EventLog):  # noqa: ARG001 - one log, one Definitions
-    """Bound to the Runtime's own Definitions and EventLog.
-    """
-
-    def apply(task_ref: str, first: str, second: str) -> tuple[str, str]:
-        head = definitions.latest(task_ref)
-        a, b = definitions.split(
-            head.id,
-            first=first.encode("utf-8"),
-            second=second.encode("utf-8"),
-            expected_revision=head.revision,
-            producer="manager",
-        )
-        # The sequence is the contract: a keeps the identity and runs now, b is a
-        # new sibling that runs after it. If that is not what came back, the
-        # pieces were applied in the wrong order and the source would send the
-        # work that depends on nothing first.
-        if a.id != head.id or b.id == head.id:
-            raise RuntimeError(
-                f"split order violated: first={a.id[:8]} must keep {head.id[:8]}, "
-                f"second={b.id[:8]} must be new"
-            )
-        return a.id, b.id
-
-    return apply
 
 
 def raise_red_light(rt: "Runtime", project_id: str, reason: str) -> dict[str, Any]:
@@ -976,26 +1198,6 @@ def raise_red_light(rt: "Runtime", project_id: str, reason: str) -> dict[str, An
     )
     # The record is the log; nothing derives a second answer from a projection.
     return {"projectId": project_id, "redLightRaised": True}
-
-
-def _drain_in_background(runtime: Runtime, interval: float = 2.0) -> None:
-    """Drain the reports on a timer, so one lands while the round is still going.
-
-    A round that never returns must still be able to have said something. This is
-    the only part of the machine that runs without being asked.
-    """
-    import threading
-
-    def pump() -> None:
-        while True:
-            time.sleep(interval)
-            try:
-                runtime.drain_reports()
-            except Exception:  # noqa: BLE001 - a pump must not die on one bad file
-                pass
-
-    thread = threading.Thread(target=pump, name="report", daemon=True)
-    thread.start()
 
 
 def route(runtime: Runtime, verb: str, params: Mapping[str, Any] | None = None) -> Any:
@@ -1056,6 +1258,9 @@ def serve_http(runtime: Runtime) -> None:  # pragma: no cover - presentation
 
             parsed = urlparse(self.path)
             verb = parsed.path.strip("/")
+            if verb in {"milestone.signoff", "milestone.contract.bind", "project.workspace.seed", "project.features.init", "visp.dismiss"}:
+                self._reply({"error": "owner_only", "message": "owner operation requires the local CLI"}, 403)
+                return
             params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
             try:
                 self._reply(route(runtime, verb, params))
@@ -1097,6 +1302,11 @@ def _coerce(value: str) -> Any:
         return int(value)
     except ValueError:
         pass
+    if value.lstrip().startswith(("{", "[")):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise CommandError("bad_json_param", f"invalid JSON parameter: {exc}") from exc
     try:
         return float(value)
     except ValueError:

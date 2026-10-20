@@ -1,0 +1,13 @@
+{
+  "README.md": "5ce22e2860ed4bb1a1fdab1b85305f338d3239cce6ef100d47dca1634a2e73cb",
+  "apply.py": "64bca417852b69419979e24266d814ceae61f92e9167587f5f20c402d06e0960",
+  "src/progressdesk/agents/POLICE.md": "638225ce00ea588bea990cfa830956829c21ceee5131eafb87a0f5ffba177268",
+  "src/progressdesk/agents/SCHOTTY.md": "6ce504aca32f3bea88c8faee284d5f97c141f19b9122d73d02e03d2089eb718f",
+  "src/progressdesk/agents/SHARPENER.md": "6498ca6a5b04a0d89de112691cf20aac51bd23229a5891b867978bb90d8b98ba",
+  "src/progressdesk/broker.py": "1bfdea37b777386efa86194f505dea1a2529ca30d6e554209600ea1b5d520bd2",
+  "src/progressdesk/events.py": "4a631adebccd690d26713aeff290efa649ae85b1e3c5832dcfcad445823d5d35",
+  "src/progressdesk/feature_list.py": "5bdd9d2f619b1992e852368252910144a6cbc5c83a98f88d6523f483f254d65d",
+  "src/progressdesk/loop.py": "b71066b0d05a794fe1fea49f7aecddc871045785be9ec87bda0c5f27ef1423da",
+  "src/progressdesk/police.py": "4f13ffcb9650b3110cf43193647c9e6e26ccb8813b200fd9a2156712cbc09942",
+  "src/progressdesk/runtime.py": "1b9e7315b21a7b7a8d8a04db2ab447b1bc9a96214397ae4bb77133369a2d2aaa"
+}

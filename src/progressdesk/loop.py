@@ -31,6 +31,7 @@ from . import paths
 from .artifacts import ArtifactStore
 from .broker import Broker
 from .encoding import read_bytes_with_spec
+from .workspace import ProjectWorkspace, WorkspaceError
 from .floor_sweep import Clearance, Cleaner, Sweep
 from .spawn import (
     Budget,
@@ -64,6 +65,7 @@ class DispatchOutcome:
     nudges: int = 0
     detail: str = ""
     verdict: str | None = None
+    delivered: bool = True
     halves: list[str] | None = None
 
     @property
@@ -93,28 +95,6 @@ def _first_line(text: str) -> str:
         if line.strip():
             return line.strip()
     return ""
-
-
-SHARPENER_CHECKS = (
-    "1. Did he change anything that is not a role brief or a role instruction? "
-    "Sharpening the framework itself is the owner's business, never his.",
-    "2. Did he touch VISP, FUSP or TESP, or any document that is not a role's own?",
-    "3. Did he do the product's work - build, fix or ship the thing being worked on?",
-    "4. Did he reach outside this project, this machine, or these files?",
-    "5. Did he remove, revert or overwrite anything he had not been asked to change?",
-    "6. Did he change something a role other than him depends on, without saying so?",
-)
-
-
-def _thinking_file(root: Path, project_id: str) -> str:
-    """The run's own transcript: one line per event, every tool call included."""
-    trace = paths.projects(root) / project_id / "rounds" / "ask-sharpener" / "agent.jsonl"
-    if not trace.exists():
-        return ""
-    raw = trace.read_text(encoding="utf-8", errors="replace")
-    return "\n".join(
-        ln for ln in raw.splitlines() if '"tool_call"' in ln or '"toolResult"' in ln
-    )[:6_000]
 
 
 def _manifest_hash(files: dict[str, str]) -> str:
@@ -149,6 +129,8 @@ ROLE_BRIEF_BUDGET = 24_000
 def read_brief(role: str) -> str:
     """A role with no brief on disk is a configuration error, not empty context.
     """
+    from .harness import HarnessError
+
     path = AGENTS / f"{role}.md"
     try:
         return path.read_text(encoding="utf-8")
@@ -173,45 +155,11 @@ def ask_role(root: Path, project_id: str, role: str, context: str, *, cast: bool
              tools: tuple[str, ...] = ()) -> str:
     """A caller with no Runtime. Delegates to Runtime.ask_role.
     """
+    from .runtime import Runtime
+
     return Runtime.create(Path(root)).ask_role(
         project_id, role, context, cast=cast, tools=tools
     )
-
-
-# The gate asks one question per verdict and takes the highest. Each is a plain
-# presence check about one thing, so no two can sensibly be true of the same
-# change -- which is what makes the verdicts exclusive without asking her to be
-# careful. `duplicate` is bounded to what she can see: she is handed one record,
-# so this asks whether it restates something already in ProgressDesk, not whether
-# the same idea lives in something she has not been given.
-#
-#
-# Deviating asks whether the change is about ProgressDesk at all -- not about
-# what it currently is, and not about what it could become. It is answerable
-# because the state carries what ProgressDesk is, which is the referent it needs.
-GATE_QUESTIONS = {
-    "real": "Is this traced to an outcome that actually happened?",
-    "cosmetic": "Is this a change in wording only, leaving behaviour as it was?",
-    "invented": "Does this have no real observation behind it?",
-    "deviating": (
-        "Is this about something other than what ProgressDesk is, "
-        "or what it can become?"
-    ),
-    "duplicate": "Has this already been done, somewhere in ProgressDesk?",
-}
-# Below this nothing counts as `real`, including a set of lukewarm answers. An
-# unclear verdict is not a pass.
-GATE_FLOOR = 0.5
-
-# What ProgressDesk is, and what it is for. Present so the deviating verdict has
-# its referent in the state rather than in the model's head. It is a workshop
-# that builds software and media through a loop of briefed roles, and the owner
-# ratifies every change to it.
-PROGRESSDESK_IS = (
-    "a workshop that builds projects through a loop of briefed roles -- a builder, "
-    "housekeeping, forensics, a splitter, a researcher -- where the owner signs off "
-    "every change to the framework itself"
-)
 
 
 def _chunks(text: str, size: int = CHUNK) -> list[str]:
@@ -265,43 +213,19 @@ def _verdict(text: str) -> str | None:
     return None
 
 
-def _says_police(text: str) -> bool:
+def _schotty_decision(text: str) -> str | None:
+    """SCHOTTY's terminal handoff; ordinary mentions of POLICE are not calls."""
     for line in (text or "").splitlines():
-        if line.strip().lower().startswith("action:"):
-            return "police" in line.lower()
-    return False
+        if line.strip().lower().startswith("decision:"):
+            answer = line.split(":", 1)[1].strip().lower()
+            return answer if answer in {"police", "cleaned", "blocked"} else None
+    return None
 
 
 def _with(outcome: "DispatchOutcome", **changes: Any) -> "DispatchOutcome":
     import dataclasses
 
     return dataclasses.replace(outcome, **changes)
-
-
-# Two questions for two jobs. `real` asks whether a change already happened,
-# which is the right question for a change somebody made and the wrong one for a
-# proposal -- a proposal has not happened yet, and measured against a one-line
-# intent it answers 0.006 while ordinary chatter answers 0.111.
-#
-# PROPOSES asks the proposal question instead, and only works because the intent
-# is short: at eighty words it separates 0.764 from 0.000. Given the same
-# question over a four-hundred word document every wording tried came back flat.
-PROPOSES = "Is this a proposal for a change to the software?"
-
-
-def judge_change(ask_noul: Any, record: str) -> tuple[str, float]:
-    """One copy, because two copies of five questions drift apart.
-
-    One place, because the gate on a mid-run change and the gate on a proposed
-    VISP are the same judgement about different records, and two copies of five
-    questions would drift apart within a week.
-    """
-    scores = {
-        verdict: ask_noul(record, question).probability
-        for verdict, question in GATE_QUESTIONS.items()
-    }
-    verdict = max(scores, key=lambda name: scores[name])
-    return verdict, scores[verdict]
 
 
 # What SCHOTTY is dispatched with. No shell: inside a shell the boundary
@@ -314,9 +238,9 @@ LESSON_BUDGET = 600
 LESSONS_DIR = paths.LESSONS
 
 
-def _lessons_for(role: str) -> str:
+def _lessons_for(role: str, root: Path | None = None) -> str:
     """The lessons kept for a role. Read-only here; only SHARPENER writes these."""
-    root = Path(os.environ.get("PROGRESSDESK_ROOT", "."))
+    root = Path(root or os.environ.get("PROGRESSDESK_ROOT", "."))
     path = root / LESSONS_DIR / f"{role}.md"
     try:
         return path.read_text(encoding="utf-8").strip()
@@ -342,11 +266,11 @@ class RoundDispatcher:
         ask: Callable[..., str] | None = None,
         ask_noul: Callable[[str, str, str], Any] | None = None,
         read_brief: Callable[[str], str] | None = None,
-        propose_intent: Callable[[str, str, str], dict[str, Any]] | None = None,
         reports_for: Callable[[str], list] | None = None,
         drain: Callable[[], int] | None = None,
         finish_round: Callable[[str], None] | None = None,
-        split_task: Callable[[str, str, str], tuple[str, str]] | None = None,
+        split_task: Callable[[str, str, str, str, str], Any] | None = None,
+        police_abort: Callable[[str, str], Any] | None = None,
         research_tools: tuple[str, ...] = (),
     ) -> None:
         # The only tools in the system, and they exist for one call: the
@@ -373,11 +297,11 @@ class RoundDispatcher:
         self._ask_role = ask
         self._ask_noul = ask_noul
         self._read_brief = read_brief
-        self._propose_intent = propose_intent
         self._reports_for = reports_for
         self._drain = drain
         self._finish_round = finish_round
         self._split_task = split_task
+        self._police_abort = police_abort
 
     # -- the one operation -----------------------------------------------
     def dispatch(
@@ -435,6 +359,7 @@ class RoundDispatcher:
                     "reason": reason,
                 }).encode("utf-8"),
                 project_id=project_id,
+                task_ref=task_id,
                 run_id=run,
             )
             return DispatchOutcome(
@@ -468,6 +393,7 @@ class RoundDispatcher:
                 "kind": round_kind,
             }).encode("utf-8"),
             project_id=project_id,
+            task_ref=task_id,
             run_id=run,
         )
         # The run-to-task binding was settled before the adapter was chosen.
@@ -477,11 +403,12 @@ class RoundDispatcher:
             "round.dispatched",
             producer="manager",
             payload=json.dumps({
-                "taskId": task_id or str(getattr(packet, "task_id", "")),
+                "taskId": task_id,
                 "milestoneId": milestone_id,
                 "slice": str(getattr(packet, "outcome", ""))[:200],
             }).encode("utf-8"),
             project_id=project_id,
+            task_ref=task_id,
             run_id=run,
         )
         request = self._request(project_id, task_ref, packet, run, tools, budget, role)
@@ -489,21 +416,25 @@ class RoundDispatcher:
         try:
             envelope = self.spawner.spawn(request, kind=adapter)
         except SpawnError as exc:
-            # The seam refused the dispatch before anything started. That is not
-            # the builder's failure and gets no round record claiming otherwise.
-            return DispatchOutcome(
+            # The start is already journaled: it must also be closed.
+            refused = DispatchOutcome(
                 run_id=run, project_id=project_id, task_ref=task_ref,
                 status="infra-fault", detail=f"seam refused the dispatch: {exc}",
             )
+            self._close_round(project_id, refused, task_id, milestone_id)
+            return refused
 
         # What the builder said while it worked, read back from the log. It is
         # here, not in the envelope, because he may have said it long before the
         # round ended -- including a round that never ended.
         if self._drain is not None:
-            self._drain()          # anything the builder left, before we look
+            try:
+                self._drain(force=True)  # the child exited, its file writes are finished
+            except TypeError:
+                self._drain()  # support other injected drain callbacks
         said_while_working = self._reports_for(run) if self._reports_for else []
         terminal = next(
-            (r for r in reversed(said_while_working) if r.get("terminal")), None
+            (r for r in said_while_working if r.get("terminal")), None
         )
 
         # A transport fault is nudged inside the seam, not here: the seam owns
@@ -527,34 +458,74 @@ class RoundDispatcher:
             project_id, task_ref, run, envelope, actual_role,
             terminal=terminal, earlier=said_while_working,
         )
+        if outcome.status == "infra-fault":
+            # Missing tools, candidate workspace, or provider capacity are not
+            # signs that DEXTER's task should be split or the room scrubbed.
+            self._close_round(project_id, outcome, task_id, milestone_id)
+            return outcome
         if not outcome.has_candidate:
             # He said it, in a field, so nobody has to read it. Laya is only
             # asked about a builder who never picked up the channel at all --
             # and that is a fallback, not the path.
-            if terminal is not None:
+            if terminal is not None and terminal.get("kind") == "success":
+                # The worker said "success" but the host could freeze no product
+                # bytes. This is a missing-report/delivery instruction problem,
+                # not a request to split a supposedly finished feature.
                 outcome = self._hand_to(
                     "SHARPENER", project_id, outcome.detail, outcome, tools, actual_role,
                 )
             else:
-                outcome = self._route(project_id, task_ref, outcome, tools, actual_role)
+                # Explicit 'aborted' is an undelivered task, not an automatic
+                # SHARPENER detour. LAYA decides whether it is splittable.
+                outcome = self._route(project_id, task_ref, outcome, tools, actual_role,
+                                      task_id=task_id, milestone_id=milestone_id, packet=packet)
 
+        findings = [r for r in said_while_working
+                    if r.get("kind") in {"issue", "suggestion", "lesson"}]
+        if findings and self._ask_role is not None:
+            context = "Builder observations (judge lessons or propose a VISP):\n" + json.dumps(
+                findings, ensure_ascii=False)
+            try:
+                self._ask_role(project_id, "SHARPENER", context,
+                               cast=True, tools=("read", "write", "glob", "grep"))
+            except Exception:
+                pass
+        if any(e.type == "abort.issued" and e.projectId == "workshop"
+               for e in self._log.read_all()):
+            stopped = _with(outcome, status="blocked", detail="POLICE stopped the workshop")
+            self._close_round(project_id, stopped, task_id, milestone_id)
+            return stopped
         clearance = self._clear(project_id)
+        if clearance is not None and clearance.decision == "no verdict":
+            # A missing decision service is infrastructure, not a dirty room.
+            # Do not ask SCHOTTY to repair an unavailable provider, and do not
+            # discard a candidate whose bytes were already frozen.
+            blocked = _with(outcome, status="infra-fault",
+                            detail=f"CLEANING_LAYA did not answer; room clearance unavailable: "
+                                   f"{clearance.rationale}. Candidate is preserved; "
+                                   "configure PROGRESSDESK_DECISIONS before continuing.")
+            self._close_round(project_id, blocked, task_id, milestone_id)
+            return blocked
         if clearance is not None and not clearance.restartable:
             # She said the room is not ready for what comes next. SCHOTTY is the
             # thinking one: he cleans it, or passes it to POLICE. If he cannot,
             # neither can we. What this round produced is already recorded and
             # is not thrown away to say so.
-            return _with(
-                self._schottify(project_id, clearance),
-                status="blocked",
-                run_id=run, project_id=project_id, task_ref=task_ref,
-                candidate_id=outcome.candidate_id,
-                files=outcome.files,
+            recovery = self._schottify(project_id, clearance)
+            if recovery.status == "cleaned":
+                # No incident, room restored: keep the builder's original result.
+                self._close_round(project_id, outcome, task_id, milestone_id)
+                return outcome
+            blocked = _with(
+                outcome, status="blocked",
                 detail=(
                     f"room not cleared: {clearance.decision} {clearance.rationale}"
+                    f" | SCHOTTY/POLICE: {recovery.status} {recovery.detail}"
                     f" | this round: {outcome.status} {outcome.detail}"
                 ).strip(),
             )
+            self._close_round(project_id, blocked, task_id, milestone_id)
+            return blocked
         self._close_round(project_id, outcome, task_id, milestone_id)
         return outcome
 
@@ -563,10 +534,12 @@ class RoundDispatcher:
         """Every round ends, and the ending is recorded whether it delivered."""
         files = dict(getattr(outcome, "files", {}) or {})
         status = str(getattr(outcome, "status", "") or "")
-        if status in {"infra-fault", "blocked"}:
-            how = "killed"
-        elif getattr(outcome, "has_candidate", False):
+        if getattr(outcome, "has_candidate", False):
+            # Builder delivery and readiness of the NEXT room are separate
+            # facts. Losing a decision provider must not erase frozen work.
             how = "success"
+        elif status in {"infra-fault", "blocked"}:
+            how = "killed"
         else:
             how = "failure"
         try:
@@ -581,131 +554,100 @@ class RoundDispatcher:
                     "files": files,
                 }).encode("utf-8"),
                 project_id=project_id,
+                task_ref=task_id,
                 run_id=outcome.run_id,
             )
         except Exception:
-            pass
+            raise  # a missing terminal journal fact must not look like success
 
     def _proposal_count(self) -> int:
         if self._log is None:
             return 0
-        return sum(1 for e in self._log.read_all() if e.type == "proposal.intent")
+        return sum(1 for e in self._log.read_all()
+                   if e.type in {"visp.queued", "lesson.taught"})
 
     def _route(
-        self, project_id: str, task_ref: str, outcome: DispatchOutcome,
-        tools: tuple[str, ...], role: str,
+        self,
+        project_id: str, task_ref: str, outcome: DispatchOutcome,
+        tools: tuple[str, ...], role: str, *,
+        task_id: str, milestone_id: str, packet: Any,
     ) -> DispatchOutcome:
-        """She reads what the builder said: could not do it is SHARPENER's, too big is
-        JACK's, anything else is a towel.
+        """An undelivered feature is given directly to JACK for splitting.
 
-        She reads what the builder said. A builder that reported it could not do
-        the work is a fact about the framework and goes to SHARPENER; work that
-        is merely too big goes to JACK to be halved; anything else is a towel.
-        Two yes/no questions rather than one three-way choice, because a
-        three-way choice on this model returns the same answer whatever the
-        input and whichever order the options are in.
+        No exception-path classifier and no reversal of an earlier split.
         """
-        if self._ask_noul is None:
-            return _with(outcome, status="towel", detail="no decision seam")
-        said = outcome.detail or "the builder said nothing and produced nothing."
-        try:
-            if self._ask_noul(
-                project_id, said, "Does this message report that the work could not be done?"
-            ).above:
-                return self._hand_to("SHARPENER", project_id, said, outcome, tools, role)
-            if self._ask_noul(
-                project_id, said, "Is this one piece of work, or two that could each be delivered?"
-            ).above:
-                return self._hand_to("JACK_THE_SPLITTER", project_id, said, outcome)
-        except Exception as exc:  # noqa: BLE001 - an undecided round is a towel
-            return _with(outcome, status="towel", detail=f"not routed: {exc}")
-        return _with(outcome, status="towel", detail="neither an error nor divisible")
+        return self._hand_to(
+            "JACK_THE_SPLITTER", project_id,
+            outcome.detail or "builder did not deliver", outcome,
+            task_id=task_id, milestone_id=milestone_id, packet=packet,
+        )
 
     def _hand_to(
         self, role: str, project_id: str, said: str, outcome: DispatchOutcome,
         tools: tuple[str, ...] = (), involved: str = "DEXTER",
+        *, task_id: str = "", milestone_id: str = "", packet: Any = None,
     ) -> DispatchOutcome:
+        """Consult an exception role; JACK updates the editable feature file."""
         if self._ask_role is None:
             return _with(outcome, status="towel", detail=f"no way to reach {role}")
         if role == "SHARPENER":
-            # A question, not a message. He was shown a builder's words with
-            # nothing asked of him, and did the only defensible thing: decline.
-            # The dispatch facts are in it because they are what turns "it
-            # couldn't" into something to answer -- what it was actually given,
-            # and what it actually left behind.
             brief = ""
             if self._read_brief is not None:
                 try:
                     brief = self._read_brief(involved)
-                except Exception:  # noqa: BLE001 - a missing brief is not a reason to stop
-                    brief = ""
+                except Exception:
+                    pass
+            said = f"BUILDER FINDING: {said}\nINSTRUCTION TO REVIEW:\n{brief}"
+        elif role == "JACK_THE_SPLITTER":
+            if not task_id or not milestone_id or self._split_task is None:
+                return _with(outcome, status="towel", detail="JACK has no feature-list update callback")
+            from .feature_list import FeatureList
+            rt_view = type("FeatureFileView", (),
+                           {"log": self._log, "artifacts": self.artifacts})()
+            try:
+                rt_view.root = self.root
+                parent = FeatureList(rt_view).task(project_id, task_id, milestone_id)
+            except Exception as exc:
+                return _with(outcome, status="towel", detail=f"task contract missing: {exc}")
             said = (
-                "A builder on this project did not deliver its work.\n\n"
-                f"It said:\n{said}\n\n"
-                f"It was given these tools: {', '.join(tools) or 'none at all'}\n"
-                f"It left behind: {', '.join(outcome.files) or 'no files'}\n\n"
-                f"The role it was running as is {involved}.\n\n"
-                "That is the context it was working from, in full:\n\n"
-                f"{brief}\n\n"
-                "What should change in this framework so that the next builder can "
-                "do this work? If you have not seen enough to answer, say that "
-                "instead of guessing."
+                "The builder could not deliver this feature. Split this COMPLETE "
+                "design-time contract into two executable halves. Preserve the "
+                "milestone's original obligations. Return only the typed JSON "
+                "requested by your JACK brief.\n"
+                f"MILESTONE: {milestone_id}\nTASK: {task_id}\nRUN: {outcome.run_id}\n"
+                f"FAILURE: {said}\nDECLARED TASK:\n"
+                + json.dumps(parent, ensure_ascii=False, sort_keys=True)
             )
+        before = self._proposal_count() if role == "SHARPENER" else 0
         try:
             answer = self._ask_role(project_id, role, said)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return _with(outcome, status="towel", detail=f"{role} unavailable: {exc}")
-        if role != "SHARPENER":
-            return _with(outcome, status="routed", detail=f"routed to {role}")
-        # A framework fix is proposed, never applied. Whether what he wrote is a
-        # proposal or a refusal is not ours to decide by reading it: she reads it
-        # and answers, the way she answers everything. Filing a refusal as a VISP
-        # is how a towel becomes doctrine, and it is the one thing this path must
-        # not do.
-        # One gate, not two. Whether what he wrote is worth landing is a
-        # He proposes through the endpoint, with his own intent and his own
-        # document, or he does not propose at all. Nothing is fabricated from the
-        # answer he gave to the question -- that is how a refusal becomes a
-        # proposal. Whether he called it is read back off the log, which is where
-        # every other channel lands.
-        # Suggestions ride along; they decide nothing. SHARPENER decides where a
-        # lesson lands and calls teach.
-        reports = self._reports_for(run_id) or []
-        noticed = [f"- {r['description']}" for r in reports
-                   if r.get("kind") == "suggestion" and r.get("description")]
-        lessons = [f"- from {r.get('role', 'unknown')}: {r['description']}"
-                   for r in reports
-                   if r.get("kind") == "lesson" and r.get("description")]
-        if (noticed or lessons) and self._ask_role is not None:
-            said_lessons = ""
-            if lessons:
-                said_lessons = (
-                    "\n\nLESSONS FILED THIS ROUND. Each is a fix already made. "
-                    "Decide which role would hit the same thing and keep it with "
-                    "teach(role, lesson). Keep none and that is a correct answer:\n"
-                    + "\n".join(lessons)
-                )
+        if role == "SHARPENER":
+            if self._proposal_count() > before:
+                return _with(outcome, status="proposed",
+                             detail="SHARPENER filed a proposal awaiting human review")
+            return _with(outcome, status="towel",
+                         detail="SHARPENER recorded no proposal; " + _first_line(answer)[:300])
+        if role == "JACK_THE_SPLITTER":
             try:
-                self._ask_role(project_id, "SHARPENER",
-                                ("SUGGESTIONS:\n" + "\n".join(noticed) if noticed else "")
-                                + said_lessons)
-            except Exception:  # noqa: BLE001 - a missed suggestion is not a failed round
-                pass
-
-        before = self._proposal_count()
-        try:
-            self._ask_role(project_id, role, said)
-        except Exception as exc:  # noqa: BLE001
-            return _with(outcome, status="towel", detail=f"{role} unavailable: {exc}")
-        if self._proposal_count() == before:
-            return _with(
-                outcome, status="towel",
-                detail=f"{role} did not propose anything",
-            )
-        return _with(
-            outcome, status="proposed",
-            detail=f"VISP draft {result['visp']} awaiting signoff",
-        )
+                receipt = self._split_task(project_id, milestone_id, task_id, answer)
+            except Exception as exc:
+                # A malformed split is a towel, never invented success. The
+                # journal's durable red light explains why the chain ended.
+                self._log.record(
+                    "recovery.blocked", producer="manager", project_id=project_id,
+                    task_ref=task_id, run_id=outcome.run_id,
+                    payload=json.dumps({"taskId": task_id, "milestoneId": milestone_id,
+                                        "raisedBy": "JACK_THE_SPLITTER",
+                                        "reason": f"JACK could not apply a valid split: {exc}"}).encode(),
+                )
+                return _with(outcome, status="towel", detail=f"JACK towel: {exc}")
+            return _with(outcome, status="split", detail=(
+                f"JACK split {task_id} into revision {receipt['firstRevision']} "
+                f"and new sibling {receipt['secondTaskId']}; feature list updated"))
+        return _with(outcome, status="towel",
+                     detail=f"{role} consulted without an executable transition")
 
     # -- helpers ----------------------------------------------------------
     def _clear(self, project_id: str) -> Clearance | None:
@@ -718,48 +660,6 @@ class RoundDispatcher:
             return None
         return self.cleaner.run(project_id, strength="light")
 
-    def _fix_gate(self, project_id: str) -> tuple[bool, str]:
-        """Five questions and an argmax, so exclusivity is arithmetic.
-
-        He is not a suggester. Sharpening the other roles is the whole point of
-        the role, so the question is not whether he acted. It is whether what
-        he did was *real*: traced to an outcome someone actually got, or churn
-        dressed up as a suggestion.
-
-        Code enumerates the fixes, because he cannot misreport which ones he
-        made. Laya judges, because that is what she is for. Code applies her
-        verdict, because she is not the one whose answer becomes the system.
-
-        The five verdicts are five separate yes/no questions, never one question
-        with five answers. Asked as a choice she returns the same option whatever
-        the input and whichever order the options are in, so the categories are
-        exclusive by arithmetic rather than by anyone being careful: whichever
-        scores highest is the verdict, and nothing lands unless that verdict is
-        `real` and is clearly `real`. Five lukewarm answers are not a pass.
-        """
-        fixes = [e for e in self._log.read_all() if e.type == "fix.recorded"]
-        if not fixes:
-            return True, "no changes to gate"
-        for event in fixes:
-            payload = _payload_of(event, self.artifacts)
-            fix_id = payload.get("fixId", "?")
-            shown = "\n".join([
-                f"fixId: {fix_id}",
-                f"problem: {payload.get('sourceProblemRef', '')}",
-                f"seen in: {', '.join(payload.get('sourceTaskAndOutcomeRefs', []))}",
-                f"component: {payload.get('componentId', '')}",
-                f"was: {payload.get('previousVersionOrCondition', '')}",
-                f"now: {payload.get('applicationOperation', '')}",
-                f"progressdesk is: {PROGRESSDESK_IS}",
-            ])[:2_000]
-            try:
-                verdict, score = judge_change(self.noul, shown)
-            except Exception as exc:  # noqa: BLE001
-                return False, f"LAYA unavailable: {exc}"
-            if verdict != "real" or score < GATE_FLOOR:
-                return False, f"{fix_id}: {verdict} ({score:.2f})"
-        return True, f"{len(fixes)} changes gated, all real"
-
     def _police(self, project_id: str, detail: str, *, trace: str = "") -> DispatchOutcome:
         """The only authority on a log.
 
@@ -771,7 +671,7 @@ class RoundDispatcher:
         was raised about.
         """
         outcome = DispatchOutcome(run_id="-", project_id=project_id, task_ref="-",
-                                  status="violation")
+                                  status="blocked")
         if self._ask_role is None:
             return outcome
         parts = _chunks(trace) if trace else [""]
@@ -790,8 +690,17 @@ class RoundDispatcher:
                 return _with(outcome, detail=f"POLICE unavailable: {exc}")
             said = _verdict(answer)
             if said == "violation":
+                finding = _police_says(answer)
+                if self._police_abort is None:
+                    return _with(outcome, detail="POLICE found a violation but its stop action is not connected: " + finding)
+                try:
+                    stop = self._police_abort(project_id, finding)
+                except Exception as exc:  # noqa: BLE001
+                    return _with(outcome, detail=f"POLICE found a violation; project stop failed: {exc}")
+                if not getattr(stop, "termination_confirmed", False):
+                    return _with(outcome, detail="POLICE issued a stop; termination is unresolved: " + finding)
                 return _with(outcome, status="violation",
-                             detail=f"[part {n}/{len(parts)}] {_police_says(answer)}")
+                             detail=f"[part {n}/{len(parts)}] POLICE stopped workshop execution: {finding}")
             if said is None:
                 return _with(outcome, status="blocked",
                              detail=f"[part {n}/{len(parts)}] POLICE returned no readable "
@@ -817,13 +726,33 @@ class RoundDispatcher:
              "traces:", *(clearance.report.traces if clearance.report else []),
              "decision:", clearance.rationale]
         )[:9_000]
-        # SHARPENER first: he notes it and can steer before SCHOTTY removes
-        # evidence. SCHOTTY cleans; only POLICE stops anything.
-        if self._ask_role is not None:
-            try:
-                self._ask_role(project_id, "SHARPENER", context)
-            except Exception:  # noqa: BLE001 - a lesson is not worth stopping for
-                pass
+        # Observe before SCHOTTY changes the room. SHARPENER may identify a
+        # framework problem and propose a VISP; he does not clean or stop work.
+        # This is an exceptional, non-blocking observation, never a builder gate.
+        observation = "\n".join([
+            "Observe this room BEFORE SCHOTTY modifies it.",
+            "Read the evidence and other roles' briefs. If you find a serious"
+            " boundary breach, immediately refer concrete evidence to POLICE"
+            " through your host action inbox, then continue your improvements.",
+            "For framework changes queue a VISP; for useful workarounds teach"
+            " the relevant roles. Do not clean or decide restartability.",
+            f"project: {project_id}",
+            f"project room: {paths.projects(self.root) / project_id}",
+            f"event journal: {paths.event_log(self.root)}",
+            "sweep and CLEANING_LAYA observations:",
+            context,
+        ])
+        try:
+            self._ask_role(
+                project_id, "SHARPENER", observation,
+                cast=True, tools=("read", "write", "glob", "grep"),
+            )
+        except Exception:
+            # Framework research must never prevent room restoration.
+            pass
+        if any(e.type == "abort.issued" and e.projectId == "workshop"
+               for e in self._log.read_all()):
+            return _with(outcome, status="violation", detail="POLICE stopped the workshop")
         try:
             # SCHOTTY is dispatched with the tools he needs to act. A brief that
             # says clean, given a way only to talk, produces an assessment and
@@ -831,15 +760,17 @@ class RoundDispatcher:
             answer = self._ask_role(project_id, "SCHOTTY", context, tools=JANITOR_TOOLS)
         except Exception as exc:  # noqa: BLE001
             return _with(outcome, detail=f"SCHOTTY unavailable: {exc}")
-        low = (answer or "").lower()
-        if "police" in low:
-            return _with(outcome, status="police", detail=_first_line(answer))
-        if _says_police(answer):
-            # His whole account, not the first line. He spent a round working out
-            # what was wrong; a summary of it discards the only reasoning that
-            # exists before the decision.
+        decision = _schotty_decision(answer)
+        if decision == "police":
+            # SCHOTTY has left the scene unchanged. POLICE classifies the facts.
             return self._police(project_id, answer)
-        return _with(outcome, status="cleaned", detail=_first_line(answer))
+        if decision != "cleaned":
+            return _with(outcome, detail="SCHOTTY did not finish cleanup: " + _first_line(answer))
+        # Cleaning is an action, not a claim: LAYA decides restartability.
+        clearance_again = self._clear(project_id)
+        if clearance_again is not None and clearance_again.restartable:
+            return _with(outcome, status="cleaned", detail=_first_line(answer))
+        return _with(outcome, detail="SCHOTTY cleaned, but the room is not cleared: " + _first_line(answer))
 
     def _settle(
         self, project_id: str, task_ref: str, run: str,
@@ -847,94 +778,105 @@ class RoundDispatcher:
         terminal: dict[str, Any] | None = None,
         earlier: list[dict[str, Any]] | None = None,
     ) -> DispatchOutcome:
-        produced, specs = self._collect(project_id, run)
+        if envelope.status == "infra-fault":
+            return DispatchOutcome(
+                run_id=run, project_id=project_id, task_ref=task_ref,
+                status="infra-fault", detail=envelope.detail,
+                wall_ms=envelope.wall_ms, nudges=envelope.nudges,
+            )
+        try:
+            produced, specs = self._collect(project_id, run)
+        except WorkspaceError as exc:
+            return DispatchOutcome(
+                run_id=run, project_id=project_id, task_ref=task_ref,
+                status="not-delivered", detail=f"cannot freeze candidate: {exc}",
+                wall_ms=envelope.wall_ms, nudges=envelope.nudges,
+            )
         outcome = DispatchOutcome(
-            run_id=run,
-            project_id=project_id,
-            task_ref=task_ref,
+            run_id=run, project_id=project_id, task_ref=task_ref,
             status=envelope.status,
             files=self._digests(produced, self.artifacts),
-            file_specs=specs,
-            wall_ms=envelope.wall_ms,
-            nudges=envelope.nudges,
-            detail=envelope.detail,
-            verdict=envelope.output if role != "DEXTER" else None,
+            file_specs=specs, wall_ms=envelope.wall_ms, nudges=envelope.nudges,
+            detail=envelope.detail, verdict=envelope.output if role != "DEXTER" else None,
         )
         if envelope.status != "completed":
-            # No completion record. That *is* the fact; nothing else is needed to
-            # know the item was not delivered, and no failure is invented here.
             return outcome
         if role != "DEXTER":
-            # A reviewer returns a verdict, not a deliverable. Submitting it as
-            # a candidate would count a review as a delivery and quietly inflate
-            # every number built on deliveries.
-            return outcome
-        if terminal is not None and role == "DEXTER":
-            # He said how it went. That is the answer, and it was given before
-            # the session ended rather than parsed out of a final message, so it
-            # survives a round that never finished.
+            return outcome  # reviewers' prose is never a product candidate
+        if terminal is not None:
             outcome.detail = "\n\n".join(
-                [terminal["description"]] + [r["description"] for r in (earlier or [])]
+                [terminal.get("description", "")]
+                + [r.get("description", "") for r in (earlier or [])]
             ).strip()
-            if terminal["kind"] == "success":
-                return outcome
-            return _with(outcome, delivered=False, status="failed",
-                         detail=f"builder reported failure: {outcome.detail}")
+            if terminal.get("kind") != "success":
+                return _with(outcome, delivered=False, status="failed",
+                             detail=f"builder reported {terminal.get('kind')}: {outcome.detail}")
+            # The old implementation returned here, before submitting any candidate.
+            # Success can still be recorded only when the host has frozen real bytes.
         if not produced:
-            # It finished and left nothing. Why is the one thing worth knowing,
-            # and the builder said it: "no filesystem or shell tool is
-            # available" is a different fact from "I tried and produced nothing",
-            # and only one of them is fixed by handing over tools.
-            #
-            # The detail used to be the transport's message count, which is a
-            # tally of what arrived rather than what was said. The words replace
-            # it, and the count is kept alongside for the case where the builder
-            # said nothing at all.
-            outcome.detail = (envelope.output.strip() or envelope.detail)[:1_000]
+            outcome.detail = outcome.detail or (envelope.output.strip() or envelope.detail)[:1_000]
             return outcome
         candidate_id = str(uuid.uuid4())
         self._log.record(
-            "candidate.submitted",
-            producer="worker",
+            "candidate.submitted", producer="worker",
             payload=json.dumps({
-                "runId": run,
-                "taskDefinitionRef": task_ref,
-                "candidateId": candidate_id,
-                "files": {name: f"sha256:{d}" for name, d in outcome.files.items()},
+                "runId": run, "taskDefinitionRef": task_ref, "candidateId": candidate_id,
+                "files": dict(outcome.files),
             }).encode("utf-8"),
-            project_id=project_id,
-            run_id=run,
+            project_id=project_id, task_ref=task_ref, run_id=run,
         )
         outcome.candidate_id = candidate_id
         return outcome
 
     def _collect(self, project_id: str, run: str) -> tuple[dict[str, bytes], dict[str, Any]]:
-        """Bytes come from the round directory, so a claim is re-derived.
+        """Only changed product bytes cross the seam, relative to the frozen seed.
 
-        The bytes are read from the round directory, so a claim of what changed
-        is re-derived rather than believed (C12). Each file's declared encoding
-        is returned with it, so a reader never has to infer one (TESP §4.8).
+        The builder's working directory is not evidence of its own baseline:
+        history at round.started gives us the original source and deliveries.
+        A changed or missing local baseline file cannot falsify the diff.
         """
         directory = paths.projects(self.broker.workspace_root) / project_id / "rounds" / run
         if not directory.is_dir():
             return {}, {}
+        start = next((e for e in self._log.read_all()
+                      if e.type == "round.started" and e.runId == run), None)
+        if start is None:
+            raise WorkspaceError("no recorded round.start for candidate collection")
+        # A one-off lightweight composition: never construct another Runtime.
+        from types import SimpleNamespace
+        workspace = ProjectWorkspace(SimpleNamespace(
+            root=self.broker.workspace_root, log=self._log, artifacts=self.artifacts))
+        baseline = workspace.snapshot(project_id, through_sequence=start.sequence)
         captured: dict[str, bytes] = {}
         specs: dict[str, Any] = {}
+        ignored = {"agent.jsonl", "agent.err", "context-pack.md", "REQUEST.json",
+                   ".progressdesk-baseline.json"}
+        excluded_dirs = {"sessions", "report", "__pycache__", ".git", ".venv", "node_modules"}
+        seen = set()
         for path in sorted(directory.rglob("*")):
+            if path.is_symlink():
+                raise WorkspaceError("builder candidate contains a symlink")
             if not path.is_file():
                 continue
             relative = path.relative_to(directory).as_posix()
-            if relative in ("agent.jsonl", "agent.err", "context-pack.md", "REQUEST.json"):
+            if relative in ignored or excluded_dirs.intersection(path.relative_to(directory).parts):
                 continue
-            if relative.startswith("sessions/"):
+            if relative.endswith((".pyc", ".pyo")):
                 continue
-            # Compiled bytecode is not work. It is machine-specific, it is not
-            # reviewable, and it changes every run - so it is never delivered.
-            if "__pycache__" in relative.split("/") or relative.endswith((".pyc", ".pyo")):
-                continue
+            seen.add(relative)
             data, spec = read_bytes_with_spec(path)
+            if "sha256:" + __import__("hashlib").sha256(data).hexdigest() == baseline.get(relative):
+                continue
             captured[relative] = data
             specs[relative] = spec
+        # Deletions need an explicit deletion receipt; silently resurrecting a
+        # deleted source file in the next round would be a false delivery.
+        deleted = sorted(set(baseline).difference(seen))
+        if deleted:
+            raise WorkspaceError(
+                "builder deleted tracked files (not yet representable as candidate diffs): "
+                + ", ".join(deleted[:20])
+            )
         return captured, specs
 
     @staticmethod
@@ -942,7 +884,8 @@ class RoundDispatcher:
         return {name: f"sha256:{artifacts.put(content)}" for name, content in files.items()}
 
     def _request(
-        self, project_id: str, task_ref: str, packet: Any, run: str,
+        self,
+        project_id: str, task_ref: str, packet: Any, run: str,
         tools: tuple[str, ...], budget: Budget | None, role: str = "DEXTER",
     ) -> SpawnRequest:
         provider, model = self._model(role)
@@ -988,37 +931,36 @@ class RoundDispatcher:
             raise SpawnError("no_assignment", f"role {role!r} is not configured: {exc}") from exc
 
     def _pack(self, packet: Any, run: str = "") -> ContextPack:
-        """A builder's pack: the slice, and the brief that says what this is.
+        """Deliver the self-contained task contract, not only its outcome.
 
-        The brief was missing for a long time because this path builds the pack
-        itself and never went near read_brief -- every other role gets one
-        through _dispatch. A builder with no brief does not know what workshop he
-        is building in, what his constraints are, or that nobody is grading him
-        between milestones.
-
-        The slice stays one section. It carries its own scope, its interfaces and
-        what done means; splitting it across fields would be a structure invented
-        here and honoured nowhere.
+        This is the actual design-time task data. No checklist/state-machine view,
+        transcript, or milestone QA verdict is delivered to the builder.
         """
-        sections = []
+        sections: list[ContextSection] = []
         if run:
             sections.append(ContextSection("your run", run, 64))
         if self._read_brief is not None:
             sections.append(ContextSection(
                 "your brief", self._read_brief("DEXTER"), ROLE_BRIEF_BUDGET,
             ))
-        # Lessons, below the brief and marked so they are not read as tasks. A fix
-        # one round paid for should not be paid for again.
-        lessons = _lessons_for("DEXTER")
+        lessons = _lessons_for("DEXTER", self.root)
         if lessons:
             sections.append(ContextSection(
-                "lessons (not tasks)",
-                  "\n---\n" + lessons + "\n---",
-                LESSON_BUDGET,
+                "lessons (not tasks)", "\n---\n" + lessons + "\n---", LESSON_BUDGET,
             ))
+        sections.append(ContextSection("outcome", _text(getattr(packet, "outcome", "")), TASK_SECTION_BUDGET))
+        sections.append(ContextSection("scope", _text(getattr(packet, "scope", "")), TASK_SECTION_BUDGET))
+        sections.append(ContextSection("interfaces", _text(getattr(packet, "interfaces", ())), TASK_SECTION_BUDGET))
         sections.append(ContextSection(
-            "the slice", _text(getattr(packet, "outcome", "")), TASK_SECTION_BUDGET,
+            "task acceptance conditions (milestone QA runs later)",
+            _text(getattr(packet, "acceptance_conditions", ())), TASK_SECTION_BUDGET,
         ))
+        examples = _text(getattr(packet, "accepted_example_refs", ()))
+        if examples:
+            sections.append(ContextSection("accepted example references", examples, 4_096))
+        inputs = _text(getattr(packet, "input_artifact_refs", ()))
+        if inputs:
+            sections.append(ContextSection("input artifact references", inputs, 4_096))
         return ContextPack(tuple(sections))
 
 def _text(value: Any) -> str:
@@ -1032,19 +974,20 @@ def _text(value: Any) -> str:
 
 
 def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
-    """Compose the dispatcher from an assembled Runtime."""
+    """Compose the dispatcher using the *same* runtime and event store."""
     harness = getattr(runtime, "harness", None)
     return RoundDispatcher(
-        runtime.spawner_for(project_id),
-        runtime.broker,
-        runtime.artifacts,
+        runtime.spawner_for(project_id), runtime.broker, runtime.artifacts,
         resolve_role=(harness.for_role if harness is not None else None),
         resolve_transport=(harness.transport_for if harness is not None else None),
-        sweep=runtime.sweep,
-        cleaner=runtime.cleaner,
+        sweep=runtime.sweep, cleaner=runtime.cleaner,
         ask=getattr(runtime, "ask", None),
         ask_noul=getattr(runtime, "noul_in", None),
-        propose_intent=getattr(runtime, "propose_intent", None),
         read_brief=read_brief,
+        reports_for=getattr(runtime, "reports_for", None),
+        drain=getattr(runtime, "drain_reports", None),
         split_task=getattr(runtime, "split_task", None),
+        police_abort=lambda project, reason: runtime.police.stop_workshop(
+            reason, source="police",
+        ),
     )

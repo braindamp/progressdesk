@@ -1,56 +1,84 @@
-# progressDesk
+# ProgressDesk — POLICE and SHARPENER normal-build integration
 
-The ProgressDesk workshop — TARGET repo of the **progressDesk4-build BUILDER**
-(`D:\Coding\progressDesk4-build\builder`).
+Apply **after** the accepted `ProgressDesk_SHARPENER_PreSCHOTTY` package. Full
+file replacements. Stop ProgressDesk first, use git to preserve your previous
+sources, then extract this ZIP and run:
 
-This repository is built one smallest-checklist-slice at a time by the Ralph loop
-defined in the builder repo. All product code and product tests live here;
-governance, checklist state, and loop evidence stay in the builder.
-
-## Gospel authority
-
-The accepted specifications are the sole authority for everything in this repo:
-
-- **VISP v1.9** — vision and planning spec: `D:\Coding\progressDesk4-build\ProgressDesk project definition\ProgressDesk VISP_v1.9.md`
-- **FUSP v1.9** — functional spec: same folder
-- **TESP v1.10** — technical spec: same folder
-
-These are the current versions. Earlier versions of the same names are retained
-in that folder as history; a version is superseded only by a later version of
-the same document.
-
-Nothing overrides the gospel. In case of conflict: stop, write a typed blocked
-handoff, and use the builder's OWNER_QUESTIONS.md channel — never silently
-redesign around a conflict.
-
-## Layout
-
-Per TESP §4.1, this repo root is the workshop root. Paths are relative to it,
-not drive names:
-
-```
-config/          assignments.json
-events/          events.jsonl (append-only logical history; authoritative)
-artifacts/       sha256/<digest> (bytes stored once, referenced by digest)
-projects/        <project-id>/ checkpoints, views, workspace, planning, rounds
-tools/           <tool-id>/<version>/
-skills/          <skill-id>/<version>/
-domain-packs/    <pack-id>/<version>/
-src/             python package (uv-managed, Python 3.12)
+```powershell
+python .\apply.py D:\Coding\progressDesk
 ```
 
-`installed/kernel/` arrives with MS1 (kernel slice); it is deliberately absent
-until then.
+Nine files are replaced (six Python modules and three role briefs). The
+installer leaves artifacts, feature lists, journals and configuration alone.
 
-## Toolchain
+## Operation
 
-- Python 3.12, managed by uv (TESP §1.1).
-- pytest pinned (`dev` dependency group), run as `uv run pytest`.
-- No database, no distributed queue, no workflow framework.
+- On builder reports of issues, suggestions, or lessons, SHARPENER observes and
+  can propagate the fix; without a relevant report, the normal builder path
+  does not call SHARPENER for this purpose.
+- SHARPENER runs in its own broker project `__sharpener__`, not in the project
+  execution boundary. POLICE terminates **all broker-owned project runs** but
+  excludes that execution project. A workshop abort also prevents future
+  normal project scheduling.
+- When LAYA cannot clear the room, SHARPENER observes first. It can refer
+  concrete evidence to POLICE while continuing to work. If the workshop has
+  been stopped, SCHOTTY is not dispatched.
+- Otherwise, SCHOTTY cleans, with a POLICE escalation only if it notices
+  unauthorized activity by SHARPENER while cleaning. LAYA subsequently
+  rechecks room readiness.
+- SHARPENER may propagate a proven lesson into `lessons/<ROLE>.md` or replace
+  an agent's complete `src/progressdesk/agents/<ROLE>.md` instructions.
+- SHARPENER can submit a draft VISP. The next milestone is held for human
+  decision, *not* the feature currently being built.
 
-## Rules that apply here (from the builder constitution)
+## SHARPENER action requests
 
-- Atomic writes only (temp + replace); UTC timestamps only.
-- Workers never write the event file directly.
-- Installed kernel files are not writable through project execution.
-- Validation: `uv run pytest` from this root.
+The role's context provides an absolute **host action inbox**. SHARPENER writes
+JSON requests into that directory using its already available `write` tool.
+This is processed by the control host while SHARPENER runs, rather than waiting
+for its final response. The exact four request shapes are in `SHARPENER.md`:
+`police`, `lesson`, `instruction`, and `visp`.
+
+## VISP owner actions
+
+Review pending items:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m progressdesk visp.pending project_id=PROJECT_ID
+```
+
+For acceptance, use the **existing** owner operation:
+
+```powershell
+python -m progressdesk definition.signoff definition_id=VISP_UUID revision=1
+```
+
+For a proposal not accepted by the owner:
+
+```powershell
+python -m progressdesk visp.dismiss project_id=PROJECT_ID visp_ref=VISP_UUID@1
+```
+
+Then the next milestone proceeds. Neither decision automatically implements
+or changes the framework. The approved work must enter an accepted execution
+plan through the normal planning process.
+
+## Verified here / not verified here
+
+The Python modules import and compile. Disposable event-backed checks covered
+VISP submission, owner signoff, lesson propagation, processing SHARPENER actions
+while the role is active, and a POLICE stop of multiple fake broker runs with a
+SHARPENER run spared. The milestone-boundary scheduling block was exercised.
+
+**Not verified:** actual Windows Job Objects, provider Pi tool behavior, the
+external LAYA endpoint, visibility/permissions of SHARPENER's host action inbox,
+and live workshop-wide termination with real model sessions. All are needed
+before claiming a successful production execution.
+
+The stop affects the current control host's broker-owned project processes. If
+separate independent control hosts are run concurrently, they do not share one
+in-memory process registry. ProgressDesk's specified single-host mode is assumed.
+
+No post-POLICE cleanup or restart implementation was added. No per-feature QA
+or test files were added.

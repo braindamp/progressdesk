@@ -374,6 +374,42 @@ class PoliceService:
                 storage_error=storage_error,
             )
 
+    def stop_workshop(self, reason: str, *, source: str = "sharpener") -> AbortResult:
+        """Stop all broker-owned project work, leaving SHARPENER running."""
+        _text(reason, "reason")
+        with self._lock:
+            self._last_storage_error = None
+            self._closed_projects.add("workshop")
+            abort_id = str(uuid.uuid4())
+            event = self._record_or_capture("abort.issued", {
+                "abortId": abort_id, "projectId": "workshop",
+                "classification": "security", "reason": reason,
+                "source": source, "evidenceRefs": [],
+            }, "workshop")
+            runs = ()
+            error = None
+            try:
+                runs = self.authority.terminate_workshop(self.broker)
+                for run in runs:
+                    run.wait_for_termination(self.termination_timeout_ms)
+                    self.broker._forget_run(run)
+            except Exception as exc:
+                error = str(exc)
+            confirmed = error is None
+            self._record_or_capture(
+                "termination.confirmed" if confirmed else "termination.unresolved",
+                {"abortId": abort_id, "projectId": "workshop",
+                 "activeProcessCount": 0 if confirmed else -1,
+                 "error": error}, "workshop",
+            )
+            return AbortResult(
+                abort_id=abort_id, project_id="workshop",
+                classification=FailureClassification("security"),
+                termination_confirmed=confirmed, recovery_ready=False,
+                recorded=event is not None, runs=tuple(runs),
+                termination_error=error,
+            )
+
     def reopen_after_recovery(self, project_id: str) -> Event:
         """Open a fresh dispatch only after a recorded successful recovery."""
         ready = [

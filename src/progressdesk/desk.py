@@ -481,23 +481,21 @@ class ProjectService:
         ]
 
     def _matching_created_event(
-        self, project_id: str, request_id: str, draft_ref: str
+        self, project_id: str, request_id: str, draft_ref: str,
     ) -> Event | None:
         found: Event | None = None
         for event in self.log.read_all():
             if event.type != "project.created":
                 continue
             payload = _event_payload(self.artifacts, event, _CREATED_FIELDS)
-            if payload["requestId"] != request_id:
+            if payload.get("requestId") != request_id:
                 continue
-            if (
-                event.projectId != project_id
-                or payload["projectId"] != project_id
-                or payload["draftRevision"] != draft_ref
-            ):
+            if (event.projectId != project_id
+                    or payload.get("projectId") != project_id
+                    or payload.get("specRef") != draft_ref):
                 raise ProjectError(
                     "request_conflict",
-                    "project.create requestId is already bound to another draft/project",
+                    "project.create requestId is already bound to a different specification/project",
                 )
             found = event
         return found
@@ -563,41 +561,26 @@ class ProjectService:
         )
 
     def _created_manifest_matches(self, created: Event) -> bool:
-        """The manifest is the project, so this checks the workspace.
-
-        The manifest is the project itself -- the definition it was built from --
-        so checking it against the event is checking the workspace, not a cache
-        of the workspace. There used to be a second file here, `views/
-        project.json`, holding a `status` string that both call sites passed
-        `expected_status=None` for, so its status was never actually compared
-        and the file duplicated facts the log and the manifest already carried.
-        It is gone. The event log is the record and the manifest is the thing
-        built from it; there is no third copy to fall out of step.
-        """
+        """Compare the published project to the *current* project.created schema."""
         payload = _event_payload(self.artifacts, created, _CREATED_FIELDS)
-        if created.projectId is None:
+        if created.projectId is None or not payload.get("specRef"):
             return False
         destination = self.projects_root / created.projectId
         if not destination.is_dir():
             return False
         try:
-            manifest = json.loads(
-                (destination / PROJECT_MANIFEST_RELATIVE).read_text(
-                    encoding="utf-8"
-                )
-            )
-        except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            manifest = json.loads((destination / PROJECT_MANIFEST_RELATIVE).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
             return False
-        manifest_definition = manifest.get("definition") if isinstance(manifest, dict) else None
-        return (
+        definition = manifest.get("definition") if isinstance(manifest, dict) else None
+        return bool(
             isinstance(manifest, dict)
             and manifest.get("schemaVersion") == PROJECT_PLAN_SCHEMA_VERSION
             and manifest.get("source") == "events+artifacts"
-            and manifest.get("projectId") == destination.name
+            and manifest.get("projectId") == created.projectId
             and manifest.get("createdEventId") == created.id
-            and isinstance(manifest_definition, dict)
-            and manifest_definition.get("draftRevision") == payload["draftRevision"]
-            and manifest_definition.get("goDigest") == payload["goDigest"]
+            and isinstance(definition, dict)
+            and definition.get("specRef") == payload["specRef"]
         )
 
 
