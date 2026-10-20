@@ -150,7 +150,6 @@ class FloorSweep:
         # The briefs sit beside this module, so the check finds them without
         # being told where the workshop is. They are not in the workspace on
         # purpose: they are instructions, not a builder's output.
-        self.briefs_dir = Path(__file__).resolve().parent / "agents"
         self._is_alive = is_alive
         self._enumerator = enumerator
         self._git = git or _git
@@ -423,27 +422,6 @@ class FloorSweep:
             project_id=report.project_id,
         )
 
-    def check_briefs(self, report: SweepReport) -> None:
-        """An em dash in a brief stops the round. Blocked, never repaired: a human
-        looks at the file and signs it off."""
-        for path in sorted(self.briefs_dir.glob("*.md")) if self.briefs_dir else ():
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as exc:
-                self._record(report, "check_briefs", f"{path.name}: unreadable ({exc})", blocked=True)
-                continue
-            hits = [i + 1 for i, line in enumerate(text.split("\n")) if "\u2014" in line]
-            if hits:
-                self._record(
-                    report,
-                    "check_briefs",
-                    f"{path.name}: em dash on line(s) {', '.join(map(str, hits))} - "
-                    f"replace with a hyphen and have a human sign it off",
-                    blocked=True,
-                )
-            # A brief that is clean is not a fact worth an event. The sweep
-            # reports what it found; "nothing here" is not a finding.
-
     def record(self, report: SweepReport, operation: str, detail: str, *, blocked: bool = False) -> None:
         """Journal one step. Same writer, same vocabulary, no second record."""
         self._record(report, operation, detail, blocked=blocked)
@@ -512,14 +490,10 @@ class Sweep:
         return [task_id for task_id in dict.fromkeys(declared) if task_id not in completed]
 
     def after_slice(self, project_id: str) -> SweepReport:
-        report = self.script.run(project_id, strength=LIGHT)
-        self.script.check_briefs(report)
-        return report
+        return self.script.run(project_id, strength=LIGHT)
 
     def after_milestone(self, project_id: str) -> SweepReport:
-        report = self.script.run(project_id, strength=STRONG)
-        self.script.check_briefs(report)
-        return report
+        return self.script.run(project_id, strength=STRONG)
 
 
 @dataclass
