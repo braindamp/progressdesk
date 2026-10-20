@@ -149,6 +149,7 @@ class Runtime:
     ask: Callable[..., str] | None = None
     split_task: Callable[..., Any] | None = None
     _spawner_lock: threading.Lock = field(default_factory=threading.Lock)
+    execution: Mapping[str, Any] = field(default_factory=dict)
 
     # -- construction ----------------------------------------------------
     @classmethod
@@ -195,6 +196,7 @@ class Runtime:
             ask=None,
             split_task=None,
             _write_lock=threading.Lock(),
+            execution=_load_execution(root),
         )
         runtime.cleaner = Cleaner(sweep, runtime.decide_in_room)
         runtime.ask = runtime.ask_role
@@ -211,21 +213,44 @@ class Runtime:
             if spawner is None:
                 registry = ExecutorRegistry()
                 registry.register(ManualExecutor(paths.projects(self.root) / project_id / "manual"))
+
+                def prepare(req: SpawnRequest) -> Path:
+                    if req.role == "DEXTER":
+                        from .workspace import ProjectWorkspace
+
+                        return ProjectWorkspace(self).prepare_round(project_id, req.run_id)
+                    directory = paths.projects(self.root) / project_id / "rounds" / req.run_id
+                    directory.mkdir(parents=True, exist_ok=True)
+                    return directory
+
+                terminator = PoliceTerminationAuthority().terminate
                 try:
                     from .transport import pi_transport
 
                     registry.register(
                         pi_transport(
                             broker=self.broker,
-                            terminator=PoliceTerminationAuthority().terminate,
+                            terminator=terminator,
                             project_id=project_id,
-                            prepare=lambda req: __import__(
-                                "progressdesk.workspace", fromlist=["ProjectWorkspace"]
-                            ).ProjectWorkspace(self).prepare_round(project_id, req.run_id),
+                            prepare=prepare,
                         )
                     )
                 except SpawnError:
                     pass  # manual is first-class and is the fallback by design
+                try:
+                    from .opencode_transport import opencode_transport
+
+                    registry.register(
+                        opencode_transport(
+                            broker=self.broker,
+                            terminator=terminator,
+                            project_id=project_id,
+                            executable=str(self.execution.get("opencodeExecutable") or "") or None,
+                            prepare=prepare,
+                        )
+                    )
+                except SpawnError:
+                    pass
                 # The decision model is registered beside the others, not wired
                 # around them. A service that is down is an infra-fault when a
                 # verdict is asked for, which the caller needs to see; it is not
@@ -1276,6 +1301,18 @@ def serve_http(runtime: Runtime) -> None:  # pragma: no cover - presentation
 
 
 # --------------------------------------------------------------------------
+
+
+def _load_execution(root: Path) -> dict[str, Any]:
+    """Executable/account settings, kept apart from model selection."""
+    path = paths.config(root) / "execution.json"
+    if not path.exists():
+        return {}
+    try:
+        document = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        raise CommandError("execution_invalid", f"config/execution.json: {exc}") from exc
+    return document if isinstance(document, dict) else {}
 
 
 def _load_harness(root: Path) -> HarnessConfig | None:

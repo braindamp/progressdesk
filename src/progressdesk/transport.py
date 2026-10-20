@@ -22,7 +22,7 @@ import json
 import re
 import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -175,6 +175,7 @@ class CommandTransport:
         termination_grace_ms: int = 5000,
         runtime_family: str = "unknown",
         prepare: Callable[[SpawnRequest], Path] | None = None,
+        build_env: Callable[[SpawnRequest], Mapping[str, str]] | None = None,
     ) -> None:
         if answers_in not in ANSWERS:
             raise SpawnError(
@@ -191,6 +192,7 @@ class CommandTransport:
         self._build_argv = build_argv
         self._parse = parse
         self._prepare = prepare
+        self._build_env = build_env
         self._project_id = project_id
         self._grace = termination_grace_ms
         # What this adapter actually launches. The seam pins that family's
@@ -252,6 +254,7 @@ class CommandTransport:
             stdout=stdout,
             stderr=stderr,
             runtimeFamily=self.runtime_family,
+            env=self._build_env(req) if self._build_env is not None else None,
         )
         try:
             run = self._broker.spawn_transport(planned)
@@ -296,6 +299,15 @@ class CommandTransport:
                 detail=f"transcript not decodable: {stream_fault}",
             )
         parsed = self._parse(stream)
+        if parsed.session_ref:
+            # Host metadata: the run-to-session association belongs to us, not
+            # to the role, and a continuation reuses only this run's session.
+            try:
+                (sessions / "session.json").write_text(
+                    json.dumps({"sessionRef": parsed.session_ref}), encoding="utf-8"
+                )
+            except OSError:
+                pass
         wall_ms = int((time.monotonic() - started) * 1000)
         if timed_out:
             return ResultEnvelope(

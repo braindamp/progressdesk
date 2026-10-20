@@ -69,6 +69,7 @@ def build_request(args: argparse.Namespace) -> SpawnRequest:
         # Requesting a tier the adapter cannot provide is refused by the seam,
         # not silently downgraded. Declare what the adapter really is.
         sandbox=args.sandbox,
+        question=args.prompt,
     )
 
 
@@ -106,6 +107,28 @@ def main() -> int:
     if not args.provider or not args.model:
         args.provider, args.model = _configured_model(runtime, args.role)
     request = build_request(args)
+
+    if args.kind == "opencode":
+        from progressdesk.opencode_transport import opencode_transport
+
+        def prepare(req):
+            directory = Path(args.root).resolve() / "scratch" / args.project / "probe" / req.run_id
+            directory.mkdir(parents=True, exist_ok=True)
+            return directory
+
+        spawner = runtime.spawner_for(args.project)
+        spawner.registry.register(
+            opencode_transport(
+                broker=runtime.broker,
+                terminator=PoliceTerminationAuthority().terminate,
+                project_id=args.project,
+                executable=args.executable or runtime.execution.get("opencodeExecutable"),
+                sandbox=args.sandbox,
+                prepare=prepare,
+                kind="opencode-probe",
+            )
+        )
+        args.kind = "opencode-probe"
 
     if args.kind == "pi" and args.executable:
         # Same class, a different executable. Nothing above the seam changes —

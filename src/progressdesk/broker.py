@@ -117,6 +117,7 @@ class PlannedTransport:
     stdout: Path | None = None
     stderr: Path | None = None
     runtimeFamily: str = "unknown"
+    env: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -329,6 +330,19 @@ def _assert_no_reparse(path: Path, root: Path) -> None:
             raise BrokerError(f"reparse-point path is forbidden: {current}")
 
 
+def _environment_block(overrides: dict[str, str]) -> ctypes.Array:
+    """Inherit the host environment and overlay dispatch-specific values.
+
+    The returned buffer is the Windows Unicode environment block. The caller
+    keeps it alive across CreateProcessW.
+    """
+    merged = dict(os.environ)
+    merged.update({key: str(value) for key, value in overrides.items() if "=" not in key})
+    return ctypes.create_unicode_buffer(
+        "\0".join(f"{key}={value}" for key, value in sorted(merged.items())) + "\0"
+    )
+
+
 class WindowsJob:
     """One project run Job Object; breakaway flags are deliberately not enabled."""
 
@@ -354,13 +368,14 @@ class WindowsJob:
         stdout: Path | None = None,
         stderr: Path | None = None,
         runtime_family: str = "unknown",
+        env: dict[str, str] | None = None,
     ) -> tuple[ProcessIdentity, ctypes.c_void_p]:
         if self._closed:
             raise BrokerError("job is already closed")
         if stdout is None and stderr is None:
             # Nothing to redirect: bInheritHandles stays FALSE and the child
             # inherits nothing at all.
-            return self._launch(argv, candidate_dir, role, None, None, runtime_family)
+            return self._launch(argv, candidate_dir, role, None, None, runtime_family, env)
         owned: list[ctypes.c_void_p] = []
         pinned: _PinnedHandleList | None = None
         try:
@@ -381,6 +396,8 @@ class WindowsJob:
                 role,
                 (standard_input, out or err, err or out),
                 pinned.attribute_list,
+                runtime_family,
+                env,
             )
         finally:
             if pinned is not None:
@@ -439,6 +456,7 @@ class WindowsJob:
         standard_handles: tuple[Any, ...] | None,
         attribute_list: ctypes.c_void_p | None,
         runtime_family: str = "unknown",
+        env: dict[str, str] | None = None,
     ) -> tuple[ProcessIdentity, ctypes.c_void_p]:
         info = _ProcessInformation()
         if attribute_list is None:
@@ -459,6 +477,7 @@ class WindowsJob:
             inner.dwFlags = STARTF_USESTDHANDLES
             inner.hStdInput, inner.hStdOutput, inner.hStdError = standard_handles
         command_line = subprocess.list2cmdline(list(argv))
+        environment = _environment_block(env) if env else None
         created = self._library.CreateProcessW(
             argv[0],
             command_line,
@@ -466,7 +485,7 @@ class WindowsJob:
             None,
             inherit_handles,
             flags,
-            None,
+            ctypes.cast(environment, ctypes.c_void_p) if environment is not None else None,
             os.fspath(candidate_dir),
             # `inner` is the first member of the extended form, so this address
             # is also the STARTUPINFOEXW address when the extended one is in use.
@@ -803,6 +822,7 @@ class Broker:
             stdout=captured.get("stdout"),
             stderr=captured.get("stderr"),
             runtime_family=runtime_family,
+            env=dict(planned.env) if planned.env else None,
         )
 
     def _dispatch(
@@ -817,6 +837,7 @@ class Broker:
         stdout: Path | None = None,
         stderr: Path | None = None,
         runtime_family: str = "unknown",
+        env: dict[str, str] | None = None,
     ) -> ProjectRun:
         """Create suspended, assign to the job, record identity, then resume."""
         if self.event_log is not None:
@@ -835,6 +856,8 @@ class Broker:
                 role=role,
                 stdout=stdout,
                 stderr=stderr,
+                runtime_family=runtime_family,
+                env=env,
             )
         except Exception as exc:
             job.close()

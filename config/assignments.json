@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "models": {
-    "space-bunny-alpha": {
-      "modelId": "space-bunny-alpha",
-      "provider": "openrouter",
-      "transport": "pi"
+    "deepseek-v4.1-flash-free": {
+      "modelId": "deepseek-v4.1-flash-free",
+      "provider": "opencode",
+      "transport": "opencode"
     },
     "laya-systemone": {
       "modelId": "laya-systemone",
@@ -13,12 +13,12 @@
     }
   },
   "roles": {
-    "DEXTER": "space-bunny-alpha",
-    "DEE_DEE": "space-bunny-alpha",
-    "JACK_THE_SPLITTER": "space-bunny-alpha",
-    "SCHOTTY": "space-bunny-alpha",
+    "DEXTER": "deepseek-v4.1-flash-free",
+    "DEE_DEE": "deepseek-v4.1-flash-free",
+    "JACK_THE_SPLITTER": "deepseek-v4.1-flash-free",
+    "SCHOTTY": "deepseek-v4.1-flash-free",
     "CLEANING_LAYA": "laya-systemone",
-    "SHARPENER": "space-bunny-alpha",
-    "POLICE": "space-bunny-alpha"
+    "SHARPENER": "deepseek-v4.1-flash-free",
+    "POLICE": "deepseek-v4.1-flash-free"
   }
 }
