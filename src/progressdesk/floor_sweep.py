@@ -234,7 +234,19 @@ class FloorSweep:
             and e.runId
             and e.runId not in delivered
         ]
+        # A round the builder has reported on is the host's to account for, not
+        # the sweep's. The sweep retires work that never ticked; a round that
+        # reported is still being settled, and sweeping it would destroy the
+        # delivery the host is about to freeze.
+        reported = {
+            e.runId for e in events
+            if e.projectId == report.project_id and e.type == "builder.reported"
+        }
         for event in unticked:
+            if event.runId in reported:
+                self._record(report, "sweep_debris",
+                             f"run {event.runId}: the builder reported; the host accounts for it")
+                continue
             detail = self._sweep_round(report.project_id, event.runId)
             self._record(report, "sweep_debris", detail)
             # A swept round is finished. Leaving it open blocks every later

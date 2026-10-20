@@ -906,8 +906,21 @@ class RoundDispatcher:
             return _with(outcome, delivered=False, status="failed",
                          detail=f"builder reported {terminal.get('kind')}: {outcome.detail}")
         if not produced:
-            outcome.detail = outcome.detail or (envelope.output.strip() or envelope.detail)[:1_000]
-            return outcome
+            # A builder that changed nothing has still delivered: the feature is
+            # present in the room as it stands, and the room as it stands is the
+            # baseline. The delivery is that state, not a diff against it. The
+            # milestone gate judges the assembled product; there is no per
+            # feature check here, and a round that legitimately needed no
+            # change must not look like a round that delivered nothing.
+            baseline_files = self._baseline_files(project_id, run)
+            if not baseline_files:
+                outcome.detail = outcome.detail or (envelope.output.strip() or envelope.detail)[:1_000]
+                return outcome
+            outcome.files = baseline_files
+            outcome.detail = (outcome.detail or "") + (
+                "\n\nthe builder reported success and changed nothing; the delivery is the "
+                "state of the room as it stands"
+            )
         candidate_id = str(uuid.uuid4())
         self._log.record(
             "candidate.submitted", producer="worker",
@@ -919,6 +932,21 @@ class RoundDispatcher:
         )
         outcome.candidate_id = candidate_id
         return outcome
+
+    def _baseline_files(self, project_id: str, run: str) -> dict[str, str]:
+        """The product state the round started from, as name -> artifact ref."""
+        start = next((e for e in self._log.read_all()
+                      if e.type == "round.started" and e.runId == run), None)
+        if start is None:
+            return {}
+        from types import SimpleNamespace
+        from .workspace import ProjectWorkspace
+        workspace = ProjectWorkspace(SimpleNamespace(
+            root=self.broker.workspace_root, log=self._log, artifacts=self.artifacts))
+        try:
+            return workspace.snapshot(project_id, through_sequence=start.sequence)
+        except Exception:  # noqa: BLE001 - a missing baseline is not a delivery
+            return {}
 
     def _collect(self, project_id: str, run: str) -> tuple[dict[str, bytes], dict[str, Any]]:
         """Only changed product bytes cross the seam, relative to the frozen seed.
