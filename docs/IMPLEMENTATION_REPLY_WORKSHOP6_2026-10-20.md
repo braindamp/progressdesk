@@ -4,7 +4,7 @@
 
 **Purpose:** Combine both investigations and the owner's subsequent decisions into instructions for the implementing agent.
 
-**Status:** Approved for implementation within the recorded scope. The owner has resolved the final audit's qualitative-QA and corrective-planning decisions in section 2C. Proceed with the approved work while keeping the concrete unknowns in section 7 visible. This document is a bounded implementation handoff, not evidence of a fully commissioned or completed framework.
+**Status:** Approved for implementation within the recorded scope. The owner's qualitative-QA, corrective-planning, fresh-JACK and submission-check decisions are recorded in sections 2C–2E. Proceed with the approved work while keeping the concrete unknowns in section 7 visible. This document is a bounded implementation handoff, not evidence of a fully commissioned or completed framework.
 
 Read with [the research handoff](RESEARCH_HANDOFF_DOGFOOD_RECOVERY_2026-10-20.md) and [your forensic reply](REPLY_RESEARCH_HANDOFF_DOGFOOD_RECOVERY_2026-10-20.md). This reply supersedes their conflicting recommendations. The older implementation plan is not ready to execute unchanged.
 
@@ -110,14 +110,15 @@ The normal correction path is:
 failed milestone acceptance
   -> fresh JACK instance reviews the milestone plan and acceptance findings
   -> proposes corrective features within the approved milestone scope
-  -> host records them in the ordinary feature plan
+  -> host submission operation checks structure, then local LAYA checks plausibility
+  -> host atomically records the approved proposal in the ordinary feature plan
   -> builders execute them through the usual build/status path
   -> assemble the changed product and rerun the declared milestone gate
 ```
 
 JACK owns this bounded corrective-planning responsibility as well as feature splitting, through separate explicit operations and request/result formats. Give the fresh corrective-planning instance the milestone plan, original acceptance obligations, failed candidate/evaluator identities, recorded findings, and relevant delivery history or frozen source needed to diagnose the failure. It must be able to consider earlier features; do not assume the last builder caused the problem. Reuse the ordinary host-managed planning/feature path to apply its proposal.
 
-Its normal output is executable corrective feature contracts: outcomes, scope, interfaces and relevant acceptance obligations, with the existing tool/authority metadata preserved. Host code applies the resulting plan changes. The planner cannot silently weaken the milestone, rewrite past acceptance evidence, grant itself capabilities, or repair the product outside the normal builder path. JACK continues to handle non-delivery of ordinary or corrective features.
+Its normal output is executable corrective feature contracts: outcomes, scope, interfaces and relevant acceptance obligations, with the existing tool/authority metadata preserved. Host code applies the resulting plan changes only through the submission operation in section 2E. The planner cannot silently weaken the milestone, rewrite past acceptance evidence, grant itself capabilities, or repair the product outside the normal builder path. JACK continues to handle non-delivery of ordinary or corrective features.
 
 Expose the same reasoning/planning operation for direct owner invocation and steering. The owner must be able to demand reasoning-model involvement; it is not restricted to an automatic trigger. An explicit steering request does not introduce routine intermediate product testing. Use a model capable of the required reasoning within declared free capacity; never substitute LAYA's compact classification for this planning work or silently escalate to paid capacity.
 
@@ -132,10 +133,37 @@ The owner rejected project-long JACK conversations. BUILD FOR SUCCESS means both
 - **Feature split:** start a fresh JACK session for each split decision. Supply the failed feature's complete contract, non-delivery evidence and necessary interfaces/milestone constraints. Return two executable halves or a towel. Do not load earlier JACK conversations.
 - **Milestone correction:** start a separate fresh JACK session for each replanning invocation, including direct owner invocations. Supply the broader milestone and failure context described in section 2C. Return corrective feature proposals through the host; this operation is not restricted to two halves.
 - Build each context from current authoritative project records. A fresh session can still receive the relevant earlier feature and acceptance evidence; it does not depend on memory from a previous JACK.
-- Preserve existing resumption for a transport interruption **within the same invocation**. That continuation does not authorize reusing a completed invocation's session for another split or milestone replanning call.
+- Preserve existing resumption for a transport interruption **within the same invocation**. Revisions after a rejected submission also remain within that invocation and its submission allowance. Neither continuation authorizes reusing a completed invocation's session for another split or milestone replanning call.
 - Do not implement project-long JACK processes, a reusable JACK conversation registry, or context-saving infrastructure for these exception paths. Update JACK's existing `SPLIT only` mandate explicitly to cover its two operations and their distinct context needs.
 
 The earlier recommendation to introduce persistent project conversations for JACK and SHARPENER is withdrawn. This decision introduces no new session-lifetime policy for SHARPENER; preserve its existing approved invocation behavior unless the owner separately changes it. SHARPENER remains the framework-improvement role, not the milestone repair planner.
+
+### E. JACK submits through a self-contained local LAYA check
+
+The owner approved a narrow plausibility check inside JACK's host submission operations. **Every LAYA call is self-contained:** one compact proposal packet and its question, with no JACK conversation, prior queries, remembered answers or examples required. LAYA checks whether the proposal looks like the requested kind of feature work. It does not certify substance, completeness, successful implementation or acceptance.
+
+Expose two explicit operations through the existing gateway/tool mechanism. JACK submits structured proposals to them; it cannot apply a proposal by editing the authoritative feature file or other project documents directly.
+
+| Operation | Compact packet sent to genuine local LAYA | Question |
+|---|---|---|
+| Feature split | Incoming feature's concise outcome/scope, followed by the two proposed features' concise outcomes/scopes | Does this describe two distinct, actionable parts of the incoming work? |
+| Milestone corrective planning | Concise milestone goal and recorded failure/problem, followed by the proposed corrective features' concise outcomes/scopes | Does this describe a list of actionable corrective features for the stated milestone problem? |
+
+The split operation requires **exactly two** ordered feature contracts. Corrective planning accepts **one or more**; do not reuse an exact-two rule for it. Fresh JACK receives the full context defined in sections 2C/2D. LAYA receives only the compact packet for the current operation, not the full plan, code, evaluator transcript or JACK reasoning.
+
+Implement each submission in this order:
+
+1. **Host validation:** check the request schema, required contract fields, feature count, caller authority, project/milestone/feature references and current plan revision. Preserve the approved acceptance references and protected tool/authority metadata through existing host rules. LAYA cannot grant permissions or authorize a contract change.
+2. **LAYA decision:** construct readable, labelled input from the current authoritative incoming work/problem and the submitted proposal. Use the real local decision-service protocol in section 5, step 2. Keep question versions and probability interpretation explicit; validate the response rather than guessing an answer. Respect the actual service input limit. If the necessary packet cannot fit, report that capability limitation rather than silently omitting part of the proposal or declaring JACK's work invalid.
+3. **Host application:** only after structural validation and a positive LAYA decision, atomically replace the failed feature with its two halves, or add the corrective features to the ordinary milestone plan. Bind the decision to the exact proposal and plan revision being applied; a changed/stale proposal must not inherit approval. Rejection leaves the authoritative plan unchanged. Use the existing event/artifact truth to record the proposal, question/decision, attempt and applied result; do not create another authority store.
+
+Return successful application through the normal success result. A structural rejection or negative LAYA decision returns **CLI exit 1**, or the equivalent typed tool/API rejection, so JACK can revise the proposal. Return real schema/reference errors where available. If LAYA returns only a probability, report that result and the narrow question; do not invent a natural-language rationale or fabricate semantic feedback.
+
+Allow **three submissions total per JACK invocation**, including the first submission. Each structural or LAYA rejection consumes one; after the third rejection, JACK towels and the host records the terminal blocker. Revisions use the same bounded JACK invocation. Do not automatically start a fresh invocation to evade its allowance. This limit applies to submitting that split/correction proposal, not to the milestone's separate product-correction budget or an invented global limit on recursive splitting.
+
+Service unavailability, an unusable response or a genuine input-capability blocker is an **infrastructure outcome**, not a negative plausibility verdict and not a consumed submission or product correction. Preserve the pending proposal/evidence and expose the blocker; do not poll indefinitely, bypass LAYA or let builders proceed with an unapplied proposal. Transport recovery within the same invocation must not double-apply an already recorded result.
+
+This adds no routine feature-quality gate, VISP filter or calibration campaign. The genuine service and these narrow question forms still need to work in the recovered environment; their live capability is not established by this plan. Every actual decision must be possible from its own packet alone.
 
 ## 3. Combined findings to carry into implementation
 
@@ -200,7 +228,7 @@ Bring across OpenCode and report handling together with their runtime dependenci
 
 Verify specialist transitions through their concrete operations:
 
-- For a split, fresh JACK receives the complete feature contract and failure context; the host applies exactly two ordered feature contracts or records a towel. Milestone correction uses JACK's separate fresh-session planning operation from sections 2C/2D.
+- For a split, fresh JACK receives the complete feature contract and failure context. Its submission passes host structural checks and the self-contained local LAYA check before the host applies exactly two ordered feature contracts. Connect rejection/revision, the three-submission allowance and towel as specified in section 2E. Milestone correction uses the separate fresh-session planning operation and its own submission question from sections 2C–2E.
 - Mechanical housekeeping performs mechanical actions; genuine LAYA assesses the room. Unresolved cleanup reaches SCHOTTY with sufficient tools and the actual workspace/evidence paths.
 - SHARPENER observes before cleanup and can teach or propose through host operations. It does not build product features or authorize framework implementation.
 - SCHOTTY cleans and preserves committed output. POLICE receives typed concrete violation evidence, decides serious boundary violations and invokes the connected stop mechanism; do not port an unbounded raw-transcript investigation into its mandate. SHARPENER is spared on the POLICE workshop-stop path. The owner's unconditional stop remains separate in authority and can stop SHARPENER too.
@@ -232,7 +260,7 @@ Use one existing milestone phase service with coherent orchestration around it. 
 
 Through the public CLI/API, declare the project, milestone, accepted contract and GO; prepare its editable feature list and seed. Obtain a real host-committed feature from 6's actual broker/OpenCode path, then proceed toward the milestone.
 
-After the milestone's required deliveries, run its declared acceptance against the frozen assembly. Product failure invokes the reasoning-model planning step in section 2C. Apply its corrective features to the normal feature plan and dispatch them through the usual builders, with operational status checks between features and product acceptance at the milestone boundary. Assemble the changed candidate and rerun the same declared criteria/gate. Implement the owner's direct invocation of this planning operation through the public gateway too. Preserve the milestone's explicit correction budget and honest terminal non-success when exhausted. Do not silently introduce unlimited repair or arbitrary new limits on recursive JACK splitting. A proposal outside approved scope follows the existing human decision boundary.
+After the milestone's required deliveries, run its declared acceptance against the frozen assembly. Product failure invokes the reasoning-model planning step in section 2C. Apply its corrective features only through the host submission checks in section 2E, then dispatch them through the usual builders, with operational status checks between features and product acceptance at the milestone boundary. Assemble the changed candidate and rerun the same declared criteria/gate. Implement the owner's direct invocation of this planning operation through the public gateway too. Preserve the milestone's explicit correction budget and honest terminal non-success when exhausted. Do not silently introduce unlimited repair or arbitrary new limits on recursive JACK splitting. A proposal outside approved scope follows the existing human decision boundary.
 
 Missing tooling, a runner/setup crash or an unavailable evaluator is an infrastructure outcome, not a negative product verdict and not a consumed product correction. Conversely, a declared evaluator observing the candidate crash or violate a required behavior may legitimately report product failure. Do not classify every nonzero exit/exception as either product failure or infrastructure without this distinction. If the acceptance standard itself is wrong or insufficient, return the criterion/policy change to its external authority; never tailor it silently to obtain a pass or recycle old evidence after a material change.
 
@@ -260,10 +288,10 @@ The next report should identify the chosen composition and working location, the
 
 | Item | Current knowledge and next evidence | Policy boundary |
 |---|---|---|
-| Genuine LAYA installation | Client protocol and historical measurement claims exist; exact serving environment, model identity/weights, startup and supported context limits remain unestablished | Recover the actual tool; no arbitrary replacement or simulated service |
+| Genuine LAYA installation and question capability | Client protocol and historical measurement claims exist; exact serving environment, model identity/weights, startup, supported context limits and suitability for the two new self-contained proposal questions remain unestablished | Recover the actual tool; no arbitrary replacement, simulated service or hidden dependence on conversation history; expose a concrete capability blocker |
 | Coherent source composition | Donors are identified; their combined imports, event schemas, policies and role calls have not been demonstrated as workshop 6 | Resolve in code; preserve required responsibilities; report a real scope change |
 | Acceptance coverage | The old standard is demonstrably weak; a complete executable mapping of accepted ProgressDesk outcomes has not yet been approved/commissioned | Prepare the mapping from existing scope; expose unclear criteria instead of inventing a private definition of success |
-| Qualitative QA and corrective planning | Mandates are approved in sections 2C/2D; their connected implementation and live evidence remain to be produced | Preserve the QA/JACK/builder separation, fresh JACK sessions, unchanged acceptance obligations, and direct owner access to reasoning |
+| Qualitative QA and corrective planning | Mandates and JACK submission checks are approved in sections 2C–2E; their connected implementation and live evidence remain to be produced | Preserve the QA/JACK/builder separation, fresh JACK sessions, self-contained LAYA checks, unchanged acceptance obligations, and direct owner access to reasoning |
 | Runtime identity and capability | Requested account/model are known; no assumption about a new workshop's actual logon, free capacity or hard confinement is justified | Verify actual execution; no paid fallback or false isolation claim |
 | Live completion | Narrow target delivery evidence exists; a full 6-built, independently accepted and promoted product does not | Distinguish commissioning, acceptance and finalization; report unresolved evidence plainly |
 

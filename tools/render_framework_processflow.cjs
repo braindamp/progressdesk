@@ -67,13 +67,15 @@ async function main() {
   for (const rank of [
     ['Owner', 'UserStop'], ['Plan', 'StopAll'], ['Laya', 'Sharpener', 'Lessons'],
     ['Delivered', 'Schotty', 'Police'], ['Remaining', 'Split', 'Recheck', 'PoliceStop'],
-    ['QA', 'ApplySplit', 'Infra'], ['Passed', 'Replan', 'UserReason'],
-    ['Accepted', 'ApplyCorrection', 'Blocked'], ['More', 'Review'],
+    ['QA', 'SplitCheck', 'Infra'], ['Passed', 'ApplySplit', 'Replan', 'UserReason'],
+    ['Accepted', 'CorrectionCheck', 'Blocked'], ['More', 'ApplyCorrection', 'Review'],
   ]) dot.push(`{ rank=same; ${rank.filter(id => nodes.has(id)).join('; ')}; }`);
   for (const edge of edges) {
     if (!nodes.has(edge.from) || !nodes.has(edge.to)) throw new Error(`Unknown edge endpoint: ${quote(edge)}`);
     const main = isMain(edge.from, edge.to);
-    const returning = ['Owner', 'GO', 'Dispatch', 'Laya', 'Delivered'].includes(edge.to) && !main;
+    const returning = (['Owner', 'GO', 'Dispatch', 'Laya', 'Delivered'].includes(edge.to) && !main) ||
+      (edge.from === 'SplitCheck' && edge.to === 'Split') ||
+      (edge.from === 'CorrectionCheck' && edge.to === 'Replan');
     dot.push(`${edge.from} -> ${edge.to} [label=${quote(wrap(edge.label, 24))}, ` +
       `style=${edge.dashed ? 'dashed' : 'solid'}, weight=${main ? 20 : 1}, ` +
       `constraint=${returning || edge.dashed ? 'false' : 'true'}` +
