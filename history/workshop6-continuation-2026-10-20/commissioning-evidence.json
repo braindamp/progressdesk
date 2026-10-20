@@ -1,0 +1,257 @@
+{
+  "purpose": "Commissioning evidence; no delivered candidate or final product acceptance",
+  "sourceState": "Base 43205a9 plus uncommitted continuation changes at capture time; later integration edits are not live-verified by these receipts",
+  "operatorAccount": "codexlab",
+  "capacityResult": {
+    "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+    "result": {
+      "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+      "status": "blocked_capacity",
+      "selection": {
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "milestoneId": "status-cli",
+        "status": "ready",
+        "taskId": "format-status",
+        "taskRevision": 1
+      },
+      "completedSteps": [
+        {
+          "taskId": "format-status",
+          "result": {
+            "runId": "5d4ff8ec-e6aa-4644-99f7-0f34217f4948",
+            "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+            "status": "blocked_capacity",
+            "hasCandidate": false,
+            "candidateId": null,
+            "wallMs": 5619,
+            "nudges": 0,
+            "detail": "blocked_capacity: OpenCode's configured free provider refused capacity",
+            "milestoneGate": null
+          }
+        }
+      ]
+    },
+    "milestone": {
+      "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+      "milestoneId": "status-cli",
+      "state": "waiting_tasks",
+      "missingTaskIds": [
+        "format-status"
+      ],
+      "deliveredTaskIds": [],
+      "failureCount": 0,
+      "correctionLimit": 3,
+      "planRevision": 1,
+      "planDigest": "sha256:721a42eda512b2faf5cbb5bdc850d12f5c0423bc4c085c88970340a225782284",
+      "signoffPolicy": "automatic",
+      "receipts": {},
+      "jackSubmissions": []
+    },
+    "identity": {
+      "factorySource": "D:\\Coding\\progressDesk6-workshop\\src\\progressdesk",
+      "factoryRoot": "D:\\Coding\\progressDesk6-workshop",
+      "productRoot": "D:\\Coding\\progressDesk6-workshop\\scratch\\capacity-receipt",
+      "python": "C:\\Python313\\python.exe"
+    }
+  },
+  "ownerStopResults": {
+    "rate-limit-stop": {
+      "abortId": "b1984825-a8e6-4fc8-8a0c-8fcebd49fcc7",
+      "origin": "owner",
+      "terminationConfirmed": true,
+      "recoveryReady": false,
+      "storageError": null,
+      "swept": null
+    },
+    "glm-stop": {
+      "abortId": "10e1303e-c861-4af1-94d6-c7feefa7e195",
+      "origin": "owner",
+      "terminationConfirmed": true,
+      "recoveryReady": false,
+      "storageError": null,
+      "swept": null
+    }
+  },
+  "records": [
+    {
+      "event": {
+        "causeId": null,
+        "id": "2ee505ff-7fc7-4529-95ba-e9ae79d2427e",
+        "payloadRef": "sha256:675b0ecdd6ad200826cfc296783622ed00e144b936f89048c50917ee1ae15e3e",
+        "producer": "kernel",
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "runId": null,
+        "schemaVersion": 1,
+        "sequence": 11,
+        "taskRef": "format-status",
+        "timestamp": "2026-10-20T17:10:31Z",
+        "type": "dispatch.rejected"
+      },
+      "payload": {
+        "code": "go_missing",
+        "milestoneId": "status-cli",
+        "reason": "GO for the approved plan is not recorded",
+        "role": "DEXTER",
+        "schemaVersion": 1
+      }
+    },
+    {
+      "event": {
+        "causeId": null,
+        "id": "b69740b4-3397-4adf-b9f9-4573798cfc58",
+        "payloadRef": "sha256:12e1aefcc59163ba66b0e5da1800d695510d0bc5230e0a9fff7d7697ca62464e",
+        "producer": "manager",
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "runId": "ask-cleaning_laya-126ab80461",
+        "schemaVersion": 1,
+        "sequence": 17,
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:CLEANING_LAYA",
+        "timestamp": "2026-10-20T17:10:32Z",
+        "type": "usage.recorded"
+      },
+      "payload": {
+        "cachedTokens": null,
+        "cost": null,
+        "estimated": false,
+        "executor": "systemone",
+        "exit": null,
+        "inputTokens": 112,
+        "model": "english",
+        "outputTokens": 0,
+        "provider": "local",
+        "reasoningTokens": null,
+        "role": "CLEANING_LAYA",
+        "runId": "ask-cleaning_laya-126ab80461",
+        "schemaVersion": 1,
+        "sessionRef": null,
+        "status": "completed",
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:CLEANING_LAYA",
+        "totalTokens": null,
+        "usageAvailable": true,
+        "wallMs": 591
+      }
+    },
+    {
+      "event": {
+        "causeId": null,
+        "id": "05754c75-62fa-44c9-8593-a7ac246cf09d",
+        "payloadRef": "sha256:7241831a36182e5b54fc85ff8cb2771d7c07817f9d8484feb72c871d387d5787",
+        "producer": "manager",
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "runId": "5d4ff8ec-e6aa-4644-99f7-0f34217f4948",
+        "schemaVersion": 1,
+        "sequence": 31,
+        "taskRef": "format-status",
+        "timestamp": "2026-10-20T17:10:34Z",
+        "type": "round.dispatched"
+      },
+      "payload": {
+        "taskId": "format-status",
+        "milestoneId": "status-cli",
+        "slice": "Implement format_summary(project_id, status) returning exactly f'{project_id}: {status}'. The existing exit_code function belongs to the seed; leave it unchanged in this feature.",
+        "authorization": {
+          "policyRef": "sha256:0fa22835e068cb1613bb8fbca4e2182e3ae3a41899bd80502f63ec9f09cfc4e2",
+          "planRef": "sha256:9dee9ef84f0d45b6655e7d62e8f72ba95d99363408a07b26e629f23345cfd718",
+          "parentDefinitionRefs": {
+            "FUSP": "2d26328a-ceb7-42a7-9b77-9b2e694eb9b7@1",
+            "TESP": "7386a13d-fd3b-4b8a-8824-ed325da0a7bb@1",
+            "VISP": "0272ed43-8ff8-41fe-8db5-d2ae136f98c0@1"
+          },
+          "role": "DEXTER",
+          "milestoneId": "status-cli",
+          "declaredScope": {
+            "description": "Only status_cli.py. Implement format_summary; preserve exit_code in this feature.",
+            "tools": [
+              "glob",
+              "grep",
+              "read",
+              "write"
+            ]
+          },
+          "taskContractDigest": "sha256:37e33b801e1619ffe3c70fa4b1bbd1e47665245f63e3ba536e219b75eb5ff4f1"
+        }
+      }
+    },
+    {
+      "event": {
+        "causeId": null,
+        "id": "8d0431f9-0104-4149-b336-787c062cab15",
+        "payloadRef": "sha256:ab910ff978e09d878ab766764cc4acd068414800a1352adb998ed8f2d25931f5",
+        "producer": "broker",
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "runId": "5d4ff8ec-e6aa-4644-99f7-0f34217f4948",
+        "schemaVersion": 1,
+        "sequence": 33,
+        "taskRef": null,
+        "timestamp": "2026-10-20T17:10:34Z",
+        "type": "process.registered"
+      },
+      "payload": {
+        "jobName": "Local\\ProgressDesk-4e248d04-a4b9-5f1b-bed9-787cc865f705-5d4ff8ec-e6aa-4644-99f7-0f34217f4948-08e6c81a144941c6a860d12b02a5d2ed",
+        "processCreationTime": 134369898344856087,
+        "processId": 43784,
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "role": "DEXTER",
+        "runId": "5d4ff8ec-e6aa-4644-99f7-0f34217f4948"
+      }
+    },
+    {
+      "event": {
+        "causeId": null,
+        "id": "2641853b-93ce-42a5-93a4-5191592cdc64",
+        "payloadRef": "sha256:cf70f686ecb8621c36a86f6fe03dc42fb86c4754a40f8c54b7098668aaaf9372",
+        "producer": "manager",
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "runId": "5d4ff8ec-e6aa-4644-99f7-0f34217f4948",
+        "schemaVersion": 1,
+        "sequence": 35,
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:format-status",
+        "timestamp": "2026-10-20T17:10:40Z",
+        "type": "usage.recorded"
+      },
+      "payload": {
+        "cachedTokens": null,
+        "cost": null,
+        "estimated": false,
+        "executor": "opencode",
+        "exit": 1,
+        "inputTokens": null,
+        "model": "deepseek-v4.1-flash-free",
+        "outputTokens": null,
+        "provider": "opencode",
+        "reasoningTokens": null,
+        "role": "DEXTER",
+        "runId": "5d4ff8ec-e6aa-4644-99f7-0f34217f4948",
+        "schemaVersion": 1,
+        "sessionRef": null,
+        "status": "infra-fault",
+        "taskRef": "4e248d04-a4b9-5f1b-bed9-787cc865f705:format-status",
+        "totalTokens": null,
+        "usageAvailable": false,
+        "wallMs": 5619
+      }
+    },
+    {
+      "event": {
+        "causeId": null,
+        "id": "508533ee-3b6a-46d0-8106-6fcaf1d863cc",
+        "payloadRef": "sha256:24f24b8d8035a307d1c2eec2de9506985c03e9767da54bb5f2322f8f797e91ec",
+        "producer": "manager",
+        "projectId": "4e248d04-a4b9-5f1b-bed9-787cc865f705",
+        "runId": "5d4ff8ec-e6aa-4644-99f7-0f34217f4948",
+        "schemaVersion": 1,
+        "sequence": 36,
+        "taskRef": "format-status",
+        "timestamp": "2026-10-20T17:10:40Z",
+        "type": "round.closed"
+      },
+      "payload": {
+        "taskId": "format-status",
+        "milestoneId": "status-cli",
+        "outcome": "killed",
+        "candidateHash": null,
+        "files": {}
+      }
+    }
+  ]
+}

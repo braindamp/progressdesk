@@ -438,6 +438,17 @@ class Clearance:
     def restartable(self) -> bool:
         return self.decision == "restartable"
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "projectId": self.project_id,
+            "strength": self.strength,
+            "decision": self.decision,
+            "restartable": self.restartable,
+            "rationale": self.rationale,
+            "probability": self.probability,
+            "sweep": self.report.to_dict() if self.report is not None else None,
+        }
+
 
 def describe(report: SweepReport) -> str:
     """Prose, because JSON measured near-flat and prose separated.
@@ -508,8 +519,11 @@ class Cleaner:
             try:
                 decision = self._decide(project_id, describe(report))
                 probability = decision.probability
-                verdict = "needs SCHOTTY" if decision.above else "restartable"
-                rationale = decision.detail
+                if getattr(decision, "truncated", False):
+                    verdict, rationale = "no verdict", "local LAYA truncated the room packet"
+                else:
+                    verdict = "needs SCHOTTY" if decision.above else "restartable"
+                    rationale = decision.detail
             except Exception as exc:  # noqa: BLE001 - an unasked room is not a clean room
                 verdict, rationale = "no verdict", f"not decided: {exc}"
         clearance = Clearance(project_id, strength, verdict, rationale, report, probability)

@@ -8,14 +8,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from dataclasses import replace
 
-from . import paths
+from . import acceptance, paths
 from .workspace import ProjectWorkspace, WorkspaceError
 from .milestones import (
     IntegrationResult, MilestoneError, MilestoneService, MilestoneSpec,
@@ -158,8 +157,13 @@ class MilestoneFlow:
         candidates: dict[str, dict[str, Any]] = {}
         reports: set[str] = set()
         receipts: dict[str, dict[str, Any]] = {}
+        dispatches: dict[str, dict[str, Any]] = {}
+        from .feature_list import FeatureList
+        features = FeatureList(self.rt)
         for event, payload in rows:
-            if event.type == "candidate.submitted" and event.runId:
+            if event.type == "round.dispatched" and event.runId:
+                dispatches[event.runId] = payload
+            elif event.type == "candidate.submitted" and event.runId:
                 candidates[event.runId] = payload
             elif event.type == "builder.reported" and event.runId:
                 if payload.get("kind") == "success" and payload.get("terminal") is True:
@@ -169,6 +173,11 @@ class MilestoneFlow:
                 if task_id not in spec.required_task_ids or payload.get("milestoneId") != milestone_id:
                     continue
                 candidate = candidates.get(event.runId)
+                dispatched = dispatches.get(event.runId, {})
+                authorization = dispatched.get("authorization", {})
+                current_contract = features.task(project_id, task_id, milestone_id)
+                if authorization.get("taskContractDigest") != FeatureList._digest(current_contract):
+                    continue
                 if payload.get("outcome") != "success" or not candidate or event.runId not in reports:
                     continue
                 files = candidate.get("files")
@@ -194,18 +203,40 @@ class MilestoneFlow:
         failures = [(e, p) for e, p in gates if e.type == "milestone.integration-completed"
                     and p.get("status") == "failed"]
         last_failure = failures[-1][0].sequence if failures else 0
+        corrections = [p for e, p in gates if e.type == "jack.submission"
+                       and p.get("operation") == "milestone_correction"
+                       and p.get("status") == "applied"]
         fresh = any(r["closedSequence"] > last_failure for r in receipts.values())
         pending = next(((e, p) for e, p in reversed(gates) if e.type == "milestone.signoff-pending"), None)
         since_pending = any(e.type == "milestone.integration-started" and e.sequence > pending[0].sequence
                             for e, p in gates) if pending else False
         state = ("accepted" if accepted else "pending_signoff" if pending and not since_pending else
-                 "waiting_tasks" if missing else "correction_exhausted" if len(failures) >= spec.correction_limit else
+                 "waiting_tasks" if missing else
+                 "correction_exhausted" if failures and not fresh and len(corrections) >= spec.correction_limit else
                  "awaiting_correction" if failures and not fresh else "ready")
+        from .feature_list import FeatureList
+        plan_revision, plan_digest = FeatureList(self.rt).revision(project_id, milestone_id)
+        submissions = []
+        for event, payload in rows:
+            if event.type != "jack.submission" or payload.get("milestoneId") != milestone_id:
+                continue
+            submissions.append({
+                "sequence": event.sequence,
+                "operation": payload.get("operation"),
+                "invocationId": payload.get("invocationId"),
+                "attempt": payload.get("attempt"),
+                "status": payload.get("status"),
+                "reason": payload.get("reason"),
+                "planRevision": payload.get("planRevision"),
+                "planDigest": payload.get("planDigest"),
+            })
         return {"projectId": project_id, "milestoneId": milestone_id, "state": state,
                 "missingTaskIds": missing, "deliveredTaskIds": list(receipts),
-                "failureCount": len(failures), "correctionLimit": spec.correction_limit,
+                "failureCount": len(failures), "correctionCount": len(corrections),
+                "correctionLimit": spec.correction_limit,
+                "planRevision": plan_revision, "planDigest": plan_digest,
                 "signoffPolicy": spec.signoff_policy,
-                "receipts": receipts}
+                "receipts": receipts, "jackSubmissions": submissions}
 
     def _assemble(self, project_id: str, spec: MilestoneSpec,
                   receipts: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], Path]:
@@ -225,6 +256,7 @@ class MilestoneFlow:
                     "requiredTaskIds": list(spec.required_task_ids),
                     "receipts": [receipts[t] for t in spec.required_task_ids],
                     "files": dict(sorted(files.items())),
+                    "contract": spec.to_dict(),
                     "evaluatorRefs": list(spec.integration_evaluator_refs),
                     "inputRefs": list(spec.integration_inputs),
                     "acceptanceConditions": list(spec.acceptance_conditions)}
@@ -237,57 +269,9 @@ class MilestoneFlow:
         (directory / "MILESTONE-MANIFEST.json").write_bytes(_canonical(manifest))
         return manifest, directory
 
-    def _dee_dee(self, project_id: str, spec: MilestoneSpec, manifest: dict[str, Any], directory: Path) -> IntegrationResult:
-        """Independent QA model through the existing broker-owned PI transport."""
-        frozen = _canonical(manifest).decode("utf-8")
-        input_docs = []
-        for ref in (*spec.integration_evaluator_refs, *spec.integration_inputs):
-            data = self.rt.artifacts.get_bytes(ref[7:])
-            try:
-                text = data.decode("utf-8")
-            except UnicodeDecodeError:
-                text = "(binary input: use the immutable SHA-256 reference and assembled files)"
-            input_docs.append(f"{ref}:\n{text[:24000]}")
-        context = (
-            "MILESTONE ACCEPTANCE ONLY. You are independent DEE_DEE. The build is frozen; "
-            "run ONLY the evaluator(s) declared in the contract, not invented per-feature checks.\n"
-            f"Assembled files directory: {directory}\n"
-            f"Design-time evaluator/input documents:\n{'\n\n'.join(input_docs)}\n"
-            f"Frozen manifest:\n{frozen}\n"
-            "Reply with ONE JSON object exactly: "
-            '{"passed":true|false,"findings":["grounded observation",...]} . '
-            "If a required evaluator cannot be executed, say EVALUATOR_UNAVAILABLE, "
-            "not pass or fail. Do not modify any supplied files."
-        )
-        try:
-            envelope = self.rt._dispatch(
-                project_id, "DEE_DEE", state=context, expecting="prose",
-                brief_budget=24000, state_budget=max(16000, len(context.encode("utf-8")) + 1024),
-                wall_seconds=900, tools=("read", "bash", "glob", "grep"),
-            )
-        except Exception as exc:
-            raise EvaluatorInfrastructureError(f"QA adapter unavailable: {exc}") from exc
-        if envelope.status != "completed" or envelope.exit_code not in (0, None):
-            raise EvaluatorInfrastructureError(f"QA transport did not complete: {envelope.status} {envelope.detail}")
-        raw = envelope.output.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        try:
-            result = json.loads(raw)
-        except (ValueError, TypeError) as exc:
-            raise EvaluatorInfrastructureError("QA produced no typed JSON verdict") from exc
-        if not isinstance(result, dict) or type(result.get("passed")) is not bool or not isinstance(result.get("findings"), list):
-            raise EvaluatorInfrastructureError("QA verdict lacks required pass/fail and findings fields")
-        if not result["findings"] or any(not isinstance(f, str) or not f.strip() for f in result["findings"]):
-            raise EvaluatorInfrastructureError("QA must provide at least one concrete finding")
-        evidence = "sha256:" + self.rt.artifacts.put(_canonical({
-            "qaRole": "DEE_DEE", "runId": envelope.run_id,
-            "milestoneId": spec.milestone_id, "output": envelope.output,
-            "status": envelope.status, "model": self.rt.harness.for_role("DEE_DEE") if self.rt.harness else None,
-        }))
-        return IntegrationResult(result["passed"], (evidence,), tuple(result["findings"]))
-
     def evaluate(self, project_id: str, milestone_id: str) -> dict[str, Any]:
+        from .kernel import Kernel
+        Kernel(self.rt).authorize(project_id, "DEE_DEE", milestone_id=milestone_id)
         spec = self.contract(project_id, milestone_id)
         snapshot = self.status(project_id, milestone_id)
         if snapshot["state"] != "ready":
@@ -315,33 +299,53 @@ class MilestoneFlow:
         receipts = snapshot["receipts"]
         manifest, directory = self._assemble(project_id, spec, receipts)
         manifest_ref = "sha256:" + self.rt.artifacts.put(_canonical(manifest))
+        contract_digest = hashlib.sha256(_canonical(spec.to_dict())).hexdigest()
         product_digest = hashlib.sha256(_canonical(manifest["files"])).hexdigest()
+        verdict_attempts = {p.get("attemptId") for e, p in rows
+                            if e.type == "milestone.integration-completed"
+                            and p.get("milestoneId") == milestone_id
+                            and p.get("status") in {"passed", "failed"}}
         previous_inputs = [p.get("productDigest") for e, p in rows
-                           if e.type == "milestone.integration-started" and p.get("milestoneId") == milestone_id]
+                           if e.type == "milestone.integration-started"
+                           and p.get("milestoneId") == milestone_id
+                           and p.get("attemptId") in verdict_attempts]
         if previous_inputs and previous_inputs[-1] == product_digest:
             return {"projectId": project_id, "milestoneId": milestone_id,
                     "evaluated": False, "status": "awaiting_changed_deliverable",
                     "reason": "same assembled bytes as the previous gate attempt"}
         captured = dict(manifest["files"])
+        attempt_id = uuid.uuid4().hex
+        scratch_root = (paths.projects(self.rt.root) / project_id / "milestones" /
+                        spec.milestone_id / "evaluator-runs")
 
-        def evaluator(contract: MilestoneSpec, inputs: Any) -> IntegrationResult:
-            if self._evaluate is not None:
-                result = self._evaluate(contract, inputs)
-            else:
-                result = self._dee_dee(project_id, contract, manifest, directory)
-            if not result.evidence_refs:
-                raise EvaluatorInfrastructureError("QA produced no actual evaluator evidence")
-            # The QA contract is independent; it may run real milestone checks
-            # but it may not change the deliverable it is grading.
+        def verify_frozen() -> None:
+            # The contract is independent; it may run real milestone checks but
+            # it may not change the deliverable it is grading.
+            if any(path.is_symlink() for path in directory.rglob("*")):
+                raise EvaluatorInfrastructureError("QA introduced a symlink into the frozen assembly")
             for name, expected in captured.items():
                 path = directory.joinpath(*_relative_path(name).parts)
                 if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected[7:]:
                     raise EvaluatorInfrastructureError("QA modified the frozen milestone deliverable")
-            actually_present = {p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_file()}
-            if actually_present != set(captured) | {"MILESTONE-MANIFEST.json"}:
+            present = {path.relative_to(directory).as_posix()
+                       for path in directory.rglob("*") if path.is_file()}
+            if present != set(captured) | {"MILESTONE-MANIFEST.json"}:
                 raise EvaluatorInfrastructureError("QA added or removed files in the frozen assembly")
             if (directory / "MILESTONE-MANIFEST.json").read_bytes() != _canonical(manifest):
                 raise EvaluatorInfrastructureError("QA altered the milestone manifest")
+
+        def evaluator(contract: MilestoneSpec, inputs: Any) -> IntegrationResult:
+            verify_frozen()
+            if self._evaluate is not None:
+                result = self._evaluate(contract, inputs)
+            else:
+                result = acceptance.evaluate(
+                    self.rt, project_id, contract, manifest, directory,
+                    gate_attempt_id=attempt_id, scratch_root=scratch_root,
+                )
+            if not result.evidence_refs:
+                raise EvaluatorInfrastructureError("QA produced no actual evaluator evidence")
+            verify_frozen()
             return IntegrationResult(result.passed, tuple(dict.fromkeys((manifest_ref, *result.evidence_refs))), result.findings).validate()
 
         service = MilestoneService(self.rt.log, self.rt.artifacts,
@@ -349,8 +353,10 @@ class MilestoneFlow:
                                    evaluator=evaluator)
         outcome = service.run(project_id, spec, {"manifestRef": manifest_ref,
                                                  "productDigest": product_digest,
+                                                 "contractDigest": contract_digest,
                                                  "assemblyDirectory": str(directory),
-                                                 "manifest": manifest})
+                                                 "manifest": manifest},
+                              attempt_id=attempt_id)
         if outcome.status == "failed":
             current = self.status(project_id, milestone_id)
             if current["state"] == "correction_exhausted":
@@ -364,7 +370,7 @@ class MilestoneFlow:
         return {"projectId": project_id, "milestoneId": milestone_id,
                 "evaluated": True, "status": outcome.status,
                 "reason": outcome.reason, "evidenceRefs": list(outcome.evidence_refs),
-                "assemblyManifestRef": manifest_ref}
+                "assemblyManifestRef": manifest_ref, "gateAttemptId": attempt_id}
 
     def maybe_evaluate(self, project_id: str, milestone_id: str) -> dict[str, Any]:
         try:

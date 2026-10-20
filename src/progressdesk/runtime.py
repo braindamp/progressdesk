@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import sys
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -200,8 +201,10 @@ class Runtime:
         )
         runtime.cleaner = Cleaner(sweep, runtime.decide_in_room)
         runtime.ask = runtime.ask_role
-        from .feature_list import FeatureList
-        runtime.split_task = FeatureList(runtime).apply
+        from .jack import run_split
+        runtime.split_task = lambda project_id, milestone_id, task_id, failure: run_split(
+            runtime, project_id, milestone_id, task_id, failure
+        )
         return runtime
 
     # -- the spawn seam ---------------------------------------------------
@@ -217,8 +220,19 @@ class Runtime:
                 def prepare(req: SpawnRequest) -> Path:
                     if req.role == "DEXTER":
                         from .workspace import ProjectWorkspace
-
-                        return ProjectWorkspace(self).prepare_round(project_id, req.run_id)
+                        from .feature_list import FeatureList
+                        directory = ProjectWorkspace(self).prepare_round(project_id, req.run_id)
+                        dispatched = next(event for event in reversed(self.log.read_all())
+                                          if event.type == "round.dispatched" and event.runId == req.run_id
+                                          and event.projectId == project_id)
+                        binding = json.loads(self.artifacts.get_bytes(dispatched.payloadRef.split(":", 1)[1]))
+                        task = FeatureList(self).task(project_id, binding["taskId"], binding["milestoneId"])
+                        for index, ref in enumerate(task.get("inputArtifactRefs", [])):
+                            target = directory / ".progressdesk-inputs" / f"{index}-{ref[7:]}.artifact"
+                            target.parent.mkdir(exist_ok=True)
+                            if not target.exists():
+                                target.write_bytes(self.artifacts.get_bytes(ref[7:]))
+                        return directory
                     directory = paths.projects(self.root) / project_id / "rounds" / req.run_id
                     directory.mkdir(parents=True, exist_ok=True)
                     return directory
@@ -256,7 +270,12 @@ class Runtime:
                 # verdict is asked for, which the caller needs to see; it is not
                 # a missing adapter to be shielded from.
                 registry.register(SystemOneExecutor())
-                spawner = Spawner(registry, project_id=project_id)
+                spawner = Spawner(
+                    registry, project_id=project_id,
+                    on_result=lambda request, envelope: self._record_usage(
+                        project_id, request.role, request, envelope,
+                    ),
+                )
                 self._spawners[project_id] = spawner
             missing = [kind for kind in require if kind not in spawner.registry.kinds()]
             if missing:
@@ -298,9 +317,16 @@ class Runtime:
         state_budget: int = 8_000,
         wall_seconds: int = 180,
         question: str | None = None,
+        run_id: str | None = None,
+        input_files: Mapping[str, str] | None = None,
+        evidence_files: Mapping[str, str] | None = None,
     ) -> Any:
         """Put one role's context in front
     """
+        if run_id is None:
+            run_id = f"ask-{role.lower()}-{uuid.uuid4().hex[:10]}"
+        from .kernel import Kernel
+        Kernel(self).authorize(project_id, role, tools=tools, run_id=run_id)
         requested_project = project_id
         if role == "SHARPENER":
             project_id = SHARPENER_PROJECT
@@ -325,11 +351,26 @@ class Runtime:
         if cast:
             sections.append(ContextSection("the other roles", _cast_briefs(role), 40_000))
         sections.append(ContextSection("what you are looking at", state, state_budget))
-        run_id = f"ask-{role.lower()}-{uuid.uuid4().hex[:10]}"
+        if run_id is None:
+            run_id = f"ask-{role.lower()}-{uuid.uuid4().hex[:10]}"
+        elif any(character in run_id for character in "/\\:\x00") or not run_id:
+            raise ValueError("run_id must be a plain directory identity")
         if role == "SHARPENER":
             inbox = paths.projects(self.root) / project_id / "rounds" / run_id / "report"
             inbox.mkdir(parents=True, exist_ok=True)
             sections.append(ContextSection("host action inbox", str(inbox), 2_048))
+        input_directory = None
+        staged_inputs = {**{f"product/{name}": ref for name, ref in (input_files or {}).items()},
+                         **{f"evidence/{name}": ref for name, ref in (evidence_files or {}).items()}}
+        if staged_inputs:
+            from .workspace import ProjectWorkspace
+            input_directory = paths.projects(self.root) / project_id / "rounds" / run_id / "inputs"
+            ProjectWorkspace(self).materialize(staged_inputs, input_directory)
+            sections.append(ContextSection(
+                "declared frozen input copy",
+                f"The exact product snapshot is in {input_directory / 'product'}. Declared inputs and recorded evaluator evidence are in {input_directory / 'evidence'}. These are read-only role inputs; do not edit them. Use these copies instead of original paths outside this working directory.",
+                2_048,
+            ))
         request = SpawnRequest(
             run_id=run_id,
             task_ref=f"{project_id}:{role}",
@@ -341,10 +382,22 @@ class Runtime:
             # The adapter's own declaration is what is recorded; asking for
             # anything else is refused rather than quietly downgraded.
             sandbox=adapter.sandbox,
-            question=question or READS_AS_PROBLEM,
+            # A prose role receives its task; only a distribution adapter needs
+            # the typed calibration question. A generic prose instruction is not
+            # a decision question and must not be sent in its place.
+            question=question if question is not None else (
+                "" if expecting == "prose" else READS_AS_PROBLEM
+            ),
         )
         if role != "SHARPENER":
-            return self.spawner_for(project_id).spawn(request, kind=definition.transport)
+            envelope = self.spawner_for(project_id).spawn(request, kind=definition.transport)
+            if input_directory is not None:
+                import hashlib
+                actual = {path.relative_to(input_directory).as_posix(): "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                          for path in input_directory.rglob("*") if path.is_file()}
+                if actual != staged_inputs:
+                    raise SpawnError("input_modified", f"{role} changed its frozen role input")
+            return envelope
         stop = threading.Event()
         def receive() -> None:
             while not stop.wait(0.5):
@@ -352,11 +405,59 @@ class Runtime:
         watcher = threading.Thread(target=receive, name="sharpener-actions", daemon=True)
         watcher.start()
         try:
-            return self.spawner_for(project_id).spawn(request, kind=definition.transport)
+            envelope = self.spawner_for(project_id).spawn(request, kind=definition.transport)
+            return envelope
         finally:
             stop.set()
             watcher.join()
             self.drain_sharpener_reports(force=True)
+
+    def _record_usage(
+        self,
+        project_id: str,
+        role: str,
+        request: Any,
+        envelope: Any,
+        definition: Any = None,
+    ) -> None:
+        """F-E5 attribution for each adapter execution, including every nudge.
+
+        A transport that cannot report usage leaves token fields null. Converting
+        that unknown into zero would make an unmeasured run look free.
+        """
+        usage = envelope.usage if isinstance(envelope.usage, dict) else {}
+        model = str(usage.get("model") or request.model_spec.model)
+        if envelope.kind == "systemone":
+            model = str(envelope.watch.get("model") or model)
+        payload = {
+            "schemaVersion": 1,
+            "runId": request.run_id,
+            "taskRef": request.task_ref,
+            "role": role,
+            "executor": envelope.kind,
+            "model": model,
+            "provider": request.model_spec.provider,
+            "inputTokens": usage.get("inputTokens"),
+            "outputTokens": usage.get("outputTokens"),
+            "cachedTokens": usage.get("cachedTokens"),
+            "reasoningTokens": usage.get("reasoningTokens"),
+            "totalTokens": usage.get("totalTokens"),
+            "cost": usage.get("cost"),
+            "estimated": bool(usage.get("estimated", envelope.kind == "manual")),
+            "usageAvailable": bool(usage),
+            "wallMs": envelope.wall_ms,
+            "exit": envelope.exit_code,
+            "sessionRef": envelope.session_ref,
+            "status": envelope.status,
+        }
+        self.log.record(
+            "usage.recorded",
+            producer="manager",
+            project_id=project_id,
+            run_id=request.run_id,
+            task_ref=request.task_ref,
+            payload=json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+        )
 
     def ask_role(
         self,
@@ -366,14 +467,20 @@ class Runtime:
         *,
         cast: bool = False,
         tools: tuple[str, ...] = (),
+        run_id: str | None = None,
     ) -> str:
-        """Ask a role that answers in words
-    """
+        """Ask a role that answers in words.
+
+        A caller may supply the session identity to continue one bounded
+        invocation across revisions. A new invocation supplies nothing and gets
+        a fresh session.
+        """
         if role == "SHARPENER":
             cast = True
             tools = tools or ("read", "write", "glob", "grep")
         return self._dispatch(
-            project_id, role, state=context, expecting="prose", cast=cast, tools=tools
+            project_id, role, state=context, expecting="prose", cast=cast, tools=tools,
+            run_id=run_id,
         ).output or ""
 
     def decide_in_room(self, project_id: str, state: str) -> Decision:
@@ -700,6 +807,9 @@ class Runtime:
             probability=float(envelope.watch["probability"]),
             threshold=float(envelope.watch.get("threshold", 0.5)),
             detail=str(envelope.watch.get("detail") or envelope.output),
+            question=str(envelope.watch.get("question") or question),
+            model=str(envelope.watch.get("model") or ""),
+            usage=dict(envelope.watch.get("usage") or {}),
         )
 
     # -- the one door ----------------------------------------------------
@@ -707,6 +817,9 @@ class Runtime:
         handler = _VERBS.get(cmd.verb)
         if handler is None:
             raise CommandError("unknown_verb", f"no such verb: {cmd.verb}")
+        # STOP must remain callable while project.run is waiting for a model.
+        if cmd.verb == "project.abort" and cmd.get("origin") == "owner":
+            return handler(self, cmd)
         with self._write_lock:
             return handler(self, cmd)
 
@@ -772,14 +885,31 @@ def _project_plan(rt: Runtime, cmd: Command) -> Any:
 
 
 def _project_start(rt: Runtime, cmd: Command) -> Any:
-    return rt.operations.project_start(
-        str(cmd.require("project_id")),
-        request_id=str(cmd.require("request_id")),
-    )
+    project_id = str(cmd.require("project_id"))
+    result = rt.operations.project_start(project_id, request_id=str(cmd.require("request_id")))
+    clearance = None
+    if rt.cleaner is not None:
+        clearance = rt.cleaner.run(project_id, strength="light")
+    return {**result, "room": clearance.to_dict() if clearance is not None else None}
 
 
 def _project_status(rt: Runtime, cmd: Command) -> Any:
     return rt.operations.project_status(str(cmd.require("project_id")))
+
+
+def _desk_identity(rt: Runtime, cmd: Command) -> Any:
+    """Name the running factory package and product root explicitly.
+
+    A `--root` argument alone does not establish which `progressdesk` package is
+    loaded; this operation reports the source that actually answered.
+    """
+    package = Path(__file__).resolve().parent
+    return {
+        "factorySource": str(package),
+        "factoryRoot": str(package.parent.parent),
+        "productRoot": str(rt.root),
+        "python": sys.executable,
+    }
 
 
 def _preflight(
@@ -888,6 +1018,17 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         limits=dict(declared.get("limits") or {}),
     )
     from .feature_list import TaskScheduler
+    from .kernel import Kernel, KernelRejection
+    try:
+        authorization = Kernel(rt).authorize(
+            project_id, "DEXTER", milestone_id=milestone_id,
+            packet=packet, tools=tools,
+        )
+    except KernelRejection as exc:
+        return {"projectId": project_id, "taskId": task_id,
+                "milestoneId": milestone_id,
+                "status": "blocked_capacity" if exc.code == "blocked_capacity" else "rejected",
+                "hasCandidate": False, "error": exc.code, "detail": str(exc)}
     eligibility = TaskScheduler(rt).dispatch_allowed(project_id, milestone_id, task_id)
     if eligibility is not None:
         return {"projectId": project_id, "taskId": task_id, "milestoneId": milestone_id,
@@ -899,6 +1040,13 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         packet=packet,
         task_id=task_id,
         tools=tools,
+        authorization=authorization,
+        budget=Budget(
+            wall_seconds=int(packet.limits.get("wallTimeSeconds", 900)),
+            max_output_tokens=int(packet.limits.get("outputTokens", 32_000)),
+            max_actions=int(packet.limits.get("maxActions", 30)),
+            max_turns=int(packet.limits.get("maxTurns", 40)),
+        ),
     )
     # The normal path may trigger QA only after a delivered last feature.
     # The flow checks every declared required task and sees no candidate as
@@ -910,7 +1058,7 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
     return {
         "runId": outcome.run_id,
         "projectId": outcome.project_id,
-        "status": outcome.status,
+        "status": "blocked_capacity" if outcome.detail.startswith("blocked_capacity:") else outcome.status,
         "hasCandidate": outcome.has_candidate,
         "candidateId": outcome.candidate_id,
         "wallMs": outcome.wall_ms,
@@ -968,6 +1116,49 @@ def _milestone_evaluate(rt: Runtime, cmd: Command) -> Any:
                                       str(cmd.require("milestone_id")))
 
 
+def _milestone_correct(rt: Runtime, cmd: Command) -> Any:
+    """Owner-invoked fresh JACK correction, independent of the automatic path."""
+    from .jack import run_correction
+    if cmd.get("transport", "cli") != "cli":
+        raise CommandError("owner_only", "milestone.correct requires owner CLI access")
+    problem = cmd.get("problem")
+    if problem is not None and (not isinstance(problem, str) or not problem.strip()):
+        raise CommandError("bad_problem", "problem must be a non-empty string")
+    return run_correction(
+        rt,
+        str(cmd.require("project_id")),
+        str(cmd.require("milestone_id")),
+        problem=problem,
+    )
+
+
+def _jack_submit(rt: Runtime, cmd: Command, operation: str) -> Any:
+    """Gateway form of JACK's host submission operations.
+
+    The JACK model does not hold this gateway. The host invokes it after a
+    proposal; the CLI form is an owner/operator channel and never a claim of
+    model authority.
+    """
+    from .jack import JackGateway
+    if cmd.get("transport", "cli") != "cli":
+        raise CommandError("owner_only", f"{operation} requires owner CLI access")
+    request = cmd.get("request")
+    if not isinstance(request, dict):
+        raise CommandError("bad_request", "request must be a JSON object")
+    gateway = JackGateway(rt)
+    if operation == "jack.split.submit":
+        return gateway.submit_split(request)
+    return gateway.submit_correction(request)
+
+
+def _jack_split_submit(rt: Runtime, cmd: Command) -> Any:
+    return _jack_submit(rt, cmd, "jack.split.submit")
+
+
+def _jack_correction_submit(rt: Runtime, cmd: Command) -> Any:
+    return _jack_submit(rt, cmd, "jack.correction.submit")
+
+
 def _milestone_signoff(rt: Runtime, cmd: Command) -> Any:
     """Explicit owner confirmation of the *displayed* evidence digest.
 
@@ -1022,21 +1213,31 @@ def _project_abort(rt: Runtime, cmd: Command) -> Any:
     else:
         # The owner's call is unconditional and needs no signoff, model or
         # POLICE. Classification is optional here per F-P2.
-        classification = cmd.get("classification", FailureClassification.INFRA)
-    result = rt.police.abort(
-        project_id=cmd.require("project_id"),
-        classification=classification,
-        reason=str(cmd.get("reason", f"{origin} stop")),
-        source=origin,
-    )
-    swept = rt.sweep.after_slice(project_id) if rt.sweep is not None else None
+        classification = FailureClassification.INFRA
+    project_id = str(cmd.require("project_id"))
+    ownership_error = None
+    try:
+        held = rt.broker.runs.active_all() if project_id == WORKSHOP else rt.broker.runs.active(project_id)
+        if not held:
+            rt.broker.restore_registered(project_id)
+    except Exception as exc:
+        # Still terminate every locally held job, even if cold restoration fails.
+        ownership_error = str(exc)
+    if project_id == WORKSHOP:
+        result = rt.police.stop_workshop(str(cmd.get("reason", f"{origin} stop")), source=origin)
+    else:
+        result = rt.police.abort(
+            project_id=project_id, classification=classification,
+            reason=str(cmd.get("reason", f"{origin} stop")), source=origin,
+        )
     return {
         "abortId": result.abort_id,
         "origin": origin,
-        "terminationConfirmed": result.termination_confirmed,
+        "terminationConfirmed": result.termination_confirmed and ownership_error is None,
+        "ownershipError": ownership_error,
         "recoveryReady": result.recovery_ready,
         "storageError": result.storage_error,
-        "swept": None if swept is None else swept.to_dict(),
+        "swept": None,
     }
 
 
@@ -1165,6 +1366,14 @@ def _project_run(rt: Runtime, cmd: Command) -> Any:
     outcomes: list[dict[str, Any]] = []
     while True:
         selection = TaskScheduler(rt).next(project_id)
+        if selection["status"] == "awaiting_correction":
+            from .jack import run_correction
+            correction = run_correction(rt, project_id, selection["milestoneId"])
+            outcomes.append({"milestoneId": selection["milestoneId"], "correction": correction})
+            if correction.get("status") == "corrected":
+                continue
+            return {"projectId": project_id, "status": correction.get("status", "correction_blocked"),
+                    "completedSteps": outcomes}
         if selection["status"] == "milestone_ready_for_qa":
             try:
                 result = _milestone_evaluate(rt, Command("milestone.evaluate", {
@@ -1173,6 +1382,8 @@ def _project_run(rt: Runtime, cmd: Command) -> Any:
                 return {"projectId": project_id, "status": "qa_blocked",
                         "reason": str(exc), "completedSteps": outcomes}
             outcomes.append({"milestoneId": selection["milestoneId"], "gate": result})
+            if result.get("status") == "failed":
+                continue  # the scheduler now selects bounded corrective planning
             if result.get("status") != "accepted":
                 return {"projectId": project_id, "status": result.get("status", "qa_stopped"),
                         "completedSteps": outcomes}
@@ -1198,6 +1409,18 @@ def _project_run(rt: Runtime, cmd: Command) -> Any:
         gate = result.get("milestoneGate")
         if gate is not None:
             gate_state = gate.get("status", gate.get("state", "gate_stopped"))
+            if gate_state == "failed":
+                from .jack import run_correction
+                correction = run_correction(
+                    rt, project_id, selection["milestoneId"],
+                )
+                outcomes.append({"milestoneId": selection["milestoneId"],
+                                 "correction": correction})
+                if correction.get("status") == "corrected":
+                    continue
+                return {"projectId": project_id,
+                        "status": correction.get("status", "correction_blocked"),
+                        "completedSteps": outcomes}
             if gate_state not in {"accepted", "waiting_tasks"}:
                 return {"projectId": project_id, "status": gate_state,
                         "completedSteps": outcomes}
@@ -1222,6 +1445,7 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "project.plan": _project_plan,
     "project.start": _project_start,
     "project.status": _project_status,
+    "desk.identity": _desk_identity,
     "round.dispatch": _round_dispatch,
     "project.features.init": _features_init,
     "project.features.show": _features_show,
@@ -1236,7 +1460,10 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "milestone.status": _milestone_status,
     "milestone.contract.bind": _milestone_contract_bind,
     "milestone.evaluate": _milestone_evaluate,
+    "milestone.correct": _milestone_correct,
     "milestone.signoff": _milestone_signoff,
+    "jack.split.submit": _jack_split_submit,
+    "jack.correction.submit": _jack_correction_submit,
     "project.abort": _project_abort,
     "project.events": _project_events,
 }
@@ -1334,10 +1561,14 @@ def serve_http(runtime: Runtime) -> None:  # pragma: no cover - presentation
 
             parsed = urlparse(self.path)
             verb = parsed.path.strip("/")
-            if verb in {"milestone.signoff", "milestone.contract.bind", "project.workspace.seed", "project.features.init", "visp.dismiss"}:
+            if verb in {"definition.signoff", "project.start", "project.abort", "project.plan",
+                        "milestone.signoff", "milestone.contract.bind", "milestone.correct",
+                        "jack.split.submit", "jack.correction.submit",
+                        "project.workspace.seed", "project.features.init", "visp.dismiss"}:
                 self._reply({"error": "owner_only", "message": "owner operation requires the local CLI"}, 403)
                 return
             params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            params["transport"] = "http"
             try:
                 self._reply(route(runtime, verb, params))
             except (CommandError, *DOMAIN_FAILURES) as exc:
@@ -1348,7 +1579,7 @@ def serve_http(runtime: Runtime) -> None:  # pragma: no cover - presentation
         def log_message(self, *_: Any) -> None:
             pass
 
-    http.server.HTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
+    http.server.ThreadingHTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
 
 
 # --------------------------------------------------------------------------

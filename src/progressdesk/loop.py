@@ -269,7 +269,7 @@ class RoundDispatcher:
         reports_for: Callable[[str], list] | None = None,
         drain: Callable[[], int] | None = None,
         finish_round: Callable[[str], None] | None = None,
-        split_task: Callable[[str, str, str, str, str], Any] | None = None,
+        split_task: Callable[[str, str, str, str], Any] | None = None,
         police_abort: Callable[[str, str], Any] | None = None,
         research_tools: tuple[str, ...] = (),
     ) -> None:
@@ -317,11 +317,17 @@ class RoundDispatcher:
         role: str = "DEXTER",
         tools: tuple[str, ...] = (),
         budget: Budget | None = None,
+        authorization: dict[str, Any] | None = None,
     ) -> DispatchOutcome:
         # The round service mints its own round id and returns it; run_id is the
         # envelope identity the seam carries. They are different things and
         # conflating them makes every round unresolvable.
         run = run_id or str(uuid.uuid4())
+        if authorization is None:
+            return DispatchOutcome(
+                run_id=run, project_id=project_id, task_ref=task_ref,
+                status="rejected", detail="kernel authorization is required",
+            )
         # The run-to-task binding, and the milestone it belongs to, are settled
         # before anything else happens. A dispatch that cannot name a declared
         # milestone has no business choosing a transport or spending an attempt:
@@ -334,6 +340,8 @@ class RoundDispatcher:
         go_issued = False
         if milestone_id:
             for e in self._log.read_all():
+                if e.projectId != project_id:
+                    continue
                 if e.type == "milestone.declared" and str(
                     _payload_of(e, self.artifacts).get("milestoneId", "")
                 ) == milestone_id:
@@ -406,6 +414,7 @@ class RoundDispatcher:
                 "taskId": task_id,
                 "milestoneId": milestone_id,
                 "slice": str(getattr(packet, "outcome", ""))[:200],
+                "authorization": authorization,
             }).encode("utf-8"),
             project_id=project_id,
             task_ref=task_id,
@@ -600,24 +609,23 @@ class RoundDispatcher:
             said = f"BUILDER FINDING: {said}\nINSTRUCTION TO REVIEW:\n{brief}"
         elif role == "JACK_THE_SPLITTER":
             if not task_id or not milestone_id or self._split_task is None:
-                return _with(outcome, status="towel", detail="JACK has no feature-list update callback")
-            from .feature_list import FeatureList
-            rt_view = type("FeatureFileView", (),
-                           {"log": self._log, "artifacts": self.artifacts})()
+                return _with(outcome, status="towel", detail="JACK has no submission callback")
             try:
-                rt_view.root = self.root
-                parent = FeatureList(rt_view).task(project_id, task_id, milestone_id)
+                receipt = self._split_task(project_id, milestone_id, task_id, said)
             except Exception as exc:
-                return _with(outcome, status="towel", detail=f"task contract missing: {exc}")
-            said = (
-                "The builder could not deliver this feature. Split this COMPLETE "
-                "design-time contract into two executable halves. Preserve the "
-                "milestone's original obligations. Return only the typed JSON "
-                "requested by your JACK brief.\n"
-                f"MILESTONE: {milestone_id}\nTASK: {task_id}\nRUN: {outcome.run_id}\n"
-                f"FAILURE: {said}\nDECLARED TASK:\n"
-                + json.dumps(parent, ensure_ascii=False, sort_keys=True)
-            )
+                # The invocation itself failed. The submission path records the
+                # concrete fault; this is never converted into product success.
+                return _with(outcome, status="towel", detail=f"JACK unavailable: {exc}")
+            status = str(receipt.get("status") or "")
+            if status == "split":
+                return _with(outcome, status="split", detail=(
+                    f"JACK split {task_id} into revision {receipt['firstRevision']} "
+                    f"and new sibling {receipt['secondTaskId']}; feature list updated"))
+            if status == "blocked":
+                return _with(outcome, status="blocked",
+                             detail=str(receipt.get("detail") or "JACK submission blocked"))
+            return _with(outcome, status="towel",
+                         detail=str(receipt.get("detail") or "JACK could not produce a split"))
         before = self._proposal_count() if role == "SHARPENER" else 0
         try:
             answer = self._ask_role(project_id, role, said)
@@ -629,23 +637,6 @@ class RoundDispatcher:
                              detail="SHARPENER filed a proposal awaiting human review")
             return _with(outcome, status="towel",
                          detail="SHARPENER recorded no proposal; " + _first_line(answer)[:300])
-        if role == "JACK_THE_SPLITTER":
-            try:
-                receipt = self._split_task(project_id, milestone_id, task_id, answer)
-            except Exception as exc:
-                # A malformed split is a towel, never invented success. The
-                # journal's durable red light explains why the chain ended.
-                self._log.record(
-                    "recovery.blocked", producer="manager", project_id=project_id,
-                    task_ref=task_id, run_id=outcome.run_id,
-                    payload=json.dumps({"taskId": task_id, "milestoneId": milestone_id,
-                                        "raisedBy": "JACK_THE_SPLITTER",
-                                        "reason": f"JACK could not apply a valid split: {exc}"}).encode(),
-                )
-                return _with(outcome, status="towel", detail=f"JACK towel: {exc}")
-            return _with(outcome, status="split", detail=(
-                f"JACK split {task_id} into revision {receipt['firstRevision']} "
-                f"and new sibling {receipt['secondTaskId']}; feature list updated"))
         return _with(outcome, status="towel",
                      detail=f"{role} consulted without an executable transition")
 
@@ -857,7 +848,7 @@ class RoundDispatcher:
         specs: dict[str, Any] = {}
         ignored = {"agent.jsonl", "agent.err", "context-pack.md", "REQUEST.json",
                    ".progressdesk-baseline.json"}
-        excluded_dirs = {"sessions", "report", "__pycache__", ".git", ".venv", "node_modules"}
+        excluded_dirs = {"sessions", "report", "__pycache__", ".git", ".venv", "node_modules", ".progressdesk-inputs"}
         seen = set()
         for path in sorted(directory.rglob("*")):
             if path.is_symlink():
@@ -966,7 +957,9 @@ class RoundDispatcher:
             sections.append(ContextSection("accepted example references", examples, 4_096))
         inputs = _text(getattr(packet, "input_artifact_refs", ()))
         if inputs:
-            sections.append(ContextSection("input artifact references", inputs, 4_096))
+            sections.append(ContextSection(
+                "input artifact references", inputs + "\nHost-provided bytes are in .progressdesk-inputs in your working directory; filenames start with their zero-based input index and artifact digest.", 4_096,
+            ))
         if project_id and run:
             inbox = (paths.projects(self.broker.workspace_root) / project_id
                      / "rounds" / run / "report")

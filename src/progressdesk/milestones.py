@@ -157,12 +157,16 @@ class MilestoneService:
         payload: dict[str, Any],
         *,
         producer="manager",
+        attempt_id: str | None = None,
     ) -> Event:
+        body = {"schemaVersion": 1, "milestoneId": spec.milestone_id, **payload}
+        if attempt_id is not None:
+            body["attemptId"] = attempt_id
         return self.log.record(
             event_type,
             producer=producer,
             payload=json.dumps(
-                {"schemaVersion": 1, "milestoneId": spec.milestone_id, **payload},
+                body,
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode("utf-8"),
@@ -173,7 +177,7 @@ class MilestoneService:
         return hashlib.sha256(json.dumps(list(evidence), separators=(",", ":")).encode()).hexdigest()
 
     def _pending_event(self, project_id: str, milestone_id: str) -> Event | None:
-        for event in self.log.replay():
+        for event in reversed(list(self.log.replay())):
             if (
                 event.type == "milestone.signoff-pending"
                 and event.projectId == project_id
@@ -190,18 +194,35 @@ class MilestoneService:
         project_id: str,
         spec: MilestoneSpec,
         integration_inputs: Mapping[str, Any] | None = None,
+        *,
+        attempt_id: str | None = None,
     ) -> MilestoneResult:
         spec.validate()
         _text(project_id, "projectId")
+        if attempt_id is not None:
+            _text(attempt_id, "attemptId")
+            if any(character in attempt_id for character in "/\\:\x00"):
+                raise MilestoneError("attemptId must be a plain identity")
         missing = [
             task_id for task_id in spec.required_task_ids
             if not self.task_accepted(project_id, task_id)
         ]
+        started_payload = {
+            "schemaVersion": 1,
+            "milestoneId": spec.milestone_id,
+            "requiredTaskIds": list(spec.required_task_ids),
+        }
+        if attempt_id is not None:
+            started_payload["attemptId"] = attempt_id
+        if integration_inputs:
+            for field in ("manifestRef", "productDigest", "contractDigest"):
+                if integration_inputs.get(field):
+                    started_payload[field] = integration_inputs[field]
         started = self.log.record(
             "milestone.integration-started",
             producer="manager",
             payload=json.dumps(
-                {"schemaVersion": 1, "milestoneId": spec.milestone_id, "requiredTaskIds": list(spec.required_task_ids)},
+                started_payload,
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode("utf-8"),
@@ -214,6 +235,7 @@ class MilestoneService:
                 project_id,
                 spec,
                 {"status": "failed", "reason": reason, "evidenceRefs": []},
+                attempt_id=attempt_id,
             )
             return MilestoneResult(spec.milestone_id, "failed", (), started, reason)
         try:
@@ -224,23 +246,34 @@ class MilestoneService:
                 project_id,
                 spec,
                 {"status": "unavailable", "reason": str(exc), "evidenceRefs": []},
+                attempt_id=attempt_id,
             )
             return MilestoneResult(spec.milestone_id, "unavailable", (), started, str(exc))
         except Exception as exc:
-            result = IntegrationResult(False, (), (str(exc),))
+            reason = f"evaluator did not provide a usable verdict: {exc}"
+            self._record(
+                "milestone.integration-completed", project_id, spec,
+                {"status": "unavailable", "reason": reason, "evidenceRefs": []},
+                attempt_id=attempt_id,
+            )
+            return MilestoneResult(spec.milestone_id, "unavailable", (), started, reason)
         evidence = result.evidence_refs
         completed_payload = {
             "status": "passed" if result.passed else "failed",
             "evidenceRefs": list(evidence),
             "findings": list(result.findings),
         }
-        self._record("milestone.integration-completed", project_id, spec, completed_payload)
+        self._record(
+            "milestone.integration-completed", project_id, spec, completed_payload,
+            attempt_id=attempt_id,
+        )
         if not result.passed:
             self._record(
                 "milestone.correction-requested",
                 project_id,
                 spec,
                 {"reason": "integration gate failed", "evidenceRefs": list(evidence)},
+                attempt_id=attempt_id,
             )
             return MilestoneResult(spec.milestone_id, "failed", evidence, None, "integration gate failed")
         if spec.signoff_policy == "human":
@@ -250,13 +283,17 @@ class MilestoneService:
                 "evidenceDigest": self._evidence_digest(evidence),
                 "requiredTaskIds": list(spec.required_task_ids),
             }
-            event = self._record("milestone.signoff-pending", project_id, spec, pending_payload)
+            event = self._record(
+                "milestone.signoff-pending", project_id, spec, pending_payload,
+                attempt_id=attempt_id,
+            )
             return MilestoneResult(spec.milestone_id, "pending_signoff", evidence, event)
         accepted = self._record(
             "milestone.accepted",
             project_id,
             spec,
             {"status": "accepted", "evidenceRefs": list(evidence), "signoffPolicy": "automatic"},
+            attempt_id=attempt_id,
         )
         return MilestoneResult(spec.milestone_id, "accepted", evidence, accepted)
 
@@ -274,6 +311,7 @@ class MilestoneService:
             raise MilestoneError("human signoff is not bound to the displayed evidence")
         if any(
             event.type == "milestone.accepted"
+            and event.projectId == project_id
             and event.payloadRef is not None
             and json.loads(self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1])).get("milestoneId")
             == spec.milestone_id
@@ -290,5 +328,6 @@ class MilestoneService:
                 "signoffPolicy": "human",
                 "signoffEvidenceDigest": payload["evidenceDigest"],
             },
+            attempt_id=payload.get("attemptId"),
         )
         return MilestoneResult(spec.milestone_id, "accepted", tuple(payload["evidenceRefs"]), event)

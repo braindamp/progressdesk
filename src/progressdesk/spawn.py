@@ -276,6 +276,7 @@ class ResultEnvelope:
     nudges: int = 0
     detail: str = ""
     watch: dict[str, Any] = field(default_factory=dict)
+    usage: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.status not in STATUSES:
@@ -299,6 +300,7 @@ class ResultEnvelope:
             "nudges": self.nudges,
             "detail": self.detail,
             "watch": dict(self.watch),
+            "usage": dict(self.usage),
         }
 
 
@@ -405,11 +407,13 @@ class Spawner:
         project_id: str | None = None,
         now: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        on_result: Callable[[SpawnRequest, ResultEnvelope], None] | None = None,
     ) -> None:
         self.registry = registry
         self.project_id = project_id
         self._now = now
         self._sleep = sleep
+        self._on_result = on_result
         # session -> nudge timestamps inside the window. A session nudged across
         # days must still show that it was nudged, which is a health signal and
         # not a retry counter. Keyed by run id, because the provider's session
@@ -473,7 +477,10 @@ class Spawner:
                 "sandbox_mismatch",
                 f"{kind!r} declares sandbox {adapter.sandbox!r}, not {req.sandbox!r}",
             )
-        return adapter.spawn(req)
+        result = adapter.spawn(req)
+        if self._on_result is not None:
+            self._on_result(req, result)
+        return result
 
     def nudge(self, req: SpawnRequest, envelope: ResultEnvelope, *, kind: str) -> ResultEnvelope:
         """Costs one message and never an attempt.
@@ -496,7 +503,14 @@ class Spawner:
             "not your work failing. Continue from where you were."
         )
         result = self._run_once(req.with_nudge(message), kind=kind)
-        return replace(result, nudges=count)
+        merged = dict(envelope.usage)
+        for key, value in result.usage.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                merged[key] = value
+            else:
+                prior = merged.get(key)
+                merged[key] = (prior if isinstance(prior, (int, float)) and not isinstance(prior, bool) else 0) + value
+        return replace(result, nudges=count, usage=merged)
 
 
 class ManualExecutor:

@@ -226,10 +226,10 @@ class PoliceService:
         details_dict = dict(details or {})
         with self._lock:
             self._last_storage_error = None
-            if project_id in self._closed_projects:
+            if source != "owner" and project_id in self._closed_projects:
                 raise PoliceError("project already has an issued abort")
             try:
-                latest = self._latest_lifecycle(project_id)
+                latest = self._latest_lifecycle(project_id) if source != "owner" else None
             except Exception as exc:
                 # A damaged/unavailable journal must not prevent local
                 # termination. Continue fail-closed and report the storage gap.
@@ -253,6 +253,20 @@ class PoliceService:
                 "evidenceRefs": list(evidence),
                 "details": details_dict,
             }
+            runs: tuple[ProjectRun, ...] = ()
+            termination_error: str | None = None
+            try:
+                runs = self.authority.terminate_project(self.broker, project_id)
+                for run in runs:
+                    try:
+                        run.wait_for_termination(self.termination_timeout_ms)
+                        self.broker._forget_run(run)
+                    except Exception as exc:
+                        termination_error = f"run {run.identity.runId}: {exc}"
+            except Exception as exc:
+                termination_error = str(exc)
+            # Physical termination precedes journal work. A failed or blocked
+            # journal must not be a prerequisite for the owner's STOP.
             abort_event = self._record_or_capture("abort.issued", payload, project_id)
             storage_error = self._last_storage_error
             if abort_event is not None and round_id is not None:
@@ -276,20 +290,6 @@ class PoliceService:
                     )
                 except Exception as exc:
                     self._last_storage_error = f"round.failed: {exc}"
-
-            runs: tuple[ProjectRun, ...] = ()
-            termination_error: str | None = None
-            try:
-                runs = self.authority.terminate_project(self.broker, project_id)
-                for run in runs:
-                    try:
-                        run.wait_for_termination(self.termination_timeout_ms)
-                        self.broker._forget_run(run)
-                    except Exception as exc:
-                        termination_error = f"run {run.identity.runId}: {exc}"
-                        break
-            except Exception as exc:
-                termination_error = str(exc)
 
             confirmed = not termination_error
             if confirmed and abort_event is not None:
@@ -375,27 +375,30 @@ class PoliceService:
             )
 
     def stop_workshop(self, reason: str, *, source: str = "sharpener") -> AbortResult:
-        """Stop all broker-owned project work, leaving SHARPENER running."""
+        """POLICE spares SHARPENER; the owner's stop-everything includes it."""
         _text(reason, "reason")
         with self._lock:
             self._last_storage_error = None
             self._closed_projects.add("workshop")
             abort_id = str(uuid.uuid4())
-            event = self._record_or_capture("abort.issued", {
-                "abortId": abort_id, "projectId": "workshop",
-                "classification": "security", "reason": reason,
-                "source": source, "evidenceRefs": [],
-            }, "workshop")
             runs = ()
             error = None
             try:
-                runs = self.authority.terminate_workshop(self.broker)
+                runs = self.authority.terminate_workshop(
+                    self.broker, include_sharpener=source == "owner",
+                )
                 for run in runs:
                     run.wait_for_termination(self.termination_timeout_ms)
                     self.broker._forget_run(run)
             except Exception as exc:
                 error = str(exc)
             confirmed = error is None
+            event = self._record_or_capture("abort.issued", {
+                "abortId": abort_id, "projectId": "workshop",
+                "classification": "security" if source != "owner" else "infra",
+                "reason": reason, "source": source, "evidenceRefs": [],
+                "includesSharpener": source == "owner",
+            }, "workshop")
             self._record_or_capture(
                 "termination.confirmed" if confirmed else "termination.unresolved",
                 {"abortId": abort_id, "projectId": "workshop",

@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -17,6 +18,7 @@ from progressdesk.events import EventLog
 
 CREATE_SUSPENDED = 0x00000004
 CREATE_UNICODE_ENVIRONMENT = 0x00000400
+CREATE_NO_WINDOW = 0x08000000
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
 WAIT_FAILED = 0xFFFFFFFF
@@ -48,6 +50,10 @@ FILE_ATTRIBUTE_NORMAL = 0x00000080
 
 class BrokerError(RuntimeError):
     """Broker refused or failed an invocation."""
+
+
+class BrokerTimeout(BrokerError):
+    """A bounded wait expired; ownership is retained."""
 
 
 @dataclass(frozen=True)
@@ -235,6 +241,8 @@ def _kernel32():
     library = ctypes.WinDLL("kernel32", use_last_error=True)
     library.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
     library.CreateJobObjectW.restype = ctypes.c_void_p
+    library.OpenJobObjectW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
+    library.OpenJobObjectW.restype = ctypes.c_void_p
     library.CreateProcessW.argtypes = [
         ctypes.c_wchar_p,
         ctypes.c_wchar_p,
@@ -359,6 +367,25 @@ class WindowsJob:
         self._handle = ctypes.c_void_p(handle)
         self._closed = False
 
+    @classmethod
+    def reopen(cls, identity: ProcessIdentity) -> WindowsJob | None:
+        """Recover the exact named job from a durable registration, never a PID guess."""
+        prefix = f"Local\\ProgressDesk-{identity.projectId}-{identity.runId}-"
+        if not identity.jobName.startswith(prefix):
+            raise BrokerError("recorded job identity does not match its project/run")
+        library = _kernel32()
+        handle = library.OpenJobObjectW(0x0004 | 0x0008, False, identity.jobName)
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 2:
+                return None
+            raise BrokerError(f"OpenJobObjectW failed: {error}")
+        job = cls.__new__(cls)
+        job.project_id, job.run_id = identity.projectId, identity.runId
+        job.job_name, job._library = identity.jobName, library
+        job._handle, job._closed = ctypes.c_void_p(handle), False
+        return job
+
     def spawn(
         self,
         argv: tuple[str, ...],
@@ -369,13 +396,14 @@ class WindowsJob:
         stderr: Path | None = None,
         runtime_family: str = "unknown",
         env: dict[str, str] | None = None,
+        on_registered: Callable[[ProcessIdentity], None] | None = None,
     ) -> tuple[ProcessIdentity, ctypes.c_void_p]:
         if self._closed:
             raise BrokerError("job is already closed")
         if stdout is None and stderr is None:
             # Nothing to redirect: bInheritHandles stays FALSE and the child
             # inherits nothing at all.
-            return self._launch(argv, candidate_dir, role, None, None, runtime_family, env)
+            return self._launch(argv, candidate_dir, role, None, None, runtime_family, env, on_registered)
         owned: list[ctypes.c_void_p] = []
         pinned: _PinnedHandleList | None = None
         try:
@@ -398,6 +426,7 @@ class WindowsJob:
                 pinned.attribute_list,
                 runtime_family,
                 env,
+                on_registered,
             )
         finally:
             if pinned is not None:
@@ -457,6 +486,7 @@ class WindowsJob:
         attribute_list: ctypes.c_void_p | None,
         runtime_family: str = "unknown",
         env: dict[str, str] | None = None,
+        on_registered: Callable[[ProcessIdentity], None] | None = None,
     ) -> tuple[ProcessIdentity, ctypes.c_void_p]:
         info = _ProcessInformation()
         if attribute_list is None:
@@ -474,6 +504,9 @@ class WindowsJob:
             inherit_handles = True
             flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
         if standard_handles is not None:
+            # Headless transports must not share a control console with the
+            # workshop host (a console close/CTRL-C would interrupt both).
+            flags |= CREATE_NO_WINDOW
             inner.dwFlags = STARTF_USESTDHANDLES
             inner.hStdInput, inner.hStdOutput, inner.hStdError = standard_handles
         command_line = subprocess.list2cmdline(list(argv))
@@ -520,6 +553,8 @@ class WindowsJob:
                 | int(creation.dwLowDateTime),
                 role=role,
             )
+            if on_registered is not None:
+                on_registered(identity)
             if self._library.ResumeThread(thread) == 0xFFFFFFFF:
                 raise BrokerError(f"ResumeThread failed: {ctypes.get_last_error()}")
             return identity, process
@@ -534,7 +569,7 @@ class WindowsJob:
     def wait(self, process: ctypes.c_void_p, timeout_ms: int = 0xFFFFFFFF) -> int:
         result = self._library.WaitForSingleObject(process, timeout_ms)
         if result == WAIT_TIMEOUT:
-            raise BrokerError("process wait timed out")
+            raise BrokerTimeout("process wait timed out")
         if result != WAIT_OBJECT_0:
             raise BrokerError(f"WaitForSingleObject failed: {result}")
         code = ctypes.c_uint32()
@@ -595,7 +630,11 @@ class ProjectRun:
         self._closed = False
 
     def wait(self, timeout_ms: int = 0xFFFFFFFF) -> int:
+        if self._process is None:
+            raise BrokerError("a recovered job has no original process handle to wait on")
         code = self._job.wait(self._process, timeout_ms)
+        if not self._job.wait_until_empty(5000):
+            raise BrokerError("transport exited but broker-owned child processes remain")
         self.close()
         return code
 
@@ -605,9 +644,9 @@ class ProjectRun:
     def active_process_count(self) -> int:
         return self._job.active_process_count()
 
-    def wait_for_termination(self, timeout_ms: int = 5000) -> int:
+    def wait_for_termination(self, timeout_ms: int = 5000) -> int | None:
         """Wait for the process and all job members, then release handles."""
-        code = self._job.wait(self._process, timeout_ms)
+        code = self._job.wait(self._process, timeout_ms) if self._process is not None else None
         if not self._job.wait_until_empty(timeout_ms):
             raise BrokerError("project job did not become quiescent")
         self.close()
@@ -615,7 +654,8 @@ class ProjectRun:
 
     def close(self) -> None:
         if not self._closed:
-            self._job._library.CloseHandle(self._process)
+            if self._process is not None:
+                self._job._library.CloseHandle(self._process)
             self._job.close()
             self._closed = True
 
@@ -631,10 +671,13 @@ class ProjectRunRegistry:
         self._runs: dict[str, list[ProjectRun]] = {}
         self._closed: set[str] = set()
         self._workshop_stopped = False
+        self._stop_all = False
 
     def is_closed(self, project_id: str) -> bool:
         with self._lock:
-            return project_id in self._closed or (self._workshop_stopped and project_id != SHARPENER_PROJECT)
+            return project_id in self._closed or (
+                self._workshop_stopped and (self._stop_all or project_id != SHARPENER_PROJECT)
+            )
 
     def register(self, project_id: str, run: ProjectRun) -> None:
         with self._lock:
@@ -652,11 +695,12 @@ class ProjectRunRegistry:
             self._closed.add(project_id)
             return tuple(self._runs.get(project_id, ()))
 
-    def close_workshop(self) -> tuple[ProjectRun, ...]:
+    def close_workshop(self, *, include_sharpener: bool = False) -> tuple[ProjectRun, ...]:
         with self._lock:
             self._workshop_stopped = True
+            self._stop_all = self._stop_all or include_sharpener
             return tuple(run for project, runs in self._runs.items()
-                         if project != SHARPENER_PROJECT for run in runs)
+                         if self._stop_all or project != SHARPENER_PROJECT for run in runs)
 
     def reopen_project(self, project_id: str) -> None:
         with self._lock:
@@ -665,6 +709,10 @@ class ProjectRunRegistry:
     def active(self, project_id: str) -> tuple[ProjectRun, ...]:
         with self._lock:
             return tuple(self._runs.get(project_id, ()))
+
+    def active_all(self) -> tuple[ProjectRun, ...]:
+        with self._lock:
+            return tuple(run for runs in self._runs.values() for run in runs)
 
 
 class PoliceTerminationAuthority:
@@ -680,9 +728,9 @@ class PoliceTerminationAuthority:
         return runs
 
 
-    def terminate_workshop(self, broker: Broker) -> tuple[ProjectRun, ...]:
+    def terminate_workshop(self, broker: Broker, *, include_sharpener: bool = False) -> tuple[ProjectRun, ...]:
         with broker._dispatch_lock:
-            runs = broker.runs.close_workshop()
+            runs = broker.runs.close_workshop(include_sharpener=include_sharpener)
         for run in runs:
             self.terminate(run)
         return runs
@@ -717,6 +765,30 @@ class Broker:
 
     def _forget_run(self, run: ProjectRun) -> None:
         self.runs.unregister(run)
+
+    def restore_registered(self, project_id: str) -> None:
+        """A cold owner STOP can reach jobs owned by the previous control host."""
+        if self.event_log is None:
+            raise BrokerError("cannot restore process ownership without its event history")
+        existing = {run.identity.jobName for run in self.runs.active_all()}
+        for event in self.event_log.read_all():
+            if event.type != "process.registered" or not event.payloadRef:
+                continue
+            if project_id != "workshop" and event.projectId != project_id:
+                continue
+            payload = json.loads(self.event_log.artifacts.get_bytes(event.payloadRef.split(":", 1)[1]))
+            identity = ProcessIdentity(**payload)
+            if identity.jobName in existing:
+                continue
+            job = WindowsJob.reopen(identity)
+            if job is None:
+                continue
+            if not job.active_process_count():
+                job.close()
+                continue
+            run = ProjectRun(job, None, identity, self.workspace_root)
+            self.runs.register(identity.projectId, run)
+            existing.add(identity.jobName)
 
     def _resolve_contained(self, path: Path) -> Path:
         absolute = Path(os.path.abspath(path))
@@ -826,6 +898,14 @@ class Broker:
         )
 
     def _dispatch(
+        self, project_id: str, run_id: str, role: str, argv: tuple[str, ...],
+        candidate_dir: Path, detail: dict[str, Any], **capture: Any,
+    ) -> ProjectRun:
+        with self._dispatch_lock:
+            self._assert_dispatch_open(project_id)
+            return self._launch_owned(project_id, run_id, role, argv, candidate_dir, detail, **capture)
+
+    def _launch_owned(
         self,
         project_id: str,
         run_id: str,
@@ -849,6 +929,12 @@ class Broker:
                 run_id=run_id,
             )
         job = WindowsJob(project_id, run_id)
+        def registered(identity: ProcessIdentity) -> None:
+            if self.event_log is not None:
+                self.event_log.record(
+                    "process.registered", producer="broker", project_id=project_id,
+                    run_id=run_id, payload=json.dumps(identity.to_dict()).encode("utf-8"),
+                )
         try:
             identity, process = job.spawn(
                 argv,
@@ -858,6 +944,7 @@ class Broker:
                 stderr=stderr,
                 runtime_family=runtime_family,
                 env=env,
+                on_registered=registered,
             )
         except Exception as exc:
             job.close()
@@ -872,14 +959,6 @@ class Broker:
                     run_id=run_id,
                 )
             raise
-        if self.event_log is not None:
-            self.event_log.record(
-                "process.registered",
-                producer="broker",
-                payload=json.dumps(identity.to_dict(), sort_keys=True).encode("utf-8"),
-                project_id=project_id,
-                run_id=run_id,
-            )
         run = ProjectRun(job, process, identity, candidate_dir)
         self.runs.register(project_id, run)
         return run

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .broker import Broker, ProjectRun
 from .spawn import SpawnError, SpawnRequest
-from .transport import CommandTransport, ParsedRun
+from .transport import CommandTransport, ParsedRun, merge_usage
 
 __all__ = ["opencode_argv", "opencode_jsonl", "opencode_transport"]
 
@@ -51,6 +51,7 @@ def opencode_jsonl(text: str) -> ParsedRun:
     parts: list[str] = []
     tools = 0
     errors: list[str] = []
+    usage: dict[str, object] = {}
     for raw in text.split("\n"):
         line = raw.rstrip("\r")
         if not line.strip():
@@ -70,6 +71,26 @@ def opencode_jsonl(text: str) -> ParsedRun:
                 parts.append(part["text"])
         elif kind == "tool_use":
             tools += 1
+        elif kind == "step_finish":
+            part = record.get("part")
+            if isinstance(part, dict):
+                tokens = part.get("tokens")
+                if isinstance(tokens, dict):
+                    cache = tokens.get("cache")
+                    cached = 0
+                    if isinstance(cache, dict):
+                        for key in ("read", "write"):
+                            if isinstance(cache.get(key), (int, float)):
+                                cached += int(cache[key])
+                    usage = merge_usage(usage, {
+                        "inputTokens": tokens.get("input"),
+                        "outputTokens": tokens.get("output"),
+                        "cachedTokens": cached,
+                        "reasoningTokens": tokens.get("reasoning"),
+                        "totalTokens": tokens.get("total"),
+                        "cost": part.get("cost"),
+                        "estimated": False,
+                    })
         elif kind == "error":
             part = record.get("part")
             message = part.get("error") if isinstance(part, dict) else None
@@ -77,7 +98,8 @@ def opencode_jsonl(text: str) -> ParsedRun:
     detail = f"{len(parts)} assistant text part(s), {tools} tool call(s)"
     if errors:
         detail += "; " + "; ".join(errors)[:400]
-    return ParsedRun(output="".join(parts), session_ref=session, detail=detail)
+    return ParsedRun(output="".join(parts), session_ref=session, detail=detail,
+                     usage=dict(usage))
 
 
 def _session_ref(sessions: Path) -> str | None:
@@ -101,6 +123,9 @@ def opencode_argv(
 ) -> tuple[str, ...]:
     argv = [
         executable,
+        "--print-logs",
+        "--log-level",
+        "ERROR",
         "run",
         "--format",
         "json",
@@ -118,6 +143,16 @@ def opencode_argv(
     argv.append(instruction)
     argv += ["--file", str(pack)]
     return tuple(argv)
+
+
+def _capacity_fault(stderr: str) -> str | None:
+    for line in stderr.splitlines():
+        lower = line.lower()
+        if "stream error" in lower and any(message in lower for message in (
+            "rate limit exceeded", "insufficient quota", "usage limit", "too many requests",
+        )):
+            return "blocked_capacity: OpenCode's configured free provider refused capacity"
+    return None
 
 
 def _permission_config(tools: tuple[str, ...]) -> dict[str, object]:
@@ -145,6 +180,7 @@ def _permission_config(tools: tuple[str, ...]) -> dict[str, object]:
 
 def _environment(req: SpawnRequest) -> Mapping[str, str]:
     return {
+        "PYTHONDONTWRITEBYTECODE": "1",
         "OPENCODE_CONFIG_CONTENT": json.dumps(
             _permission_config(req.tool_allowlist), separators=(",", ":")
         )
@@ -187,4 +223,5 @@ def opencode_transport(
         runtime_family="native",
         prepare=prepare,
         build_env=_environment,
+        terminal_fault=_capacity_fault,
     )

@@ -6,6 +6,7 @@ The journal is for execution and committed builder output.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -13,6 +14,13 @@ from pathlib import Path
 from typing import Any
 
 from . import paths
+
+_CONTRACT_FIELDS = (
+    "title", "outcome", "scope", "interfaces", "acceptance",
+    "allowedToolRefs", "skillRefs", "inputArtifactRefs",
+    "acceptedExampleRefs", "limits", "parentDefinitionRefs",
+)
+_DESCRIPTION_FIELDS = ("title", "outcome", "scope", "interfaces", "acceptance")
 
 
 class FeatureListError(ValueError):
@@ -65,6 +73,43 @@ def _features(data: Any, milestone_id: str) -> list[dict[str, Any]]:
     return result
 
 
+def _clean_contract(item: Any, label: str) -> dict[str, Any]:
+    """One executable feature contract, without host identity or ancestry."""
+    if not isinstance(item, dict):
+        raise FeatureListError(f"{label} must be an object")
+    unknown = set(item) - set(_CONTRACT_FIELDS)
+    if unknown:
+        raise FeatureListError(f"{label} has unknown contract fields: {sorted(unknown)}")
+    clean: dict[str, Any] = {}
+    for field in _CONTRACT_FIELDS:
+        if field not in item:
+            continue
+        value = item[field]
+        if field in {"title", "outcome", "scope"}:
+            if not isinstance(value, str) or not value.strip():
+                raise FeatureListError(f"{label}.{field} must be a non-empty string")
+            clean[field] = value.strip()
+        elif field in {"interfaces", "acceptance", "allowedToolRefs", "skillRefs",
+                       "inputArtifactRefs", "acceptedExampleRefs", "parentDefinitionRefs"}:
+            if not isinstance(value, (list, tuple)) or any(
+                not isinstance(entry, str) or not entry.strip() for entry in value
+            ):
+                raise FeatureListError(f"{label}.{field} must be an array of non-empty strings")
+            clean[field] = [entry.strip() for entry in value]
+        elif field == "limits":
+            if not isinstance(value, dict) or any(
+                not isinstance(key, str) or isinstance(number, bool)
+                or not isinstance(number, (int, float)) or number <= 0
+                for key, number in value.items()
+            ):
+                raise FeatureListError(f"{label}.limits must be an object")
+            clean[field] = dict(value)
+    for required in ("outcome", "scope", "interfaces", "acceptance"):
+        if not clean.get(required):
+            raise FeatureListError(f"{label} needs {required}")
+    return clean
+
+
 class FeatureList:
     def __init__(self, rt: Any) -> None:
         self.rt = rt
@@ -72,14 +117,48 @@ class FeatureList:
     def path(self, project_id: str, milestone_id: str) -> Path:
         return paths.projects(self.rt.root) / _id(project_id) / "features" / (_id(milestone_id) + ".json")
 
-    def read(self, project_id: str, milestone_id: str) -> list[dict[str, Any]]:
+    def _document(self, project_id: str, milestone_id: str) -> dict[str, Any]:
         path = self.path(project_id, milestone_id)
         if not path.is_file():
             raise FeatureListError(f"feature list not found: {path}; run project.features.init")
-        return _features(json.loads(path.read_text(encoding="utf-8")), milestone_id)
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise FeatureListError(f"feature list is unreadable: {exc}") from exc
+        if not isinstance(document, dict):
+            raise FeatureListError("feature list must be a JSON object")
+        _features(document, milestone_id)
+        revision = document.get("revision", 1)
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise FeatureListError("feature list revision must be a positive integer")
+        return document
+
+    @staticmethod
+    def _digest(document: dict[str, Any]) -> str:
+        encoded = json.dumps(document, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":")).encode("utf-8")
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+    def revision(self, project_id: str, milestone_id: str) -> tuple[int, str]:
+        document = self._document(project_id, milestone_id)
+        return int(document.get("revision", 1)), self._digest(document)
+
+    def read(self, project_id: str, milestone_id: str) -> list[dict[str, Any]]:
+        return _features(self._document(project_id, milestone_id), milestone_id)
 
     def ids(self, project_id: str, milestone_id: str) -> tuple[str, ...]:
         return tuple(item["taskId"] for item in self.read(project_id, milestone_id))
+
+    @staticmethod
+    def inherit_contract(template: dict[str, Any], proposal: dict[str, Any]) -> dict[str, Any]:
+        """Descriptions may change; existing capabilities and limits do not."""
+        clean = _clean_contract(proposal, "proposal")
+        for key in set(_CONTRACT_FIELDS) - set(_DESCRIPTION_FIELDS):
+            if key in clean and clean[key] != template.get(key):
+                raise FeatureListError(f"proposal changes protected metadata: {key}")
+            if key in template:
+                clean[key] = template[key]
+        return clean
 
     def task(self, project_id: str, task_id: str, milestone_id: str | None = None) -> dict[str, Any]:
         ids = [milestone_id] if milestone_id else self.milestones(project_id)
@@ -135,8 +214,11 @@ class FeatureList:
         clean = [{k: v for k, v in feature.items()
                   if k not in {"schemaVersion", "milestoneId", "dependsOn"}}
                  for feature in clean]
-        _atomic_json(path, {"milestoneId": milestone_id, "features": clean})
-        return {"status": "created", "file": str(path), "featureIds": [item["taskId"] for item in clean]}
+        document = {"milestoneId": milestone_id, "revision": 1, "features": clean}
+        _atomic_json(path, document)
+        return {"status": "created", "file": str(path),
+                "planRevision": 1, "planDigest": self._digest(document),
+                "featureIds": [item["taskId"] for item in clean]}
 
     @staticmethod
     def parse(answer: str | dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -153,38 +235,111 @@ class FeatureList:
         if answer.get("towel") is True:
             raise FeatureListError("JACK cannot split: " + str(answer.get("reason", "no reason")))
         halves = answer.get("halves")
-        if not isinstance(halves, list) or len(halves) != 2 or any(not isinstance(h, dict) for h in halves):
+        if not isinstance(halves, list) or len(halves) != 2:
             raise FeatureListError("JACK must provide exactly two feature objects")
-        for half in halves:
-            for name in ("title", "outcome", "scope"):
-                if not isinstance(half.get(name), str) or not half[name].strip():
-                    raise FeatureListError(f"JACK half needs {name}")
-        return halves[0], halves[1]
+        first = _clean_contract(halves[0], "halves[0]")
+        second = _clean_contract(halves[1], "halves[1]")
+        return first, second
 
-    def apply(self, project_id: str, milestone_id: str, task_id: str,
-              answer: str | dict[str, Any]) -> dict[str, Any]:
-        """One file replacement. Repeated splits are identical to first splits."""
-        current = self.read(project_id, milestone_id)
+    @staticmethod
+    def parse_correction(answer: str | dict[str, Any]) -> list[dict[str, Any]]:
+        if isinstance(answer, str):
+            answer = answer.strip()
+            if answer.startswith("```"):
+                answer = answer.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            try:
+                answer = json.loads(answer)
+            except (ValueError, TypeError) as exc:
+                raise FeatureListError("JACK did not return JSON") from exc
+        if not isinstance(answer, dict):
+            raise FeatureListError("JACK response must be an object")
+        if answer.get("towel") is True:
+            raise FeatureListError("JACK cannot plan a correction: " + str(answer.get("reason", "no reason")))
+        features = answer.get("features")
+        if not isinstance(features, list) or not features:
+            raise FeatureListError("JACK must provide one or more corrective features")
+        return [_clean_contract(item, f"features[{index}]") for index, item in enumerate(features)]
+
+    def _write(self, project_id: str, milestone_id: str, document: dict[str, Any],
+               *, expected_digest: str | None) -> dict[str, Any]:
+        current = self._document(project_id, milestone_id)
+        actual = self._digest(current)
+        if expected_digest is not None and expected_digest != actual:
+            raise FeatureListError("the feature plan changed after the proposal was prepared")
+        document["milestoneId"] = milestone_id
+        document["revision"] = int(current.get("revision", 1)) + 1
+        _features(document, milestone_id)
+        _atomic_json(self.path(project_id, milestone_id), document)
+        return {"planRevision": document["revision"],
+                "planDigest": self._digest(document),
+                "file": str(self.path(project_id, milestone_id))}
+
+    def apply_split(
+        self,
+        project_id: str,
+        milestone_id: str,
+        task_id: str,
+        halves: list[dict[str, Any]] | tuple[dict[str, Any], dict[str, Any]],
+        *,
+        expected_digest: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically replace one failed feature with exactly two ordinary ones."""
+        document = self._document(project_id, milestone_id)
+        current = _features(document, milestone_id)
         position = next((i for i, item in enumerate(current) if item["taskId"] == task_id), None)
         if position is None:
             raise FeatureListError("feature to split is absent")
-        first_data, second_data = self.parse(answer)
+        if len(halves) != 2:
+            raise FeatureListError("a split needs exactly two feature contracts")
         original = current[position]
-        revision = int(original.get("taskRevision", 1)) + 1
-        sibling = uuid.uuid4().hex
-        # Keep existing tool/scope metadata, replacing only JACK's smaller
-        # description. No split ancestry or recovery metadata survives.
-        fields = ("title", "outcome", "scope", "interfaces", "acceptance")
-        first = {**original, **{k: first_data[k] for k in fields if k in first_data},
-                 "taskId": task_id, "taskRevision": revision}
-        second = {**original, **{k: second_data[k] for k in fields if k in second_data},
-                  "taskId": sibling, "taskRevision": 1}
-        current[position:position + 1] = [first, second]
-        _atomic_json(self.path(project_id, milestone_id),
-                     {"milestoneId": milestone_id, "features": current})
+        first_data = self.inherit_contract(original, halves[0])
+        second_data = self.inherit_contract(original, halves[1])
+        description = {**original, **{
+            key: first_data[key] for key in _DESCRIPTION_FIELDS if key in first_data
+        }}
+        description["taskId"] = task_id
+        description["taskRevision"] = int(original.get("taskRevision", 1)) + 1
+        sibling_data = {**original, **{
+            key: second_data[key] for key in _DESCRIPTION_FIELDS if key in second_data
+        }}
+        sibling_data["taskId"] = uuid.uuid4().hex
+        sibling_data["taskRevision"] = 1
+        current[position:position + 1] = [description, sibling_data]
+        written = self._write(project_id, milestone_id,
+                              {"features": current}, expected_digest=expected_digest)
         return {"status": "split", "firstTaskId": task_id,
-                "secondTaskId": sibling, "firstRevision": revision,
-                "file": str(self.path(project_id, milestone_id))}
+                "secondTaskId": sibling_data["taskId"],
+                "firstRevision": description["taskRevision"], **written}
+
+    def apply_correction(
+        self,
+        project_id: str,
+        milestone_id: str,
+        features: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+        *,
+        expected_digest: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one or more ordinary corrective features to the plan."""
+        if not isinstance(features, (list, tuple)) or not features:
+            raise FeatureListError("corrective planning needs at least one feature")
+        document = self._document(project_id, milestone_id)
+        current = _features(document, milestone_id)
+        known_tools = {
+            tool for item in current for tool in item.get("allowedToolRefs", [])
+        }
+        added: list[dict[str, Any]] = []
+        for index, raw in enumerate(features):
+            clean = self.inherit_contract(current[0], raw)
+            if set(clean.get("allowedToolRefs", [])) - known_tools:
+                raise FeatureListError("corrective feature requests a capability outside the plan")
+            clean["taskId"] = uuid.uuid4().hex
+            clean["taskRevision"] = 1
+            added.append(clean)
+        current.extend(added)
+        written = self._write(project_id, milestone_id,
+                              {"features": current}, expected_digest=expected_digest)
+        return {"status": "corrected", "addedTaskIds": [item["taskId"] for item in added],
+                **written}
 
 
 class TaskScheduler:
@@ -197,6 +352,13 @@ class TaskScheduler:
                   if e.projectId in {project_id, "workshop"}]
         if any(e.type in {"abort.issued", "termination.unresolved"} for e in events):
             return "project terminated"
+        submissions: dict[tuple[str, int], str] = {}
+        for event in events:
+            if event.type == "jack.submission" and event.projectId == project_id:
+                data = _payload(self.rt, event)
+                submissions[(data.get("invocationId"), data.get("attempt"))] = data.get("status")
+        if "approved" in submissions.values():
+            return "JACK proposal approval has no completed host-application receipt"
         for event in reversed(events):
             if event.type in {"recovery.ready", "dispatch.reopened"}:
                 return None
@@ -246,6 +408,14 @@ class TaskScheduler:
         from .milestone_flow import MilestoneFlow
         if self._stop(project_id):
             return "project is blocked"
+        # F-K1: a dispatch needs the owner's current GO for this milestone.
+        go = {
+            _payload(self.rt, e).get("milestoneId")
+            for e in self.rt.log.read_all()
+            if e.projectId == project_id and e.type == "milestone.go-issued"
+        }
+        if milestone_id not in go:
+            return "milestone GO is not recorded"
         state = MilestoneFlow(self.rt).status(project_id, milestone_id)
         order = FeatureList(self.rt).milestones(project_id)
         if order.index(milestone_id) > 0 and self.rt.pending_visps(project_id):

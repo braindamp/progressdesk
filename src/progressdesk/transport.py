@@ -23,12 +23,12 @@ import re
 import shutil
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from . import paths
-from .broker import Broker, BrokerError, PlannedTransport, ProjectRun
+from .broker import Broker, BrokerError, BrokerTimeout, PlannedTransport, ProjectRun
 from .encoding import EncodingFault, argv_for, decode
 from .spawn import ANSWERS, ResultEnvelope, SpawnError, SpawnRequest
 
@@ -54,6 +54,27 @@ _FAULT_WORDS = (
 _FAULT_CODE = re.compile(r"\b(?:429|5\d\d)\b(?!\s+[a-z])", re.IGNORECASE)
 
 
+_USAGE_COUNTERS = (
+    "inputTokens", "outputTokens", "cachedTokens", "reasoningTokens",
+    "totalTokens", "cost",
+)
+
+
+def merge_usage(left: Mapping[str, Any] | None,
+                right: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Add two normalized usage rows; absent values are unknown, not zero."""
+    merged: dict[str, Any] = {}
+    for source in (left or {}, right or {}):
+        for key in _USAGE_COUNTERS:
+            value = source.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            merged[key] = merged.get(key, 0) + value
+        if "estimated" in source:
+            merged["estimated"] = bool(source.get("estimated"))
+    return merged
+
+
 @dataclass(frozen=True)
 class ParsedRun:
     """What one harness run yielded."""
@@ -61,6 +82,7 @@ class ParsedRun:
     output: str
     session_ref: str | None = None
     detail: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
 
 
 def pi_jsonl(text: str) -> ParsedRun:
@@ -72,6 +94,7 @@ def pi_jsonl(text: str) -> ParsedRun:
     """
     session: str | None = None
     parts: list[str] = []
+    usage: dict[str, Any] = {}
 
     for raw in text.split("\n"):
         line = raw.rstrip("\r")
@@ -95,11 +118,21 @@ def pi_jsonl(text: str) -> ParsedRun:
                 if isinstance(block, dict) and block.get("type") == "text":
                     if isinstance(block.get("text"), str):
                         parts.append(block["text"])
+            raw_usage = message.get("usage")
+            if isinstance(raw_usage, dict):
+                usage = merge_usage(usage, {
+                    "inputTokens": raw_usage.get("input_tokens") or raw_usage.get("inputTokens"),
+                    "outputTokens": raw_usage.get("output_tokens") or raw_usage.get("outputTokens"),
+                    "cachedTokens": raw_usage.get("cached_tokens") or raw_usage.get("cachedTokens"),
+                    "totalTokens": raw_usage.get("total_tokens") or raw_usage.get("totalTokens"),
+                    "estimated": False,
+                })
 
     return ParsedRun(
         output="".join(parts),
         session_ref=session,
         detail=f"{len(parts)} assistant message(s)",
+        usage=usage,
     )
 
 
@@ -176,6 +209,7 @@ class CommandTransport:
         runtime_family: str = "unknown",
         prepare: Callable[[SpawnRequest], Path] | None = None,
         build_env: Callable[[SpawnRequest], Mapping[str, str]] | None = None,
+        terminal_fault: Callable[[str], str | None] | None = None,
     ) -> None:
         if answers_in not in ANSWERS:
             raise SpawnError(
@@ -193,6 +227,7 @@ class CommandTransport:
         self._parse = parse
         self._prepare = prepare
         self._build_env = build_env
+        self._terminal_fault = terminal_fault
         self._project_id = project_id
         self._grace = termination_grace_ms
         # What this adapter actually launches. The seam pins that family's
@@ -271,8 +306,22 @@ class CommandTransport:
         self._live[req.run_id] = run
 
         timed_out = False
+        terminal_fault = None
         try:
-            code = self._broker.wait(run, timeout_ms=req.budget.wall_seconds * 1000)
+            deadline = started + req.budget.wall_seconds
+            while True:
+                try:
+                    code = self._broker.wait(run, timeout_ms=1000)
+                    break
+                except BrokerError as exc:
+                    if not isinstance(exc, BrokerTimeout):
+                        terminal_fault = f"broker wait failed: {exc}"
+                        raise
+                    if self._terminal_fault is not None:
+                        current_errors, _fault = _read(stderr)
+                        terminal_fault = self._terminal_fault(current_errors)
+                    if terminal_fault or time.monotonic() >= deadline:
+                        raise
         except BrokerError:
             # The wall budget expired with the child still running. A wall-clock
             # deadline may end a run (decision 5), but the stop is POLICE's to
@@ -319,8 +368,10 @@ class CommandTransport:
                 output=parsed.output,
                 wall_ms=wall_ms,
                 exit_code=code,
-                detail=f"wall budget of {req.budget.wall_seconds}s expired; termination requested",
-                watch={"overWallSeconds": True},
+                detail=terminal_fault or f"wall budget of {req.budget.wall_seconds}s expired; termination requested",
+                watch={"overWallSeconds": terminal_fault is None,
+                       "blockedCapacity": bool(terminal_fault and terminal_fault.startswith("blocked_capacity:"))},
+                usage=dict(parsed.usage),
             )
         if code != 0:
             # A non-zero exit is the only case where the text on stderr is
@@ -340,6 +391,7 @@ class CommandTransport:
                 wall_ms=wall_ms,
                 exit_code=code,
                 detail=(parsed.detail or errors.strip())[:400] or "the harness exited non-zero",
+                usage=dict(parsed.usage),
             )
         if not parsed.output.strip():
             # Exited cleanly and said nothing. That is the empty response, which
@@ -353,6 +405,7 @@ class CommandTransport:
                 wall_ms=wall_ms,
                 exit_code=code,
                 detail="the harness exited cleanly with no answer",
+                usage=dict(parsed.usage),
             )
         return ResultEnvelope(
             run_id=req.run_id,
@@ -364,6 +417,7 @@ class CommandTransport:
             wall_ms=wall_ms,
             exit_code=code,
             detail=parsed.detail,
+            usage=dict(parsed.usage),
         )
 
 

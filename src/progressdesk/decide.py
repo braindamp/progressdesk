@@ -22,11 +22,12 @@ broken between 0.88 and 0.94. No overlap.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .spawn import ResultEnvelope, SpawnError, SpawnRequest
@@ -80,6 +81,9 @@ class Decision:
     # Carried rather than assumed, so a consumer never re-derives the boundary
     # from a module constant that the adapter may not be using.
     threshold: float = THRESHOLD
+    question: str = ""
+    model: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
 
     @property
     def answered(self) -> bool:
@@ -90,11 +94,19 @@ class Decision:
         """Above the separation that was measured, not merely above even odds."""
         return self.probability > self.threshold
 
+    @property
+    def truncated(self) -> bool:
+        """The model dropped part of the packet; the answer is not usable."""
+        return bool(self.usage.get("truncated")) or int(self.usage.get("state_tokens_dropped") or 0) > 0
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "probability": round(self.probability, 4),
             "threshold": self.threshold,
             "above": self.above,
+            "question": self.question,
+            "model": self.model,
+            "usage": dict(self.usage),
             "detail": self.detail,
         }
 
@@ -129,14 +141,28 @@ def noul(state: str, instructions: str, *, name: str = "decision",
 
     try:
         answer = payload["answers"][name]
-        probability = float(answer["noul"])
+        raw = answer["noul"]
+        # bool is an int in Python. A JSON true is not a probability and must not
+        # be read as certainty.
+        if isinstance(raw, bool):
+            raise TypeError("noul must be a number, not a boolean")
+        probability = float(raw)
     except (KeyError, TypeError, ValueError) as exc:
         raise Unreachable(f"decision service answered unusably: {exc}") from exc
+    if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
+        raise Unreachable(
+            f"decision service returned an invalid probability: {probability!r}"
+        )
 
     routing = payload.get("routing") or {}
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    model = str(routing.get("model", "")) if isinstance(routing, dict) else ""
     return Decision(
         probability=probability,
-        detail=f"p={probability:.3f} via {routing.get('model', '?')}",
+        detail=f"p={probability:.3f} via {model or '?'}",
+        question=instructions,
+        model=model,
+        usage=dict(usage),
     )
 
 
@@ -218,12 +244,20 @@ class SystemOneExecutor:
                 f"(p={decision.probability:.3f}, threshold={self.threshold:g})"
             ),
             wall_ms=int((time.monotonic() - began) * 1000),
+            usage={
+                "inputTokens": decision.usage.get("input_tokens"),
+                "outputTokens": decision.usage.get("output_tokens"),
+                "estimated": False,
+            },
             watch={
-                "question": self.question,
+                "question": decision.question,
                 "probability": decision.probability,
                 "threshold": self.threshold,
                 "above": decision.above,
                 "detail": decision.detail,
+                "model": decision.model,
+                "usage": decision.usage,
+                "truncated": decision.truncated,
             },
         )
 

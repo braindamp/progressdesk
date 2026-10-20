@@ -1,4 +1,10 @@
-# ProgressDesk — POLICE and SHARPENER normal-build integration
+# ProgressDesk workshop 6 — acceptance factory
+
+The core acceptance-factory integration is implemented; live end-to-end
+commissioning is pending OpenCode availability. Work happens in
+`D:\Coding\progressDesk6-workshop`. The original product target is a donor and
+has not been promoted or overwritten. Current evidence and remaining work are
+in [the workshop composition record](docs/WORKSHOP6_COMPOSITION.md).
 
 ## Framework process flow
 
@@ -90,3 +96,43 @@ in-memory process registry. ProgressDesk's specified single-host mode is assumed
 
 No post-POLICE cleanup or restart implementation was added. No per-feature QA
 or test files were added.
+
+## Workshop 6 operation
+
+Start the genuine local decision service, then run the CLI from this checkout:
+
+```powershell
+$env:LAYA_PRELOAD="0"
+& D:\Coding\laya-serve\.venv\Scripts\laya-serve.exe
+
+$env:PYTHONPATH="src"
+python -m progressdesk.runtime --root D:\Coding\progressDesk6-workshop desk.identity
+```
+
+`desk.identity` reports the loaded factory source and the product root; the
+`--root` argument alone is not evidence of which package is running. Configure
+roles in `config\assignments.json` and the OpenCode executable in
+`config\execution.json`.
+
+Owner milestone operations:
+
+```powershell
+python -m progressdesk.runtime --root . project.start project_id=PROJECT_ID request_id=REQUEST_ID
+python -m progressdesk.runtime --root . milestone.status project_id=PROJECT_ID milestone_id=MILESTONE_ID
+python -m progressdesk.runtime --root . milestone.evaluate project_id=PROJECT_ID milestone_id=MILESTONE_ID
+python -m progressdesk.runtime --root . milestone.correct project_id=PROJECT_ID milestone_id=MILESTONE_ID
+```
+
+`project.start` records the owner GO and runs one light room sweep. A feature is
+dispatched only with a valid milestone contract and that GO. Acceptance is at
+the milestone boundary against the frozen full-product assembly, using the
+milestone's declared evaluator. JACK's split and corrective-planning proposals
+are applied only through the host submission path in `jack.py`; the three
+submission allowance is per fresh JACK invocation. Every dispatch records a
+`usage.recorded` attribution row for each actual adapter execution, including
+builder calls, nudges and infrastructure faults. Command acceptance also uses
+the broker and records its execution. `config\execution.json` declares the
+verified-free model references; an unavailable free provider returns
+`blocked_capacity`. See `docs\WORKSHOP6_COMPOSITION.md` for evidence, the bounded
+commissioning command, and remaining gaps. Do not infer successful commissioning
+from this description of the code.

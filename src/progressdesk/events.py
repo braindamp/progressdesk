@@ -158,6 +158,11 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": False,
     },
+    "dispatch.authorized": {
+        "producers": frozenset({"kernel"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
     # Recovery family (§4.4): only created by exclusive tail recovery.
     "recovery.completed": {
         "producers": frozenset({"recovery", "manager", "system"}),
@@ -278,6 +283,20 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "project_scoped": True,
     },
     "milestone.correction-requested": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    # JACK's host submission record: proposal identity, plan revision, the
+    # compact LAYA question/decision, attempt and applied result.
+    "jack.submission": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
+    # F-E5: one attribution row per dispatch, including failed and
+    # infrastructure-fault runs. Unknown usage stays null, not invented zero.
+    "usage.recorded": {
         "producers": frozenset({"manager"}),
         "payload_required": True,
         "project_scoped": True,
