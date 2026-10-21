@@ -1,0 +1,15 @@
+{
+  "milestoneId": "MS1",
+  "purpose": "external acceptance instrument for the ProgressDesk core delivery",
+  "criteria": [
+    "Create Project validates the exact definition chain and both owner signoffs, and refuses a stale displayed draft revision",
+    "definition.revise creates a new revision bound to the exact prior revision and refuses a stale expected revision",
+    "definition.pending lists the VISP and FUSP revisions that still await an owner signoff",
+    "the planning board records topics, meetings, questions and answers as events and rebuilds them from the event log",
+    "planning formalization produces structured decisions, a plain-language summary and a draft artifact that keeps every attachment reference",
+    "the owner surface exposes pending decisions, milestone findings, acceptance evidence, recorded usage and the milestone signoff policy",
+    "the candidate package is imported from the assembled product, not from the factory"
+  ],
+  "deterministic": true,
+  "instrument": "tools/final-delivery/ms1_gate.py"
+}

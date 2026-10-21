@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 1,
+  "requestId": "progressdesk-ms1b-owner-surface-2026-10-20",
+  "spec": "ProgressDesk MS1: the owner-facing definition and planning surface. Complete the existing owner operations to the FUSP/TESP contract: Create Project integrity, definition revision and pending signoff, the planning board and its model-connected formalization, and the owner views of findings, evidence, usage and the signoff policy.",
+  "definitions": {
+    "VISP": "docs/ProgressDesk VISP_v1.11.md",
+    "FUSP": "docs/ProgressDesk FUSP_v1.11.md",
+    "TESP": "docs/ProgressDesk TESP_v1.11.md",
+    "amendments": "docs/IMPLEMENTATION_REPLY_WORKSHOP6_2026-10-20.md"
+  },
+  "source": {
+    "directory": "D:\\Coding\\progressDesk6-workshop\\scratch\\final-progressdesk-state\\projects\\674a50a7-073e-5bb3-ac43-9aff8542afa3\\milestones\\MS1\\assembled\\53be2f986d69fbcc24c65a051f01aa41f1d44a20ab4b56c1f1cfec2f9ec4948c",
+    "includePaths": [
+      "src",
+      "config",
+      "installed",
+      "skills",
+      "domain-packs",
+      "docs/ProgressDesk VISP_v1.11.md",
+      "docs/ProgressDesk FUSP_v1.11.md",
+      "docs/ProgressDesk TESP_v1.11.md",
+      "docs/ProgressDesk TESP-S1_Agent-Confinement_v1.1.md",
+      "docs/IMPLEMENTATION_REPLY_WORKSHOP6_2026-10-20.md",
+      "docs/DEVELOPMENT_FULL_DELIVERY_PROGRESSDESK_2026-10-20.md",
+      "docs/WORKSHOP6_COMPOSITION.md",
+      "docs/HANDOVER_PI_CONTINUATION_2026-10-20.md",
+      "framework_processflow.mmd",
+      "framework_processflow.png",
+      "pyproject.toml",
+      "README.md",
+      "AGENTS.md"
+    ]
+  },
+  "milestones": [
+    {
+      "milestoneId": "MS1",
+      "evaluators": [
+        "eval-ms1.json"
+      ],
+      "inputs": [
+        "ms1-criteria.json"
+      ],
+      "correctionLimit": 3,
+      "signoffPolicy": "automatic",
+      "acceptanceConditions": [
+        "Create Project validates the exact definition chain and both owner signoffs, and refuses a stale displayed draft revision",
+        "definition.revise creates a new revision bound to the exact prior revision and refuses a stale expected revision",
+        "definition.pending lists the VISP and FUSP revisions that still await an owner signoff",
+        "the planning board records topics, meetings, questions and answers as events and rebuilds them from the event log",
+        "planning formalization produces structured decisions, a plain-language summary and a draft artifact that keeps every attachment reference",
+        "the owner surface exposes pending decisions, milestone findings, acceptance evidence, recorded usage and the milestone signoff policy",
+        "the candidate package is imported from the assembled product, not from the factory"
+      ],
+      "features": [
+        {
+          "taskId": "ms1-create-project-integrity",
+          "taskRevision": 1,
+          "title": "Create Project validates the chain, the signoffs and the displayed draft",
+          "outcome": "The existing Create Project operation validates the exact definition chain and both owner signoffs before it materializes anything, and refuses a stale displayed draft revision instead of creating a different project from the one the owner approved.",
+          "scope": "Only src/progressdesk/desk.py and the route table in src/progressdesk/runtime.py. The operation already exists; this completes it. Do not change the event vocabulary or the planning board.",
+          "interfaces": [
+            "ProgressDeskOperations.chain_digest(definition_refs) -> 'sha256:<64-hex>' over the exact VISP, FUSP and TESP revisions",
+            "route verb 'project.create' accepts the optional params definition_refs (dict with VISP, FUSP and TESP) and draft_revision (the digest the owner displayed) and returns the created project id",
+            "a missing or stale draft_revision, an unsigned VISP or FUSP revision, or a broken parent chain is refused with a typed error and nothing is materialized"
+          ],
+          "acceptance": [
+            "Create Project with the exact chain and both signoffs materializes the project",
+            "Create Project with a draft_revision that does not match the current chain digest is refused and creates nothing",
+            "Create Project with an unsigned VISP or FUSP revision is refused and creates nothing",
+            "Create Project with a TESP that does not name the pinned FUSP revision as parent is refused",
+            "a retry with the same request id returns the original project and creates no second one"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms1-definition-revise",
+          "taskRevision": 1,
+          "title": "Owner definition revision and pending signoff",
+          "outcome": "An owner can revise an existing definition revision and can see which VISP/FUSP revisions still await a signoff. The revision is bound to the exact revision the owner displayed: revising from a superseded revision is refused, and the earlier revision's signoff no longer authorises dispatch.",
+          "scope": "Only src/progressdesk/runtime.py (route table and handlers) and src/progressdesk/definitions.py (a read-only pending projection). Do not modify other modules.",
+          "interfaces": [
+            "route verb 'definition.revise' with params definition_id: str, revision: int, content: str -> {'id','kind','revision','contentRef','status':'revised'}",
+            "route verb 'definition.pending' with no params -> {'pending': [{'id','kind','revision','contentRef'}]}",
+            "Definitions.pending_signoffs() -> list of dicts with keys id, kind, revision, contentRef for VISP and FUSP kinds whose latest recorded revision has no definition.signed-off event"
+          ],
+          "acceptance": [
+            "definition.revise on an existing definition returns a revision exactly one higher than the supplied revision and records definition.revised",
+            "definition.revise with a revision that is not the current one is refused with a typed error naming the stale expected revision",
+            "definition.revise of an unknown definition id is refused with a typed error and records nothing",
+            "definition.pending lists a VISP revision that was never signed off and omits a revision that was signed off"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms1-planning-board",
+          "taskRevision": 1,
+          "title": "Planning board with topics, meetings, questions and answers",
+          "outcome": "The planning surface supports the item model of TESP 5.2 in text: named topics, bounded meetings with a session leader, questions and answers. Every change is an event, the board view is rebuilt from the event log, and participation control stays deterministic rather than the leader's discretion. The existing planning.item.create operation is repaired: it currently fails, so the surface has no working card.",
+          "scope": "Only src/progressdesk/planning.py and the route table in src/progressdesk/runtime.py. Do not change the definition pipeline or the feature list.",
+          "interfaces": [
+            "route verb 'planning.item.create' works again: it accepts summary, optional content, optional provenance and optional topic_refs and returns the created item",
+            "PlanningSession.create_topic(name) -> topic dict with topicId and name",
+            "PlanningSession.open_meeting(topic_refs, leader, limits) -> meeting dict with meetingId, topicRefs, leader, limits",
+            "PlanningSession.record_turn(meeting_id, role, text) -> transcript artifact reference",
+            "PlanningSession.ask_question(meeting_id, question) -> question dict with questionId and meetingId",
+            "PlanningSession.record_answer(question_id, answer) -> answer dict",
+            "PlanningSession.board() -> dict with the existing 'items' plus 'topics', 'meetings' and 'questions' keys",
+            "route verbs 'planning.topic.create', 'planning.meeting.open', 'planning.meeting.record', 'planning.question.ask', 'planning.answer.record' and 'planning.board'"
+          ],
+          "acceptance": [
+            "planning.item.create records a planning.item.created event and returns the item with its itemId",
+            "planning.topic.create records a planning.topic.created event and planning.board returns the topic",
+            "planning.meeting.open with two topic references records a planning.meeting.opened event naming the leader and the topics",
+            "planning.meeting.record stores the turn bytes as an artifact and returns its reference",
+            "planning.question.ask and planning.answer.record record their events and planning.board rebuilds both",
+            "an unknown meeting id or question id is refused with a typed error and records nothing",
+            "rebuilding the board twice from the same event log yields identical output"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms1-planning-formalization",
+          "taskRevision": 1,
+          "title": "Model-connected formalization with structured decisions and preserved attachments",
+          "outcome": "Formalizing planning items runs the configured planning session leader over the items and records what the owner has to check: the structured decisions that were extracted, a plain-language summary, and the VISP or FUSP intermediate draft artifact. Attachment references of every formalized item survive formalization; an image reference is never dropped.",
+          "scope": "Only src/progressdesk/planning.py and the route table in src/progressdesk/runtime.py. The session leader is called through the existing runtime adapter seam; do not add a second transport and do not sign off anything.",
+          "interfaces": [
+            "PlanningSession.__init__ accepts an optional planner callable, invoked as planner(item_payloads) -> dict with keys 'structuredDecisions' (list of dicts) and 'plainSummary' (str)",
+            "PlanningSession.formalize(item_ids, definition_id, definition_revision) records planning.item.formalized with payload keys itemId, definitionRef, structuredDecisions, plainSummary, draftArtifactRef, attachmentRefs",
+            "the draft artifact is a JSON object with keys documentType, structuredDecisions, plainSummary, attachmentRefs, definitionRef",
+            "route verb 'planning.formalize' resolves the planning session leader from config/assignments.json under the role name 'PLANNER' and refuses formalization with a typed error naming the missing planner when no such role is configured"
+          ],
+          "acceptance": [
+            "a formalized item's attachmentRefs are present in the planning.item.formalized payload and in the draft artifact",
+            "the draft artifact contains the structured decisions and the plain summary returned by the planner",
+            "the plain summary is non-empty text and the structured decisions are a list of objects",
+            "formalization never records a signoff and never authorizes execution",
+            "formalizing without a configured planner is refused with a typed error and records nothing"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms1-owner-views",
+          "taskRevision": 1,
+          "title": "Owner views of findings, evidence, usage and the signoff policy",
+          "outcome": "The owner can read, in text, what a milestone found, which evidence exists, what the recorded usage was and whether a milestone asks for a human signoff, without editing any internal state file. The existing project.status keeps its shape and gains nothing it should not have.",
+          "scope": "Only src/progressdesk/runtime.py and a new read-only module src/progressdesk/owner_views.py. Read the event log; write nothing except the returned view.",
+          "interfaces": [
+            "route verb 'owner.findings' with params project_id, milestone_id -> {'findings': [...], 'attempts': [...]}",
+            "route verb 'owner.evidence' with params project_id, milestone_id -> {'evidenceRefs': [...]}",
+            "route verb 'usage.report' with params project_id -> {'usage': [rows with role, executor, provider, model, inputTokens, outputTokens, cost, wallMs, exit, status]}",
+            "route verb 'milestone.signoff.policy' with params project_id -> {'milestones': [{'milestoneId','signoffPolicy'}]}"
+          ],
+          "acceptance": [
+            "owner.findings returns the concrete findings of every failed milestone attempt and the identity of each attempt",
+            "owner.evidence returns the acceptance evidence references of the given milestone",
+            "usage.report returns one row per recorded usage event and never invents a token or cost value: unknown measurements stay null",
+            "milestone.signoff.policy reports the declared signoff policy of every milestone of that project",
+            "an unknown project id is refused with a typed error"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        }
+      ]
+    }
+  ]
+}

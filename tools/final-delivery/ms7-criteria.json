@@ -1,0 +1,13 @@
+{
+  "milestoneId": "MS7",
+  "purpose": "external acceptance instrument for the ProgressDesk core delivery",
+  "criteria": [
+    "a clean instance starts from its documented launcher and the launch reports the factory, the product and the package identity",
+    "the event-backed views report the definition stage, the pending decisions, the board and its attachments, the current task, the milestone findings and evidence, the termination, the recovery, the checkpoint, the required updates and the usage",
+    "an unknown or stale item is reported as unknown and never as a value",
+    "one application service exposes the owner flow and the owner can stop the work while it runs",
+    "no owner action requires editing a SQLite database, an event JSON file or a hidden prompt"
+  ],
+  "deterministic": true,
+  "instrument": "tools/final-delivery/ms7_gate.py"
+}

@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "requestId": "progressdesk-ms3-durability-2026-10-20",
+  "spec": "ProgressDesk MS3: durable progress. Named immutable checkpoints, a deterministic recovery packet, and one start operation that reconciles the registered jobs and unresolved actions before it dispatches anything. The checkpoint is an acceleration and recovery aid, never a second authority.",
+  "definitions": {
+    "VISP": "docs/ProgressDesk VISP_v1.11.md",
+    "FUSP": "docs/ProgressDesk FUSP_v1.11.md",
+    "TESP": "docs/ProgressDesk TESP_v1.11.md",
+    "amendments": "docs/IMPLEMENTATION_REPLY_WORKSHOP6_2026-10-20.md"
+  },
+  "source": {
+    "directory": "PLACEHOLDER_MS2_ASSEMBLY",
+    "includePaths": [
+      "src",
+      "config",
+      "installed",
+      "skills",
+      "domain-packs",
+      "docs/ProgressDesk VISP_v1.11.md",
+      "docs/ProgressDesk FUSP_v1.11.md",
+      "docs/ProgressDesk TESP_v1.11.md",
+      "docs/ProgressDesk TESP-S1_Agent-Confinement_v1.1.md",
+      "docs/IMPLEMENTATION_REPLY_WORKSHOP6_2026-10-20.md",
+      "docs/DEVELOPMENT_FULL_DELIVERY_PROGRESSDESK_2026-10-20.md",
+      "docs/WORKSHOP6_COMPOSITION.md",
+      "docs/HANDOVER_PI_CONTINUATION_2026-10-20.md",
+      "framework_processflow.mmd",
+      "framework_processflow.png",
+      "pyproject.toml",
+      "README.md",
+      "AGENTS.md"
+    ]
+  },
+  "milestones": [
+    {
+      "milestoneId": "MS3",
+      "evaluators": ["eval-ms3.json"],
+      "inputs": ["ms3-criteria.json"],
+      "correctionLimit": 3,
+      "signoffPolicy": "automatic",
+      "acceptanceConditions": [
+        "a checkpoint manifest names the project, the journal sequence it was derived from, the definition references in force, the accepted artifact manifest, the tool, skill and domain version references in force, the task and milestone state and the pending actions",
+        "a checkpoint is immutable and derived from one recorded event position, and a second checkpoint with the same name is refused",
+        "the recovery packet names the current task, the accepted baseline, surviving candidate artifacts, completed actions, unresolved effects, failed checks, remaining work and the allowance, and carries no role transcript or private reasoning",
+        "the same checkpoint and the same project produce the same recovery packet",
+        "project.start is the only start operation: it reconciles the registered jobs and unresolved actions, establishes a clean execution boundary or returns a typed outcome, and never creates a second controller",
+        "a torn final record is recovered and an interior corruption is reported as a blocker instead of a reset to ready",
+        "replay performs no model, tool or provider call"
+      ],
+      "features": [
+        {
+          "taskId": "ms3-checkpoint-store",
+          "taskRevision": 1,
+          "title": "Named immutable checkpoints",
+          "outcome": "ProgressDesk can create and list named immutable checkpoints, on command and at a milestone boundary. Each manifest records the project, the journal sequence it was derived from, the definition references in force, the accepted artifact manifest, the tool, skill and domain version references in force, the task and milestone state and the pending actions. A checkpoint is an acceleration and recovery aid, never a second authority: everything in it is derived from the event log and the artifact store.",
+          "scope": "New module src/progressdesk/checkpoints.py and the route table in src/progressdesk/runtime.py. Reuse the existing event log and artifact store; do not create a second store and do not change the event vocabulary.",
+          "interfaces": [
+            "route verb 'checkpoint.create' with params project_id, name -> manifest with keys checkpointId, projectId, name, journalSequence, definitionRefs, acceptedArtifactManifestRef, toolSkillDomainVersionRefs, taskAndMilestoneStateRef, pendingActionRefs, createdAt",
+            "route verb 'checkpoint.list' with params project_id -> {'checkpoints': [manifest...]}",
+            "a milestone boundary creates a checkpoint of that milestone without a separate command"
+          ],
+          "acceptance": [
+            "a created checkpoint manifest contains every named field and its journalSequence equals the sequence of the last event read when it was created",
+            "creating a checkpoint with a name that already exists for that project is refused and records nothing",
+            "checkpoint.list returns the checkpoints of that project only, oldest first",
+            "a checkpoint manifest is derived from the event log, not from a second state store",
+            "re-reading a checkpoint returns exactly the recorded manifest"
+          ],
+          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
+          "limits": {"wallTimeSeconds": 900}
+        },
+        {
+          "taskId": "ms3-recovery-packet",
+          "taskRevision": 1,
+          "title": "The deterministic recovery packet",
+          "outcome": "A fresh worker can continue recorded work from a recovery packet that names the current task, the accepted baseline, surviving candidate artifacts, completed actions, unresolved effects, failed checks, remaining work and the remaining allowance. It is assembled deterministically, without a model, and carries no private model reasoning and no role transcript.",
+          "scope": "New module src/progressdesk/recovery.py and the route table in src/progressdesk/runtime.py. Read the event log and the artifact store only.",
+          "interfaces": [
+            "route verb 'recovery.packet' with params project_id and optional checkpoint_id -> packet with keys projectId, checkpointId, currentTask, acceptedBaseline, survivingCandidateArtifacts, completedActions, unresolvedEffects, failedChecks, remainingWork, allowance"
+          ],
+          "acceptance": [
+            "the packet names the current task and the remaining allowance",
+            "the packet lists the accepted artifact references and the surviving candidate artifacts",
+            "no raw role transcript or private reasoning appears in the packet",
+            "the same checkpoint and project produce an identical packet",
+            "building the packet records no model or tool execution"
+          ],
+          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
+          "limits": {"wallTimeSeconds": 900}
+        },
+        {
+          "taskId": "ms3-start-reconciliation",
+          "taskRevision": 1,
+          "title": "One start operation that reconciles before it dispatches",
+          "outcome": "First start and restart are the same project.start operation. It takes the project lifecycle lock, reads the last valid checkpoint and the events after it, asks the register which recorded jobs are still alive, rebuilds the workspace from accepted artefacts while keeping unaccepted work as salvage, and either establishes a clean execution boundary or returns a typed outcome and dispatches nothing. A healthy existing run is returned as it stands instead of being duplicated.",
+          "scope": "Only src/progressdesk/runtime.py, src/progressdesk/broker.py and the route table. Do not change the event vocabulary, the definition pipeline or the milestone gate.",
+          "interfaces": [
+            "route verb 'project.start' with params project_id, request_id -> the GO record plus {'reconciliation': {'reconciled': [...], 'removed': [...], 'blockers': [...]}}",
+            "a typed outcome 'recovery_blocked' with evidence when the scene cannot be made clean",
+            "the lifecycle lock is identity checked, so a stale lock is distinguishable from a live one"
+          ],
+          "acceptance": [
+            "starting a project with no registered jobs reports nothing to remove and no blocker",
+            "a registered job that is gone from the operating system is reported as removed, not as running",
+            "a torn final event record is recovered and the recovery is recorded",
+            "an interior corruption of the event log is reported as a blocker and no work is dispatched",
+            "calling project.start twice does not create a second controller for the project",
+            "the start records no model, tool or provider execution of its own"
+          ],
+          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
+          "limits": {"wallTimeSeconds": 900}
+        }
+      ]
+    }
+  ]
+}

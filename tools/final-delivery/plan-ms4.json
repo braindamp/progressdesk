@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "requestId": "progressdesk-ms4-execution-seam-2026-10-20",
+  "spec": "ProgressDesk MS4: the execution seam decides on a contract. Every adapter translates its harness's native shape into one closed vocabulary of conditions, the framework acts on the contract alone, and a condition the framework has never seen is recorded with its evidence and handed to the observer so the vocabulary can grow.",
+  "definitions": {
+    "VISP": "docs/ProgressDesk VISP_v1.11.md",
+    "FUSP": "docs/ProgressDesk FUSP_v1.11.md",
+    "TESP": "docs/ProgressDesk TESP_v1.11.md",
+    "amendments": "docs/IMPLEMENTATION_REPLY_WORKSHOP6_2026-10-20.md"
+  },
+  "source": {
+    "directory": "PLACEHOLDER_MS3_ASSEMBLY",
+    "includePaths": [
+      "src",
+      "config",
+      "installed",
+      "skills",
+      "domain-packs",
+      "docs/ProgressDesk VISP_v1.11.md",
+      "docs/ProgressDesk FUSP_v1.11.md",
+      "docs/ProgressDesk TESP_v1.11.md",
+      "docs/ProgressDesk TESP-S1_Agent-Confinement_v1.1.md",
+      "docs/IMPLEMENTATION_REPLY_WORKSHOP6_2026-10-20.md",
+      "docs/DEVELOPMENT_FULL_DELIVERY_PROGRESSDESK_2026-10-20.md",
+      "docs/WORKSHOP6_COMPOSITION.md",
+      "docs/HANDOVER_PI_CONTINUATION_2026-10-20.md",
+      "framework_processflow.mmd",
+      "framework_processflow.png",
+      "pyproject.toml",
+      "README.md",
+      "AGENTS.md"
+    ]
+  },
+  "milestones": [
+    {
+      "milestoneId": "MS4",
+      "evaluators": ["eval-ms4.json"],
+      "inputs": ["ms4-criteria.json"],
+      "correctionLimit": 3,
+      "signoffPolicy": "automatic",
+      "acceptanceConditions": [
+        "every adapter translates its harness's native shape into the same closed vocabulary of conditions, and the framework decides on the contract alone",
+        "a condition that is unknown is recorded with its evidence, surfaced to the owner, and handed to the observer",
+        "the taxonomy version travels with every classification, so a later reader can tell which rules were in force",
+        "word matching can only narrow an unknown into a known condition; it never changes a known condition and never decides an action",
+        "capacity is never nudged, a provider fault is nudged, and a configuration fault is not",
+        "an adapter that cannot report whether the model answered is refused rather than routed"
+      ],
+      "features": [
+        {
+          "taskId": "ms4-outcome-contract",
+          "taskRevision": 1,
+          "title": "One outcome contract for every adapter",
+          "outcome": "Every adapter reports the same closed vocabulary of conditions and the framework acts on that contract alone. The Pi adapter keeps the harness's own facts - the stop reason, the provider, the model, the response id and the provider's error code - and the OpenCode adapter keeps a structured provider error when it is given one. Neither adapter decides anything: the decision is made in one place, on the contract.",
+          "scope": "New module src/progressdesk/outcomes.py, and the adapters in src/progressdesk/transport.py and src/progressdesk/opencode_transport.py. Do not change the event vocabulary in this feature and do not change the seam's nudge behaviour.",
+          "interfaces": [
+            "progressdesk.outcomes.AdapterReport: the facts one adapter saw - harness, stop reason, raw stop reason, answered, http status, provider code, provider error name, provider, api, model, response id, session ref, exit code, message, harness fault, details",
+            "progressdesk.outcomes.classify(report) -> Outcome with condition, action, resumable, evidence and a digest",
+            "progressdesk.outcomes.CONDITIONS: the closed vocabulary of conditions",
+            "progressdesk.outcomes.ACTIONS: what the framework does with each condition",
+            "progressdesk.outcomes.TAXONOMY_VERSION: the version of the vocabulary and of the word table"
+          ],
+          "acceptance": [
+            "a model that answered is the condition 'answered' whatever else the harness reported",
+            "a provider that ended the generation with an error, with a session to continue, is an interruption and not a failure",
+            "a rate limit or an exhausted quota is a capacity condition and is never nudged",
+            "a refused key, a missing model and a malformed request are configuration conditions and are not nudged",
+            "a harness that exited non-zero, or produced no output at all, is a harness condition",
+            "a condition outside the closed vocabulary cannot be produced",
+            "the classification carries the taxonomy version and a digest of the evidence it rested on"
+          ],
+          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
+          "limits": {"wallTimeSeconds": 900}
+        },
+        {
+          "taskId": "ms4-unknown-condition",
+          "taskRevision": 1,
+          "title": "A condition the framework did not know is recorded and offered to the observer",
+          "outcome": "When an adapter reports a condition the framework does not know, the run is not killed on a guess: the condition is recorded with its full evidence, it is surfaced to the owner, and it is handed to the observer, which may propose that the framework learn it. The vocabulary grows because the framework met something new.",
+          "scope": "src/progressdesk/loop.py, src/progressdesk/events.py (the new event type must be registered there) and the route table in src/progressdesk/runtime.py. Do not change the dispatch path or the milestone gate.",
+          "interfaces": [
+            "event type 'outcome.unknown-condition', producer manager, project scoped, with the condition, the action, the taxonomy version, the outcome digest and the evidence",
+            "the observer's context names the conditions the framework did not know, with their evidence",
+            "the owner surface can read the recorded unknown conditions of a project"
+          ],
+          "acceptance": [
+            "an unknown condition is recorded once as an event with its evidence",
+            "the observer's context names the unknown condition and its evidence",
+            "an unknown condition is not treated as a delivery and not silently discarded",
+            "the recorded condition carries the taxonomy version that was in force"
+          ],
+          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
+          "limits": {"wallTimeSeconds": 900}
+        },
+        {
+          "taskId": "ms4-adapter-declaration",
+          "taskRevision": 1,
+          "title": "An adapter declares what it can report",
+          "outcome": "A registered adapter declares the contract fields it can report, and the framework refuses to route work to an adapter that cannot say whether the model answered. This is the activation bar expressed in terms of the contract, and it applies to every adapter the workshop may add: the supplied Cline runtime and any local harness such as Hermes are activatable only if they can produce it.",
+          "scope": "src/progressdesk/harness.py, src/progressdesk/spawn.py and the route table in src/progressdesk/runtime.py. Do not change the event vocabulary.",
+          "interfaces": [
+            "the executor registry records, per adapter, the contract fields it can report",
+            "routing refuses an adapter that cannot report whether the model answered"
+          ],
+          "acceptance": [
+            "the registry records what each registered adapter can report",
+            "an adapter that cannot report whether the model answered is refused at registration",
+            "the manual adapter reports the contract by hand and is not refused"
+          ],
+          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
+          "limits": {"wallTimeSeconds": 900}
+        }
+      ]
+    }
+  ]
+}

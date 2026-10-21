@@ -1,0 +1,245 @@
+{
+  "schemaVersion": 1,
+  "requestId": "progressdesk-ms2-self-improvement-2026-10-20",
+  "spec": "ProgressDesk MS2: close the self-improvement loop. The lessons brief becomes a bounded, declared projection; a round that never delivered is accounted for; a recorded fix propagates mechanically to every matching target; the researcher is callable by the owner through the gateway; and the owner can put a fact in front of SHARPENER. The two changes already proven in the factory are delivered here into the product.",
+  "definitions": {
+    "VISP": "docs/ProgressDesk VISP_v1.11.md",
+    "FUSP": "docs/ProgressDesk FUSP_v1.11.md",
+    "TESP": "docs/ProgressDesk TESP_v1.11.md",
+    "amendments": "docs/IMPLEMENTATION_REPLY_WORKSHOP6_2026-10-20.md"
+  },
+  "source": {
+    "directory": "D:\\Coding\\progressDesk6-workshop\\scratch\\final-progressdesk-state\\projects\\d20afdcb-7652-5892-9a32-09bdfac5a78c\\milestones\\MS1\\assembled\\8e7a966beae2065cfe361cb9243aea2b0497449ca11843d75b8ce0649005bcb4",
+    "includePaths": [
+      "src",
+      "config",
+      "installed",
+      "skills",
+      "domain-packs",
+      "docs/ProgressDesk VISP_v1.11.md",
+      "docs/ProgressDesk FUSP_v1.11.md",
+      "docs/ProgressDesk TESP_v1.11.md",
+      "docs/ProgressDesk TESP-S1_Agent-Confinement_v1.1.md",
+      "docs/IMPLEMENTATION_REPLY_WORKSHOP6_2026-10-20.md",
+      "docs/DEVELOPMENT_FULL_DELIVERY_PROGRESSDESK_2026-10-20.md",
+      "docs/WORKSHOP6_COMPOSITION.md",
+      "docs/HANDOVER_PI_CONTINUATION_2026-10-20.md",
+      "framework_processflow.mmd",
+      "framework_processflow.png",
+      "pyproject.toml",
+      "README.md",
+      "AGENTS.md"
+    ]
+  },
+  "milestones": [
+    {
+      "milestoneId": "MS2",
+      "evaluators": [
+        "eval-ms2.json"
+      ],
+      "inputs": [
+        "ms2-criteria.json"
+      ],
+      "correctionLimit": 3,
+      "signoffPolicy": "automatic",
+      "acceptanceConditions": [
+        "the lessons section of the context pack is a bounded, declared projection that fits its budget, says what it left out and where the rest lives, and is byte-identical across rounds over an unchanged lesson log",
+        "the lesson log itself is never trimmed and a lesson that does not fit the projection stays retrievable",
+        "a round that never delivered is closed and accounted for, so it cannot block the project, a round with a live process is not closed, and a successful round that changed nothing is still a delivery",
+        "a recorded fix propagates to every target that matches its applicability rule without per-project approval, a repeated application changes nothing, and a recorded supersession replaces the lesser fix",
+        "the owner can run the researcher through the gateway: it files a VISP draft with provenance and evidence that requires a human signoff and authorizes nothing",
+        "the owner can put a fact in front of SHARPENER through the gateway and read what it proposed",
+        "a round's finding judgement carries the involved role's brief and not the whole cast of briefs",
+        "a dispatch that the seam refused reaches SHARPENER as a finding instead of closing silently"
+      ],
+      "features": [
+        {
+          "taskId": "ms2-lessons-projection",
+          "taskRevision": 1,
+          "title": "The lessons brief is a bounded, declared projection",
+          "outcome": "The lessons section of the context pack is derived from the lesson log at pack-build time, is computed to fit its budget, declares what it left out and where the rest lives, and is digest-pinned with the round. The log itself is never trimmed. A pack that still cannot fit is re-projected and retried once, and the over-budget diagnostic reports size, budget and excess separately.",
+          "scope": "Only src/progressdesk/loop.py, src/progressdesk/spawn.py and src/progressdesk/runtime.py. This is the change proposed by the owner-accepted VISP 81adc816-1a3c-4175-98c6-8cd60107e998@1 and already proven in the factory; deliver it into the product. Do not change the event vocabulary.",
+          "interfaces": [
+            "progressdesk.loop.lesson_projection(role, root, budget) -> (text, digest): the newest lessons that fit under the budget, with a footer naming what is not shown and where the complete list and the event log live",
+            "the context pack section 'lessons (not tasks)' carries the projection, never the raw log",
+            "the round.dispatched payload records the projection digest",
+            "the request is built inside the guarded region, so a pack that still cannot fit closes its round as infra-fault",
+            "the over-budget diagnostic names the size, the budget and the excess separately"
+          ],
+          "acceptance": [
+            "the projection of a lesson log larger than the budget is not larger than the budget",
+            "the projection names how many lessons were left out and where the complete list and the event log are",
+            "two projections of an unchanged log are byte-identical and carry the same digest",
+            "the lesson log still contains every lesson that was taught",
+            "a round whose pack cannot be built is closed with an outcome, not left open"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms2-round-accounting",
+          "taskRevision": 1,
+          "title": "Every round is delivered or accounted for",
+          "outcome": "When housekeeping retires a round that never delivered, that round is closed as killed with its work preserved as evidence, so an unaccounted round cannot block the project forever. A round that still has a live process is not closed, and a round the builder has reported on is left to the host to account for. A successful round that changed nothing is still a delivery: the state of the room as it stands is the delivered state.",
+          "scope": "Only src/progressdesk/floor_sweep.py and the candidate-freeze path in src/progressdesk/loop.py. Do not change the event vocabulary and do not change the dispatch path.",
+          "interfaces": [
+            "the debris sweep closes a swept round by recording round.closed with outcome 'killed' and the reason",
+            "a round with a live registered process is not closed by the sweep",
+            "a round the builder has reported on is not swept; the host accounts for it",
+            "a successful round whose builder changed no file freezes the round's baseline as the candidate, so the delivery is the state of the room",
+            "a sweep fact is recorded once; the same finding is not written again at the next boundary",
+            "a brief that is clean records nothing"
+          ],
+          "acceptance": [
+            "after the sweep, a round that never delivered has a round.closed event",
+            "the closed round names the task and the milestone it belonged to",
+            "a round with a live process is left open by the sweep",
+            "a round the builder reported on is not swept and not closed by the sweep",
+            "the swept work is still preserved as evidence",
+            "a successful round that changed nothing records a candidate and closes as a delivery",
+            "the same sweep finding is written to the journal once, not once per boundary",
+            "a brief with no finding records no event"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms2-mechanical-propagation",
+          "taskRevision": 1,
+          "title": "A recorded fix propagates to every matching target",
+          "outcome": "A recorded, already observed fix is applied to every target that matches its applicability rule, without a new per-project approval and without an opt-out. Targets that already carry exactly this fix are skipped; targets carrying a superseded lesser fix count as not yet adopted and receive the replacement. Applying it again changes nothing, and a failed application is visible and terminal.",
+          "scope": "Only src/progressdesk/sharpener.py and the route table in src/progressdesk/runtime.py. The fix facts of TESP 14.1 already exist as a data shape; this adds the executor.",
+          "interfaces": [
+            "route verb 'sharpener.record' with the fix facts of TESP 14.1 -> the recorded fix",
+            "route verb 'sharpener.apply' with params fix_id, targets -> {'applied': [...], 'skipped': [...], 'failed': [...]}",
+            "route verb 'sharpener.supersede' with params fix_id, superseding_fix_id -> the supersession record",
+            "FixRepository.apply(fix, targets) -> the application record, recording application, supersession and failure"
+          ],
+          "acceptance": [
+            "one recorded fix is applied to two matching targets in one call and both applications are recorded",
+            "applying the same fix again changes nothing and records no second application",
+            "a target carrying a superseded fix receives the superseding fix and the supersession is recorded",
+            "a target whose precondition does not match is skipped with a reason and is not modified",
+            "a failed application is recorded as failed and the operation reports it",
+            "the application operation is the executable operation recorded in the fix, not an invented host command"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms2-observer-context",
+          "taskRevision": 1,
+          "title": "The observer judges the finding, not the whole workshop",
+          "outcome": "When a round reports a finding, the observer is given that finding, the brief of the role that reported it and the lessons kept for that role. It is not handed every role brief in the workshop for a single lesson. The full cast stays where a judgement may involve any role: the boundary observation before cleanup.",
+          "scope": "Only src/progressdesk/loop.py and src/progressdesk/runtime.py. Do not change the event vocabulary.",
+          "interfaces": [
+            "the finding judgement does not include the cast of role briefs",
+            "the boundary observation before cleanup still includes the cast",
+            "the observer's judgement still receives the brief of the role that reported the finding"
+          ],
+          "acceptance": [
+            "a round's finding judgement carries the involved role's brief and not the other briefs",
+            "the boundary observation still carries the whole cast",
+            "the observer still judges the finding and can still file a lesson or a proposal"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms2-research-callable",
+          "taskRevision": 1,
+          "title": "The owner can run the researcher through the gateway",
+          "outcome": "The owner can call the research role directly through ProgressDesk, before or after a project completes. It runs in bounded rounds, receives the architecture, the recorded evidence and the declared research tools rather than another role's transcript, and files a VISP draft with provenance for human review. The draft requires a human signoff and authorizes nothing, and nothing in the research path asks a decision model to accept, reject or rank a proposal.",
+          "scope": "Only src/progressdesk/research.py, src/progressdesk/runtime.py, the route table and the RESEARCHER role brief in src/progressdesk/agents/RESEARCHER.md.",
+          "interfaces": [
+            "route verb 'research.submit' with params source_problem_ref, decision_question, evidence_refs, provenance, confidence_estimate, rationale, lab_need_instruction -> the filed draft record",
+            "route verb 'research.run' with params project_id, question, rounds -> {'status','rounds','vispRef','findings'}",
+            "the filed VISP draft carries humanSignoffRequired true, the provenance, the evidence references and the lab-need instruction",
+            "the RESEARCHER role brief states that proposals reach the owner without a decision-model gate"
+          ],
+          "acceptance": [
+            "the filed VISP draft is unsigned and requires a human signoff",
+            "the draft carries its provenance, its evidence references and its lab-need instruction",
+            "research returns no authorization and applies no change",
+            "no step of the research path calls the decision service about a proposal",
+            "the researcher brief no longer tells the role that a decision model decides whether its proposal is real"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms2-sharpener-trigger",
+          "taskRevision": 1,
+          "title": "The owner can put a fact in front of SHARPENER, and a refused dispatch reaches it",
+          "outcome": "The owner can hand a fact to SHARPENER through the gateway and read what it proposed, without depending on a builder round happening first. A dispatch that the seam refused - a context pack that could not be built, a missing tool, refused capacity - reaches SHARPENER as a finding, so a fault the framework caused is visible to the learning path like a fault a model reported.",
+          "scope": "Only src/progressdesk/runtime.py, src/progressdesk/loop.py and the route table.",
+          "interfaces": [
+            "route verb 'sharpener.observe' with params project_id, run_id, fact -> {'invoked': bool, 'action': 'lesson'|'fix'|'visp'|'none', 'proposals': [...]}",
+            "a refused dispatch records a finding that the observer path reads"
+          ],
+          "acceptance": [
+            "sharpener.observe reaches the role and reports what it proposed",
+            "a refused dispatch leaves a finding the observer path can read",
+            "the observation is not a builder gate and does not accept or reject work"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        }
+      ]
+    }
+  ]
+}

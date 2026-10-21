@@ -1,0 +1,14 @@
+{
+  "milestoneId": "MS4",
+  "purpose": "external acceptance instrument for the ProgressDesk core delivery",
+  "criteria": [
+    "every adapter translates its harness's native shape into the same closed vocabulary of conditions, and the framework decides on the contract alone",
+    "a condition that is unknown is recorded with its evidence, surfaced to the owner, and handed to the observer",
+    "the taxonomy version travels with every classification, so a later reader can tell which rules were in force",
+    "word matching can only narrow an unknown into a known condition; it never changes a known condition and never decides an action",
+    "capacity is never nudged, a provider fault is nudged, and a configuration fault is not",
+    "an adapter that cannot report whether the model answered is refused rather than routed"
+  ],
+  "deterministic": true,
+  "instrument": "tools/final-delivery/ms4_gate.py"
+}

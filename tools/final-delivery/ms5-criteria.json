@@ -1,0 +1,13 @@
+{
+  "milestoneId": "MS5",
+  "purpose": "external acceptance instrument for the ProgressDesk core delivery",
+  "criteria": [
+    "a tool is registered with a real verification record that names the actual supported boundary and the checked capability, and is activated and dispatched through the broker",
+    "task packets and checkpoints pin the tool, skill and domain pack versions in force",
+    "domain packs load with their evaluator, input and example references and their rights and provenance references",
+    "a software output and a media output are delivered by the same core, each judged by its own declared evaluator",
+    "the advisory lab request and its result stay associated, and a simulated result is labelled simulated"
+  ],
+  "deterministic": true,
+  "instrument": "tools/final-delivery/ms5_gate.py"
+}

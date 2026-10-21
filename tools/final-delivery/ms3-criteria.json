@@ -1,0 +1,14 @@
+{
+  "milestoneId": "MS3",
+  "purpose": "external acceptance instrument for the ProgressDesk core delivery",
+  "criteria": [
+    "a non-delivered feature is split into exactly two ordinary features or ended in a towel",
+    "a cleanup that cannot finish ends in the red light and is not silently retried",
+    "POLICE classifies typed concrete violation observations and never authorizes or repairs",
+    "the owner can stop a project unconditionally, without POLICE and with a failing journal write, and reports confirmed versus unresolved termination honestly",
+    "a transport interruption resumes the same invocation and consumes no builder attempt",
+    "the absence of a rationale, an empty rationale and an unreadable rationale are three distinct recorded facts, and absence reaches SHARPENER"
+  ],
+  "deterministic": true,
+  "instrument": "tools/final-delivery/ms3_gate.py"
+}

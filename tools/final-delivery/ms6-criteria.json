@@ -1,0 +1,13 @@
+{
+  "milestoneId": "MS6",
+  "purpose": "external acceptance instrument for the ProgressDesk core delivery",
+  "criteria": [
+    "an observed fix reaches every affected target without a per-project approval, a repeated application is not duplicated, and a recorded supersession replaces the lesser fix",
+    "a failed application is visible and terminal and does not silently continue",
+    "research produces a visible unsigned VISP draft with provenance that the owner can read, dismiss or approve, and it cannot authorize its own execution",
+    "a within-contract lesson changes the intended instruction or its version, not only a model reply",
+    "the recorded usage is available and a completed phase can be replayed into a deterministic baseline without inventing performance targets"
+  ],
+  "deterministic": true,
+  "instrument": "tools/final-delivery/ms6_gate.py"
+}

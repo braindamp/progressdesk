@@ -1,0 +1,16 @@
+{
+  "milestoneId": "MS2",
+  "purpose": "external acceptance instrument for the ProgressDesk core delivery",
+  "criteria": [
+    "the lessons section of the context pack is a bounded, declared projection that fits its budget, says what it left out and where the rest lives, and is byte-identical across rounds over an unchanged lesson log",
+    "the lesson log itself is never trimmed and a lesson that does not fit the projection stays retrievable",
+    "a round that never delivered is closed and accounted for, so it cannot block the project, a round with a live process is not closed, and a successful round that changed nothing is still a delivery",
+    "a recorded fix propagates to every target that matches its applicability rule without per-project approval, a repeated application changes nothing, and a recorded supersession replaces the lesser fix",
+    "the owner can run the researcher through the gateway: it files a VISP draft with provenance and evidence that requires a human signoff and authorizes nothing",
+    "the owner can put a fact in front of SHARPENER through the gateway and read what it proposed",
+    "a round's finding judgement carries the involved role's brief and not the whole cast of briefs",
+    "a dispatch that the seam refused reaches SHARPENER as a finding instead of closing silently"
+  ],
+  "deterministic": true,
+  "instrument": "tools/final-delivery/ms2_gate.py"
+}

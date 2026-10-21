@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "kind": "command",
+  "argv": [
+    "C:\\Python313\\python.exe",
+    "D:\\Coding\\progressDesk6-workshop\\tools\\final-delivery\\ms1_gate.py",
+    "{assemblyDirectory}",
+    "{resultFile}"
+  ],
+  "timeoutSeconds": 600
+}
