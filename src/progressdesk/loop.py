@@ -587,10 +587,19 @@ class RoundDispatcher:
             terminal=terminal, earlier=said_while_working,
         )
         if outcome.status == "infra-fault":
-            # Missing tools, candidate workspace, or provider capacity are not
-            # signs that DEXTER's task should be split or the room scrubbed.
-            self._close_round(project_id, outcome, task_id, milestone_id)
-            return outcome
+            # The ladder's entry is a non-delivery, whatever the cause (TESP
+            # 10.6: a non-delivered item, a failed run, a timeout, a vanished
+            # process, a detected governance breach). A feature that is too
+            # large for one attempt is split, and split again, until it is
+            # delivered or unsplittable; the cause of the non-delivery is the
+            # splitter's evidence, not a reason to stop the ladder.
+            #
+            # The one thing that is not a work outcome is a capacity refusal:
+            # nothing ran, so the work is not charged for it and the feature
+            # waits for capacity instead of being split.
+            if not outcome.detail.startswith("blocked_capacity"):
+                outcome = self._route(project_id, task_ref, outcome, tools, actual_role,
+                                      task_id=task_id, milestone_id=milestone_id, packet=packet)
         if not outcome.has_candidate:
             # He said it, in a field, so nobody has to read it. Laya is only
             # asked about a builder who never picked up the channel at all --
