@@ -458,6 +458,11 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": True,
     },
+    "outcome.unknown-condition": {
+        "producers": frozenset({"manager"}),
+        "payload_required": True,
+        "project_scoped": True,
+    },
     "recovery.blocked": {
         "producers": frozenset({"manager"}),
         "payload_required": True,

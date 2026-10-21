@@ -52,6 +52,10 @@ def opencode_jsonl(text: str) -> ParsedRun:
     tools = 0
     errors: list[str] = []
     usage: dict[str, object] = {}
+    error = ""
+    provider_code: str | int | None = None
+    http_status: int | None = None
+    details: dict[str, Any] = {}
     for raw in text.split("\n"):
         line = raw.rstrip("\r")
         if not line.strip():
@@ -94,12 +98,28 @@ def opencode_jsonl(text: str) -> ParsedRun:
         elif kind == "error":
             part = record.get("part")
             message = part.get("error") if isinstance(part, dict) else None
+            raw = record.get("error") if message is None else message
+            if isinstance(raw, dict):
+                # A structured provider error: its code and status are
+                # facts, and its message is evidence.
+                details = dict(raw)
+                code = raw.get("code")
+                if isinstance(code, (str, int)):
+                    provider_code = code
+                status = raw.get("status")
+                if isinstance(status, int):
+                    http_status = status
+                text = raw.get("message")
+                message = text if isinstance(text, str) else str(raw)
             errors.append(str(message or record.get("error") or "provider error"))
+            if not error:
+                error = str(errors[-1])
     detail = f"{len(parts)} assistant text part(s), {tools} tool call(s)"
     if errors:
         detail += "; " + "; ".join(errors)[:400]
     return ParsedRun(output="".join(parts), session_ref=session, detail=detail,
-                     usage=dict(usage))
+                     usage=dict(usage), error=error, provider_code=provider_code,
+                     details=details)
 
 
 def _session_ref(sessions: Path) -> str | None:

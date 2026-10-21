@@ -33,32 +33,11 @@ from .encoding import EncodingFault, argv_for, decode
 from .spawn import ANSWERS, ResultEnvelope, SpawnError, SpawnRequest
 
 __all__ = ["CommandTransport", "ParsedRun", "pi_argv", "pi_jsonl", "pi_transport"]
-
-# Faults the orchestrator must treat as a nudge rather than a failure (§10.2a).
 # A model that answered badly is deliberately not in here: that is the second
 # case and it belongs at the gate.
-_FAULT_WORDS = (
-    "overloaded",
-    "rate limit",
-    "timeout",
-    "timed out",
-    "etimedout",
-    "econnreset",
-    "socket hang up",
-    "empty response",
-    "truncated",
-    # A provider that ends a generation with an error did not answer. The
-    # model did not fail and the work did not fail: the provider did. That is
-    # the case the nudge exists for, and it must not be read as a dead worker
-    # that consumed its attempt.
-    "finish_reason",
-    "provider error",
-    "upstream error",
-)
 # A status code is not a number followed by a unit or a noun. "read 500 lines"
 # and "compilation terminated with status 0" are ordinary output; matching them
 # would bury the faults that matter under every line count in the log.
-_FAULT_CODE = re.compile(r"\b(?:429|5\d\d)\b(?!\s+[a-z])", re.IGNORECASE)
 
 
 _USAGE_COUNTERS = (
@@ -84,13 +63,26 @@ def merge_usage(left: Mapping[str, Any] | None,
 
 @dataclass(frozen=True)
 class ParsedRun:
-    """What one harness run yielded."""
+    """What one harness run yielded.
+
+    The structured facts are kept as facts. The prose is kept as evidence. The
+    decision is made in ``outcomes.classify``, never here.
+    """
 
     output: str
     session_ref: str | None = None
     detail: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    stop_reason: str | None = None
+    raw_stop_reason: str | None = None
+    provider: str | None = None
+    api: str | None = None
+    model: str | None = None
+    response_id: str | None = None
+    provider_code: str | int | None = None
+    provider_error_name: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 def pi_jsonl(text: str) -> ParsedRun:
@@ -104,6 +96,15 @@ def pi_jsonl(text: str) -> ParsedRun:
     parts: list[str] = []
     usage: dict[str, Any] = {}
     error = ""
+    stop_reason: str | None = None
+    raw_stop_reason: str | None = None
+    provider: str | None = None
+    api: str | None = None
+    model: str | None = None
+    response_id: str | None = None
+    provider_code: str | int | None = None
+    provider_error_name: str | None = None
+    details: dict[str, Any] = {}
 
     for raw in text.split("\n"):
         line = raw.rstrip("\r")
@@ -123,8 +124,41 @@ def pi_jsonl(text: str) -> ParsedRun:
             message = record.get("message")
             if not isinstance(message, dict) or message.get("role") != "assistant":
                 continue
-            if message.get("stopReason") in {"error", "aborted"}:
-                error = str(message.get("errorMessage") or message["stopReason"])
+            stop_reason = message.get("stopReason")
+            if isinstance(stop_reason, str):
+                stop_reason = stop_reason
+            raw_stop = message.get("rawStopReason")
+            if isinstance(raw_stop, str):
+                raw_stop_reason = raw_stop
+            for key, name in (("provider", "provider"), ("api", "api"),
+                              ("model", "model"), ("responseId", "response_id")):
+                value = message.get(key)
+                if isinstance(value, str):
+                    if name == "provider":
+                        provider = value
+                    elif name == "api":
+                        api = value
+                    elif name == "model":
+                        model = value
+                    else:
+                        response_id = value
+            # The provider's own error detail: a code and a name, not a phrase.
+            for diagnostic in message.get("diagnostics") or ():
+                if not isinstance(diagnostic, dict):
+                    continue
+                info = diagnostic.get("error")
+                if isinstance(info, dict):
+                    code = info.get("code")
+                    if provider_code is None and isinstance(code, (str, int)):
+                        provider_code = code
+                    name = info.get("name")
+                    if provider_error_name is None and isinstance(name, str):
+                        provider_error_name = name
+                extra = diagnostic.get("details")
+                if isinstance(extra, dict) and not details:
+                    details = extra
+            if stop_reason in {"error", "aborted"}:
+                error = str(message.get("errorMessage") or stop_reason)
             else:
                 error = ""  # Pi may recover through its own provider retry.
             for block in message.get("content") or ():
@@ -146,6 +180,15 @@ def pi_jsonl(text: str) -> ParsedRun:
     return ParsedRun(
         output="".join(parts),
         session_ref=session,
+        stop_reason=stop_reason,
+        raw_stop_reason=raw_stop_reason,
+        provider=provider,
+        api=api,
+        model=model,
+        response_id=response_id,
+        provider_code=provider_code,
+        provider_error_name=provider_error_name,
+        details=details,
         detail=f"{len(parts)} assistant message(s)",
         usage=usage,
         error=error,
@@ -196,11 +239,6 @@ def pi_argv(
     argv += ["--session-id", session_id]
     argv += ["--", f"@{pack}"]
     return tuple(argv)
-
-
-def _looks_like_transport_fault(text: str) -> bool:
-    lowered = text.lower()
-    return any(word in lowered for word in _FAULT_WORDS) or bool(_FAULT_CODE.search(text))
 
 
 class CommandTransport:
@@ -391,54 +429,54 @@ class CommandTransport:
                        "blockedCapacity": bool(terminal_fault and terminal_fault.startswith("blocked_capacity:"))},
                 usage=dict(parsed.usage),
             )
-        if parsed.error:
-            # Pi JSON mode can exit zero after an assistant error. Never turn
-            # that event into a delivery or silently nudge unavailable capacity.
-            capacity = any(word in parsed.error.lower() for word in (
-                "rate limit", "too many requests", "insufficient quota", "usage limit", "429",
-            ))
-            return ResultEnvelope(
-                run_id=req.run_id, kind=self.kind, sandbox=self.sandbox,
-                status="infra-fault" if capacity or not _looks_like_transport_fault(parsed.error) else "interrupted",
-                session_ref=parsed.session_ref, output=parsed.output,
-                wall_ms=wall_ms, exit_code=code,
-                detail=("blocked_capacity: " if capacity else "") + parsed.error[:400],
-                watch={"blockedCapacity": capacity}, usage=dict(parsed.usage),
-            )
-        if code != 0:
-            # A non-zero exit is the only case where the text on stderr is
-            # evidence. On a clean exit it is not: a harness that logs "read 500
-            # lines" has not had a transport fault, and reading it as one would
-            # turn a good run into a nudge.
-            fault = _looks_like_transport_fault(errors)
-            return ResultEnvelope(
-                run_id=req.run_id,
-                kind=self.kind,
-                sandbox=self.sandbox,
-                # The provider failed to answer. The session survives; this is a
-                # nudge, and it costs one message rather than the whole run.
-                status="interrupted" if fault else "infra-fault",
-                session_ref=parsed.session_ref,
-                output=parsed.output,
-                wall_ms=wall_ms,
-                exit_code=code,
-                detail=(parsed.detail or errors.strip())[:400] or "the harness exited non-zero",
-                usage=dict(parsed.usage),
-            )
-        if not parsed.output.strip():
-            # Exited cleanly and said nothing. That is the empty response, which
-            # is a transport fault, not a builder failure.
-            return ResultEnvelope(
-                req.run_id,
-                self.kind,
-                self.sandbox,
-                "interrupted",
-                session_ref=parsed.session_ref,
-                wall_ms=wall_ms,
-                exit_code=code,
-                detail="the harness exited cleanly with no answer",
-                usage=dict(parsed.usage),
-            )
+        # The decision is made on the contract, not on the wording of the
+        # provider's message. A harness that reported an error, a non-zero
+        # exit and an empty answer are three different facts, and each of them
+        # has its own consequence.
+        from . import outcomes
+
+        harness_fault = "exited non-zero" if code != 0 else None
+        if not parsed.error and not parsed.output.strip():
+            harness_fault = "no_output"
+        report = outcomes.AdapterReport(
+            harness="pi",
+            stop_reason=parsed.stop_reason,
+            raw_stop_reason=parsed.raw_stop_reason,
+            answered=bool(parsed.output.strip()),
+            provider_code=parsed.provider_code,
+            provider_error_name=parsed.provider_error_name,
+            provider=parsed.provider,
+            api=parsed.api,
+            model=parsed.model,
+            response_id=parsed.response_id,
+            session_ref=parsed.session_ref,
+            exit_code=code,
+            message=parsed.error or errors.strip(),
+            harness_fault=harness_fault,
+            details=parsed.details,
+        )
+        outcome = outcomes.classify(report)
+        detail = (parsed.error or parsed.detail or errors.strip() or outcome.condition)[:400]
+        if outcome.action == "capacity":
+            detail = "blocked_capacity: " + detail
+        return ResultEnvelope(
+            run_id=req.run_id,
+            kind=self.kind,
+            sandbox=self.sandbox,
+            status=outcome.status,
+            session_ref=parsed.session_ref,
+            output=parsed.output,
+            wall_ms=wall_ms,
+            exit_code=code,
+            detail=detail,
+            watch={
+                "blockedCapacity": outcome.blocked_capacity,
+                "condition": outcome.condition,
+                "outcomeDigest": outcome.digest(),
+                "unknownCondition": outcome.unknown,
+            },
+            usage=dict(parsed.usage),
+        )
         return ResultEnvelope(
             run_id=req.run_id,
             kind=self.kind,

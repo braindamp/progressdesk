@@ -528,6 +528,30 @@ class RoundDispatcher:
                 self._close_round(project_id, refused, task_id, milestone_id)
                 return refused
 
+        # A condition we did not know is recorded with its evidence, and it is a
+        # finding for the observer: the vocabulary grows because the framework
+        # meets something new, not because someone remembered to add a word.
+        unknown_conditions: list[dict[str, Any]] = []
+        watch = getattr(envelope, "watch", None) or {}
+        if watch.get("unknownCondition"):
+            record = {
+                "schemaVersion": 1,
+                "condition": watch.get("condition"),
+                "action": watch.get("action"),
+                "taxonomyVersion": watch.get("taxonomyVersion"),
+                "outcomeDigest": watch.get("outcomeDigest"),
+                "evidence": watch.get("evidence", {}),
+            }
+            unknown_conditions.append(record)
+            self._log.record(
+                "outcome.unknown-condition",
+                producer="manager",
+                payload=json.dumps(record, sort_keys=True, default=str).encode("utf-8"),
+                project_id=project_id,
+                run_id=run,
+                task_ref=task_id,
+            )
+
         # What the builder said while it worked, read back from the log. It is
         # here, not in the envelope, because he may have said it long before the
         # round ended -- including a round that never ended.
@@ -601,6 +625,9 @@ class RoundDispatcher:
             context = "\n".join([
                 "Builder observations (judge lessons or propose a VISP):",
                 json.dumps(findings, ensure_ascii=False),
+                "CONDITIONS THE FRAMEWORK DID NOT KNOW (propose a VISP that names"
+                " them if the framework must learn them):",
+                json.dumps(unknown_conditions, ensure_ascii=False, default=str),
                 "INSTRUCTION TO REVIEW:",
                 involved,
             ])
