@@ -25,3 +25,7 @@ __pycache__/
 # Maintained framework diagram source and its published render.
 !/framework_processflow.mmd
 !/framework_processflow.png
+
+# self-test artifacts of the acceptance instruments
+tools/final-delivery/*-state/
+tools/final-delivery/*-targets/
