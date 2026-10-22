@@ -541,49 +541,37 @@ def describe(report: SweepReport) -> str:
 
 
 class Cleaner:
-    """Runs the sweep, then asks CLEANING_LAYA what to make of it.
+    """Runs the sweep, and the sweep's own result decides.
 
-    She decides; this applies. She is given no tools and can move nothing, so her
-    verdict is what authorises the next round — and it is never a claim that
-    something was already done.
+    The deterministic housekeeping applies what is mechanical and then answers
+    the only question there is: is the scene restartable, or is there something
+    that needs the forensic tier? After it runs the scene is either restartable
+    or it is not, and there is no third answer.
 
-    She is a decision model, not a language model. She is asked one typed
-    question and answers with a probability, so there is no line of text to
-    parse and no way for a correct judgement to be lost to a keyword. The
-    previous arrangement asked a large model for `decision: restartable` and
-    read that one line back: the one recorded run of this role answered
-    `estimate: restartable`, as its own brief instructed, and was recorded as
-    having said nothing at all.
-
-    A service that does not answer is not a room that is clean. An unreachable
-    decision is `no verdict`, which is not a yes, exactly as before.
+    Nothing here asks a model to re-read a description of the room and produce
+    a probability. A decision model was tried here and it was the wrong shape:
+    a number standing between the build and its work, decided from prose about
+    facts the sweep already holds, and it could be stale, unavailable, or
+    simply wrong - each of which stopped a project that had nothing wrong with
+    it. What the sweep could not clear is named instead, and that is what
+    SCHOTTY is for.
     """
 
-    def __init__(
-        self,
-        sweep: Sweep,
-        decide: Callable[[str, str], Any] | None = None,
-    ) -> None:
+    def __init__(self, sweep: Sweep) -> None:
         self.sweep = sweep
-        self._decide = decide
 
     def run(self, project_id: str, *, strength: str = LIGHT) -> Clearance:
         report = self.sweep.script.run(project_id, strength=strength)
-        probability: float | None = None
-        if self._decide is None:
-            verdict, rationale = "no verdict", "no decision seam configured"
+        outstanding = [f"{action.operation}: {action.detail}"
+                        for action in report.actions if action.blocked]
+        outstanding.extend(report.traces)
+        if outstanding:
+            verdict = "needs SCHOTTY"
+            rationale = "; ".join(outstanding)[:400]
         else:
-            try:
-                decision = self._decide(project_id, describe(report))
-                probability = decision.probability
-                if getattr(decision, "truncated", False):
-                    verdict, rationale = "no verdict", "local LAYA truncated the room packet"
-                else:
-                    verdict = "needs SCHOTTY" if decision.above else "restartable"
-                    rationale = decision.detail
-            except Exception as exc:  # noqa: BLE001 - an unasked room is not a clean room
-                verdict, rationale = "no verdict", f"not decided: {exc}"
-        clearance = Clearance(project_id, strength, verdict, rationale, report, probability)
+            verdict = "restartable"
+            rationale = "the sweep cleared everything it found"
+        clearance = Clearance(project_id, strength, verdict, rationale, report, None)
         self.sweep.script.record(
             report,
             "clearance",

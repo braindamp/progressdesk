@@ -199,7 +199,7 @@ class Runtime:
             _write_lock=threading.Lock(),
             execution=_load_execution(root),
         )
-        runtime.cleaner = Cleaner(sweep, runtime.decide_in_room)
+        runtime.cleaner = Cleaner(sweep)
         runtime.ask = runtime.ask_role
         from .jack import run_split
         runtime.split_task = lambda project_id, milestone_id, task_id, failure: run_split(
@@ -988,7 +988,9 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         return {"projectId": project_id, "taskId": task_id,
                 "milestoneId": milestone_id, "status": "not-dispatched",
                 "delivered": False, "error": "room_not_cleared",
-                "detail": "Run project.room.clear when the decision service is available"}
+                "detail": ("the room has outstanding work: "
+                           f"{previous_clearance[-1].get('detail')}. "
+                           "Clear the room before the next round.")}
     tools = tuple(str(item) for item in cmd.get("tools", ()))
     requires = tuple(str(item) for item in cmd.get("requires", ()))
     refusal = _preflight(project_id, tools, requires)
