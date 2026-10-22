@@ -87,6 +87,29 @@ def _payload(rt: Any, event: Any) -> dict[str, Any]:
 PACKET_ITEM_LIMIT = 480
 
 
+def _fit_packet(parts: list[tuple[str, str]], limit: int = LAYA_PACKET_LIMIT) -> str:
+    """Build a packet the decision service can actually read.
+
+    Every part gets a share of what is left, and a part that is cut says so.
+    Nothing is dropped silently: the question is about the shape of the proposal
+    and not about the whole text of it, and the full text stays in the store.
+    """
+    headers = sum(len(header) + 2 for header, _ in parts)
+    room = max(0, limit - headers)
+    if not parts:
+        return ""
+    share = max(120, room // len(parts))
+    marker = " ... (cut for the decision service; the full text is in the store)"
+    lines: list[str] = []
+    for header, body in parts:
+        if len(body) <= share:
+            lines.append(f"{header}\n{body}")
+            continue
+        kept = body[:max(0, share - len(marker))].rstrip()
+        lines.append(f"{header}\n{kept}{marker}")
+    return "\n\n".join(lines)
+
+
 def _proposal_text(feature: dict[str, Any], limit: int = PACKET_ITEM_LIMIT) -> str:
     title = str(feature.get("title") or "").strip()
     outcome = str(feature.get("outcome") or "").strip()
@@ -238,13 +261,10 @@ class JackGateway:
                 "decision": None, "applied": None,
             })
             raise JackRejected(str(exc)) from exc
-        packet = "\n".join([
-            "INCOMING FEATURE",
-            _proposal_text(current),
-            "PROPOSED PART 1",
-            _proposal_text(halves[0]),
-            "PROPOSED PART 2",
-            _proposal_text(halves[1]),
+        packet = _fit_packet([
+            ("INCOMING FEATURE", _proposal_text(current)),
+            ("PROPOSED PART 1", _proposal_text(halves[0])),
+            ("PROPOSED PART 2", _proposal_text(halves[1])),
         ])
         base = {
             "operation": "feature_split", "invocationId": invocation_id,
@@ -324,12 +344,11 @@ class JackGateway:
             })
             raise JackRejected(str(exc)) from exc
         problem = _text(request.get("problem"), "problem")
-        packet = "\n".join([
-            "MILESTONE PROBLEM",
-            problem,
-            "PROPOSED CORRECTIVE FEATURES",
-            *[f"{index + 1}. {_proposal_text(feature)}" for index, feature in enumerate(features)],
-        ])
+        packet = _fit_packet(
+            [("MILESTONE PROBLEM", problem)]
+            + [(f"PROPOSED CORRECTIVE FEATURE {index + 1}", _proposal_text(feature))
+               for index, feature in enumerate(features)]
+        )
         base = {
             "operation": "milestone_correction", "invocationId": invocation_id,
             "attempt": attempt, "projectId": project_id,
