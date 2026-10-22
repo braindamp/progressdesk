@@ -112,7 +112,9 @@ def planned_definition_refs(runtime: Any, project_id: str) -> dict[str, str]:
     """The approved chain, read from the project's own plan record.
 
     The repository's Markdown files are not the authority: only the pinned
-    definition artifacts are.
+    definition artifacts are. A project with no plan record has no approved
+    chain to draw from, and a feature that asks for no excerpts does not need
+    one - so this returns what exists and lets the excerpt path refuse.
     """
     refs: dict[str, str] = {}
     for event in runtime.log.read_all():
@@ -122,12 +124,6 @@ def planned_definition_refs(runtime: Any, project_id: str) -> dict[str, str]:
         for kind, value in (payload.get("definitionRefs") or {}).items():
             if isinstance(value, str) and value.strip():
                 refs[str(kind)] = value.strip()
-    if not refs:
-        raise ContextCompilationError(
-            "context_source_missing",
-            f"project {project_id!r} has no approved definition chain to draw from",
-            projectId=project_id,
-        )
     return refs
 
 
