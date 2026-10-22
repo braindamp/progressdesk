@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "models": {
+    "minimax/minimax-m3.1-flash:free": {
+      "modelId": "minimax/minimax-m3.1-flash:free",
+      "provider": "openrouter",
+      "transport": "pi"
+    },
+    "deepseek-v4.1-flash-free": {
+      "modelId": "deepseek-v4.1-flash-free",
+      "provider": "opencode",
+      "transport": "opencode"
+    },
+    "laya-systemone": {
+      "modelId": "laya-systemone",
+      "provider": "local",
+      "transport": "systemone"
+    }
+  },
+  "roles": {
+    "DEXTER": "minimax/minimax-m3.1-flash:free",
+    "DEE_DEE": "minimax/minimax-m3.1-flash:free",
+    "JACK_THE_SPLITTER": "minimax/minimax-m3.1-flash:free",
+    "SCHOTTY": "minimax/minimax-m3.1-flash:free",
+    "CLEANING_LAYA": "laya-systemone",
+    "SHARPENER": "minimax/minimax-m3.1-flash:free",
+    "POLICE": "minimax/minimax-m3.1-flash:free"
+  }
+}
