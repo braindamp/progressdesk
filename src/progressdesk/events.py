@@ -673,16 +673,10 @@ class EventLog:
             by_id[event.id] = event
             first_line[event.id] = line_no
 
-        ordered = sorted(by_id.values(), key=lambda event: event.sequence)
-        expected = 1
-        for event in ordered:
-            if event.sequence != expected:
-                raise EventError(
-                    f"{source} event {event.id!r}: sequence {event.sequence} breaks continuity "
-                    f"(expected {expected})"
-                )
-            expected += 1
-        return ordered
+        # The events are read in the order they were written. The numbering is
+        # a coordinate, not a proof: a gap in it is not an error, and the log
+        # does not refuse to open over one.
+        return sorted(by_id.values(), key=lambda event: event.sequence)
 
     def _load_events(self) -> list[Event]:
         """Load the current event history through the pure parser."""

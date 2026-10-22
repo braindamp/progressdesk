@@ -34,8 +34,12 @@
   "milestones": [
     {
       "milestoneId": "MS3",
-      "evaluators": ["eval-ms3.json"],
-      "inputs": ["ms3-criteria.json"],
+      "evaluators": [
+        "eval-ms3.json"
+      ],
+      "inputs": [
+        "ms3-criteria.json"
+      ],
       "correctionLimit": 3,
       "signoffPolicy": "automatic",
       "acceptanceConditions": [
@@ -45,7 +49,10 @@
         "the same checkpoint and the same project produce the same recovery packet",
         "project.start is the only start operation: it reconciles the registered jobs and unresolved actions, establishes a clean execution boundary or returns a typed outcome, and never creates a second controller",
         "a torn final record is recovered and an interior corruption is reported as a blocker instead of a reset to ready",
-        "replay performs no model, tool or provider call"
+        "replay performs no model, tool or provider call",
+        "a log with a gap in the numbering opens and reads in order",
+        "a round that does not deliver is split rather than abandoned",
+        "a successful round that changed nothing is a delivery"
       ],
       "features": [
         {
@@ -66,8 +73,17 @@
             "a checkpoint manifest is derived from the event log, not from a second state store",
             "re-reading a checkpoint returns exactly the recorded manifest"
           ],
-          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
-          "limits": {"wallTimeSeconds": 900}
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
         },
         {
           "taskId": "ms3-recovery-packet",
@@ -85,8 +101,17 @@
             "the same checkpoint and project produce an identical packet",
             "building the packet records no model or tool execution"
           ],
-          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
-          "limits": {"wallTimeSeconds": 900}
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
         },
         {
           "taskId": "ms3-start-reconciliation",
@@ -107,8 +132,97 @@
             "calling project.start twice does not create a second controller for the project",
             "the start records no model, tool or provider execution of its own"
           ],
-          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
-          "limits": {"wallTimeSeconds": 900}
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms3-log-order",
+          "taskRevision": 1,
+          "title": "The log is read in the order it was written",
+          "outcome": "The event log is read in the order it was written. The numbering is a coordinate, not a proof: a gap in it is not an error, and the log does not refuse to open over one. A duplicate event id with different content is still refused, because that is one fact claimed twice.",
+          "scope": "Only src/progressdesk/events.py.",
+          "interfaces": [
+            "the reader orders the events and returns them, with no rule about the spacing of the numbers",
+            "a repeated event id with identical content is folded into one event"
+          ],
+          "acceptance": [
+            "a log with a gap in the numbering opens and reads in order",
+            "a repeated event id with different content is refused",
+            "a torn final record is still left for the housekeeping to repair"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms3-ladder",
+          "taskRevision": 1,
+          "title": "Any non-delivery enters the split ladder",
+          "outcome": "A feature that does not deliver is split, and split again, until it is delivered or unsplittable. The cause of the non-delivery is the splitter's evidence, not a reason to stop: a feature that was too large for one attempt is exactly the case the split is for.",
+          "scope": "Only src/progressdesk/loop.py.",
+          "interfaces": [
+            "a round that ends without a delivery enters the split path",
+            "a capacity refusal is not a work outcome and pauses instead"
+          ],
+          "acceptance": [
+            "a round that was cut off short is split rather than abandoned",
+            "a split that is applied leaves two ordinary features in the plan",
+            "a feature that cannot be split ends in the towel"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms3-no-change-delivery",
+          "taskRevision": 1,
+          "title": "A round that changed nothing is a delivery",
+          "outcome": "A builder that reports success and changed nothing has still delivered: the feature is present in the room as it stands, and the room's state is the delivery. A feature that was already implemented must not be impossible to deliver.",
+          "scope": "Only src/progressdesk/loop.py and src/progressdesk/workspace.py.",
+          "interfaces": [
+            "a successful round with no changed files freezes the room's state as the candidate"
+          ],
+          "acceptance": [
+            "a successful round that changed nothing records a candidate and closes as a delivery",
+            "the assembly contains the room's state",
+            "a round that changed files still delivers only those files"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
         }
       ]
     }

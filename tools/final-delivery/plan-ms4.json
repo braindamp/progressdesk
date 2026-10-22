@@ -63,7 +63,8 @@
             "progressdesk.outcomes.classify(report) -> Outcome with condition, action, resumable, evidence and a digest",
             "progressdesk.outcomes.CONDITIONS: the closed vocabulary of conditions",
             "progressdesk.outcomes.ACTIONS: what the framework does with each condition",
-            "progressdesk.outcomes.TAXONOMY_VERSION: the version of the vocabulary and of the word table"
+            "progressdesk.outcomes.TAXONOMY_VERSION: the version of the vocabulary and of the word table",
+            "the adapter reports how many turns finished, so a session cut off mid-generation is told apart from one that answered and then failed"
           ],
           "acceptance": [
             "a model that answered is the condition 'answered' whatever else the harness reported",
@@ -72,7 +73,8 @@
             "a refused key, a missing model and a malformed request are configuration conditions and are not nudged",
             "a harness that exited non-zero, or produced no output at all, is a harness condition",
             "a condition outside the closed vocabulary cannot be produced",
-            "the classification carries the taxonomy version and a digest of the evidence it rested on"
+            "the classification carries the taxonomy version and a digest of the evidence it rested on",
+            "a session that never finished a turn is an interruption and is nudged, not a harness failure"
           ],
           "allowedToolRefs": [
             "read",
