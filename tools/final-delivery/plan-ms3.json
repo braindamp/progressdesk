@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "requestId": "progressdesk-ms3-durability-2026-10-20",
-  "spec": "ProgressDesk MS3: durable progress. Named immutable checkpoints, a deterministic recovery packet, and one start operation that reconciles the registered jobs and unresolved actions before it dispatches anything. The checkpoint is an acceleration and recovery aid, never a second authority.",
+  "requestId": "progressdesk-ms3-durability-2026-10-22",
+  "spec": "ProgressDesk MS3: durable progress. Named immutable checkpoints, a deterministic recovery packet, a split ladder that a too-large feature cannot escape, and a baseline that a completed phase replays into. The context a builder is handed is now feature-scoped, so each feature names the approved specification excerpts it needs.",
   "definitions": {
     "VISP": "docs/ProgressDesk VISP_v1.11.md",
     "FUSP": "docs/ProgressDesk FUSP_v1.11.md",
@@ -9,7 +9,7 @@
     "amendments": "docs/IMPLEMENTATION_REPLY_WORKSHOP6_2026-10-20.md"
   },
   "source": {
-    "directory": "PLACEHOLDER_MS2_ASSEMBLY",
+    "directory": "D:/Coding/progressDesk6-workshop",
     "includePaths": [
       "src",
       "config",
@@ -22,8 +22,7 @@
       "docs/ProgressDesk TESP-S1_Agent-Confinement_v1.1.md",
       "docs/IMPLEMENTATION_REPLY_WORKSHOP6_2026-10-20.md",
       "docs/DEVELOPMENT_FULL_DELIVERY_PROGRESSDESK_2026-10-20.md",
-      "docs/WORKSHOP6_COMPOSITION.md",
-      "docs/HANDOVER_PI_CONTINUATION_2026-10-20.md",
+      "docs/ProgressDesk_Feature_Scoped_Context_Spec_v0.1.md",
       "framework_processflow.mmd",
       "framework_processflow.png",
       "pyproject.toml",
@@ -34,232 +33,95 @@
   "milestones": [
     {
       "milestoneId": "MS3",
-      "evaluators": [
-        "eval-ms3.json"
-      ],
-      "inputs": [
-        "ms3-criteria.json"
-      ],
+      "evaluators": ["eval-ms3.json"],
+      "inputs": ["ms3-criteria.json"],
       "correctionLimit": 3,
       "signoffPolicy": "automatic",
       "acceptanceConditions": [
         "a checkpoint manifest names the project, the journal sequence it was derived from, the definition references in force, the accepted artifact manifest, the tool, skill and domain version references in force, the task and milestone state and the pending actions",
-        "a checkpoint is immutable and derived from one recorded event position, and a second checkpoint with the same name is refused",
-        "the recovery packet names the current task, the accepted baseline, surviving candidate artifacts, completed actions, unresolved effects, failed checks, remaining work and the allowance, and carries no role transcript or private reasoning",
-        "the same checkpoint and the same project produce the same recovery packet",
-        "project.start is the only start operation: it reconciles the registered jobs and unresolved actions, establishes a clean execution boundary or returns a typed outcome, and never creates a second controller",
-        "a torn final record is recovered and an interior corruption is reported as a blocker instead of a reset to ready",
-        "replay performs no model, tool or provider call",
-        "a log with a gap in the numbering opens and reads in order",
-        "a round that does not deliver is split rather than abandoned",
-        "a successful round that changed nothing is a delivery",
-        "the deterministic housekeeping decides whether the room is restartable, and no model is asked",
-        "a completed phase replays into a deterministic baseline with no invented value"
+        "a checkpoint is immutable, a second checkpoint with the same name is refused, and a milestone boundary creates one",
+        "the recovery packet names the current task, the accepted baseline, surviving candidate artifacts, completed actions, unresolved effects, failed checks, remaining work and the allowance, and carries no role transcript",
+        "the same checkpoint and project produce the same recovery packet",
+        "a feature that does not deliver is split, and split again, until it is delivered or unsplittable",
+        "a completed phase replays into a deterministic baseline of measured usage, with unmeasured values left unknown",
+        "the context a builder receives names the approved specification excerpts the feature asked for, and the milestone gate still judges the whole accepted contract"
       ],
       "features": [
         {
           "taskId": "ms3-checkpoint-store",
           "taskRevision": 1,
           "title": "Named immutable checkpoints",
-          "outcome": "ProgressDesk can create and list named immutable checkpoints, on command and at a milestone boundary. Each manifest records the project, the journal sequence it was derived from, the definition references in force, the accepted artifact manifest, the tool, skill and domain version references in force, the task and milestone state and the pending actions. A checkpoint is an acceleration and recovery aid, never a second authority: everything in it is derived from the event log and the artifact store.",
-          "scope": "New module src/progressdesk/checkpoints.py and the route table in src/progressdesk/runtime.py. Reuse the existing event log and artifact store; do not create a second store and do not change the event vocabulary.",
+          "outcome": "ProgressDesk can create and list named immutable checkpoints, on command and at a milestone boundary. Each manifest records the project, the journal sequence it was derived from, the definition references in force, the accepted artifact manifest, the tool, skill and domain version references in force, the task and milestone state, and the pending actions.",
+          "scope": "A new module src/progressdesk/checkpoints.py and the route table in src/progressdesk/runtime.py. Reuse the existing event log and artifact store; do not create a second store and do not change the event vocabulary.",
           "interfaces": [
             "route verb 'checkpoint.create' with params project_id, name -> manifest with keys checkpointId, projectId, name, journalSequence, definitionRefs, acceptedArtifactManifestRef, toolSkillDomainVersionRefs, taskAndMilestoneStateRef, pendingActionRefs, createdAt",
             "route verb 'checkpoint.list' with params project_id -> {'checkpoints': [manifest...]}",
-            "a milestone boundary creates a checkpoint of that milestone without a separate command"
+            "a milestone boundary creates a checkpoint of that milestone"
           ],
           "acceptance": [
-            "a created checkpoint manifest contains every named field and its journalSequence equals the sequence of the last event read when it was created",
-            "creating a checkpoint with a name that already exists for that project is refused and records nothing",
+            "a created checkpoint manifest contains every named field",
+            "its journalSequence is the sequence of the last event read when it was created",
+            "creating a checkpoint with a name that already exists is refused and records nothing",
             "checkpoint.list returns the checkpoints of that project only, oldest first",
-            "a checkpoint manifest is derived from the event log, not from a second state store",
-            "re-reading a checkpoint returns exactly the recorded manifest"
+            "a milestone boundary creates a checkpoint without a separate command"
           ],
-          "allowedToolRefs": [
-            "read",
-            "write",
-            "edit",
-            "bash",
-            "glob",
-            "grep"
+          "contextRefs": [
+            {"kind": "TESP", "selector": "section:11.2"},
+            {"kind": "FUSP", "selector": "requirement:F-M1"}
           ],
-          "limits": {
-            "wallTimeSeconds": 900
-          }
+          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
+          "limits": {"wallTimeSeconds": 900}
         },
         {
           "taskId": "ms3-recovery-packet",
           "taskRevision": 1,
           "title": "The deterministic recovery packet",
-          "outcome": "A fresh worker can continue recorded work from a recovery packet that names the current task, the accepted baseline, surviving candidate artifacts, completed actions, unresolved effects, failed checks, remaining work and the remaining allowance. It is assembled deterministically, without a model, and carries no private model reasoning and no role transcript.",
-          "scope": "New module src/progressdesk/recovery.py and the route table in src/progressdesk/runtime.py. Read the event log and the artifact store only.",
+          "outcome": "A fresh worker can continue recorded work from a recovery packet that names the current task, the accepted baseline, surviving candidate artifacts, completed actions, unresolved effects, failed checks, remaining work and the remaining allowance. It is assembled deterministically, without a model, and it carries no private model reasoning and no role transcript.",
+          "scope": "A new module src/progressdesk/recovery.py and the route table in src/progressdesk/runtime.py. Read the event log and the artifact store only.",
           "interfaces": [
             "route verb 'recovery.packet' with params project_id and optional checkpoint_id -> packet with keys projectId, checkpointId, currentTask, acceptedBaseline, survivingCandidateArtifacts, completedActions, unresolvedEffects, failedChecks, remainingWork, allowance"
           ],
           "acceptance": [
             "the packet names the current task and the remaining allowance",
             "the packet lists the accepted artifact references and the surviving candidate artifacts",
-            "no raw role transcript or private reasoning appears in the packet",
-            "the same checkpoint and project produce an identical packet",
+            "no role transcript appears in the packet",
+            "the same checkpoint and project produce the same packet",
             "building the packet records no model or tool execution"
           ],
-          "allowedToolRefs": [
-            "read",
-            "write",
-            "edit",
-            "bash",
-            "glob",
-            "grep"
+          "contextRefs": [
+            {"kind": "TESP", "selector": "section:11.3"}
           ],
-          "limits": {
-            "wallTimeSeconds": 900
-          }
+          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
+          "limits": {"wallTimeSeconds": 900}
         },
         {
-          "taskId": "ms3-start-reconciliation",
+          "taskId": "ms3-split-ladder",
           "taskRevision": 1,
-          "title": "One start operation that reconciles before it dispatches",
-          "outcome": "First start and restart are the same project.start operation. It takes the project lifecycle lock, reads the last valid checkpoint and the events after it, asks the register which recorded jobs are still alive, rebuilds the workspace from accepted artefacts while keeping unaccepted work as salvage, and either establishes a clean execution boundary or returns a typed outcome and dispatches nothing. A healthy existing run is returned as it stands instead of being duplicated.",
-          "scope": "Only src/progressdesk/runtime.py, src/progressdesk/broker.py and the route table. Do not change the event vocabulary, the definition pipeline or the milestone gate.",
-          "interfaces": [
-            "route verb 'project.start' with params project_id, request_id -> the GO record plus {'reconciliation': {'reconciled': [...], 'removed': [...], 'blockers': [...]}}",
-            "a typed outcome 'recovery_blocked' with evidence when the scene cannot be made clean",
-            "the lifecycle lock is identity checked, so a stale lock is distinguishable from a live one"
-          ],
-          "acceptance": [
-            "starting a project with no registered jobs reports nothing to remove and no blocker",
-            "a registered job that is gone from the operating system is reported as removed, not as running",
-            "a torn final event record is recovered and the recovery is recorded",
-            "an interior corruption of the event log is reported as a blocker and no work is dispatched",
-            "calling project.start twice does not create a second controller for the project",
-            "the start records no model, tool or provider execution of its own"
-          ],
-          "allowedToolRefs": [
-            "read",
-            "write",
-            "edit",
-            "bash",
-            "glob",
-            "grep"
-          ],
-          "limits": {
-            "wallTimeSeconds": 900
-          }
-        },
-        {
-          "taskId": "ms3-log-order",
-          "taskRevision": 1,
-          "title": "The log is read in the order it was written",
-          "outcome": "The event log is read in the order it was written. The numbering is a coordinate, not a proof: a gap in it is not an error, and the log does not refuse to open over one. A duplicate event id with different content is still refused, because that is one fact claimed twice.",
-          "scope": "Only src/progressdesk/events.py.",
-          "interfaces": [
-            "the reader orders the events and returns them, with no rule about the spacing of the numbers",
-            "a repeated event id with identical content is folded into one event"
-          ],
-          "acceptance": [
-            "a log with a gap in the numbering opens and reads in order",
-            "a repeated event id with different content is refused",
-            "a torn final record is still left for the housekeeping to repair"
-          ],
-          "allowedToolRefs": [
-            "read",
-            "write",
-            "edit",
-            "bash",
-            "glob",
-            "grep"
-          ],
-          "limits": {
-            "wallTimeSeconds": 900
-          }
-        },
-        {
-          "taskId": "ms3-ladder",
-          "taskRevision": 1,
-          "title": "Any non-delivery enters the split ladder",
-          "outcome": "A feature that does not deliver is split, and split again, until it is delivered or unsplittable. The cause of the non-delivery is the splitter's evidence, not a reason to stop: a feature that was too large for one attempt is exactly the case the split is for.",
-          "scope": "Only src/progressdesk/loop.py.",
+          "title": "A feature that does not deliver is split, and split again",
+          "outcome": "A feature that does not deliver is split into two ordinary features, and a half that still does not deliver is split again, until the work is delivered or the feature is unsplittable. The cause of the non-delivery is the splitter's evidence, not a reason to stop the ladder.",
+          "scope": "Only src/progressdesk/loop.py. The split itself already exists in src/progressdesk/jack.py and src/progressdesk/feature_list.py; this is the entry that routes a non-delivery into it.",
           "interfaces": [
             "a round that ends without a delivery enters the split path",
-            "a capacity refusal is not a work outcome and pauses instead"
+            "a capacity refusal is not a work outcome and pauses instead of splitting"
           ],
           "acceptance": [
             "a round that was cut off short is split rather than abandoned",
-            "a split that is applied leaves two ordinary features in the plan",
-            "a feature that cannot be split ends in the towel"
+            "an applied split leaves two ordinary features in the plan",
+            "a capacity refusal does not split the feature",
+            "the split context carries the feature's own contract and the milestone's obligations"
           ],
-          "allowedToolRefs": [
-            "read",
-            "write",
-            "edit",
-            "bash",
-            "glob",
-            "grep"
+          "contextRefs": [
+            {"kind": "FUSP", "selector": "requirement:F-R16"}
           ],
-          "limits": {
-            "wallTimeSeconds": 900
-          }
-        },
-        {
-          "taskId": "ms3-no-change-delivery",
-          "taskRevision": 1,
-          "title": "A round that changed nothing is a delivery",
-          "outcome": "A builder that reports success and changed nothing has still delivered: the feature is present in the room as it stands, and the room's state is the delivery. A feature that was already implemented must not be impossible to deliver.",
-          "scope": "Only src/progressdesk/loop.py and src/progressdesk/workspace.py.",
-          "interfaces": [
-            "a successful round with no changed files freezes the room's state as the candidate"
-          ],
-          "acceptance": [
-            "a successful round that changed nothing records a candidate and closes as a delivery",
-            "the assembly contains the room's state",
-            "a round that changed files still delivers only those files"
-          ],
-          "allowedToolRefs": [
-            "read",
-            "write",
-            "edit",
-            "bash",
-            "glob",
-            "grep"
-          ],
-          "limits": {
-            "wallTimeSeconds": 900
-          }
-        },
-        {
-          "taskId": "ms3-room-decision",
-          "taskRevision": 1,
-          "title": "The housekeeping decides whether the room is restartable",
-          "outcome": "The deterministic housekeeping decides. It applies what is mechanical, and what it could not clear is named and handed to SCHOTTY. No model is asked whether the room is clean, and no probability stands between a round and the work: a verdict that is stale, unavailable or wrong must not be able to stop a project that has nothing wrong with it.",
-          "scope": "Only src/progressdesk/floor_sweep.py and src/progressdesk/runtime.py.",
-          "interfaces": [
-            "the cleaner decides from the sweep's own result: restartable, or what it could not clear",
-            "the dispatch refuses only when the room has outstanding work, and names it"
-          ],
-          "acceptance": [
-            "a room the sweep cleared is restartable without any other party being asked",
-            "a room the sweep could not clear names what is outstanding and goes to SCHOTTY",
-            "the dispatch refusal names the outstanding work instead of a service",
-            "no decision model is consulted to decide whether the room is clean"
-          ],
-          "allowedToolRefs": [
-            "read",
-            "write",
-            "edit",
-            "bash",
-            "glob",
-            "grep"
-          ],
-          "limits": {
-            "wallTimeSeconds": 900
-          }
+          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
+          "limits": {"wallTimeSeconds": 900}
         },
         {
           "taskId": "ms3-baseline-replay",
           "taskRevision": 1,
           "title": "A completed phase replays into a deterministic baseline",
-          "outcome": "A completed phase can be replayed into a baseline: the recorded usage of every actual execution, with only measured values and unknown ones left unknown. Replaying the same phase twice gives the same baseline, and the baseline names no score, no ranking and no goal - a target is the owner's to set, and only after a baseline exists.",
-          "scope": "Only a new read-only module src/progressdesk/baseline.py and the route table in src/progressdesk/runtime.py.",
+          "outcome": "A completed phase replays into a baseline: the recorded usage of every actual execution, with only measured values and unknown ones left unknown. Replaying the same phase twice gives the same baseline, and the baseline names no score, no ranking and no goal - a target is the owner's to set, and only after a baseline exists.",
+          "scope": "A new read-only module src/progressdesk/baseline.py and the route table in src/progressdesk/runtime.py.",
           "interfaces": [
             "route verb 'baseline.replay' with params project_id -> {'phase': str, 'rows': [...], 'totals': {...}}",
             "one row per recorded execution of the phase"
@@ -270,17 +132,11 @@
             "replaying the same phase twice gives the same baseline",
             "the baseline contains no score, ranking or goal value"
           ],
-          "allowedToolRefs": [
-            "read",
-            "write",
-            "edit",
-            "bash",
-            "glob",
-            "grep"
+          "contextRefs": [
+            {"kind": "FUSP", "selector": "requirement:F-E7"}
           ],
-          "limits": {
-            "wallTimeSeconds": 900
-          }
+          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
+          "limits": {"wallTimeSeconds": 900}
         }
       ]
     }

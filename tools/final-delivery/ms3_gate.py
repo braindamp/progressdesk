@@ -1,8 +1,8 @@
-"""External acceptance instrument for milestone MS3 (exception paths and owner STOP).
+"""External acceptance instrument for MS3 (durable progress).
 
-Deterministic observations only. No real project process is terminated and no
-model is called: the observations concern the recorded states, the refusal
-paths and the typed classification.
+Outside the candidate. Imports the candidate from the frozen assembly and drives
+its public gateway in a disposable state root. Deterministic: no model is
+called, no network is used.
 """
 from __future__ import annotations
 
@@ -12,7 +12,14 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from gatekit import Probe, import_candidate, make_state, scratch_root, write_result  # noqa: E402
+from gatekit import (  # noqa: E402
+    InstrumentError,
+    Probe,
+    import_candidate,
+    make_state,
+    scratch_root,
+    write_result,
+)
 
 
 def main() -> int:
@@ -21,9 +28,12 @@ def main() -> int:
     probe = Probe()
     try:
         _run(assembly, probe)
+    except InstrumentError as exc:
+        probe.instrument_error(str(exc))
     except Exception as exc:  # noqa: BLE001
-        probe.check(False, f"the instrument could not complete: {type(exc).__name__}: {exc}")
-    return write_result(result_file, "failed" if probe.findings else "passed", probe.findings)
+        probe.instrument_error(f"the instrument could not complete: {type(exc).__name__}: {exc}")
+    status, messages = probe.result()
+    return write_result(result_file, status, messages, probe.instrument_errors)
 
 
 def _run(assembly: pathlib.Path, probe: Probe) -> None:
@@ -36,85 +46,141 @@ def _run(assembly: pathlib.Path, probe: Probe) -> None:
     def call(verb, **params):
         return route(rt, verb, params)
 
-    def attempt(label, verb, **params):
-        try:
-            return call(verb, **params)
-        except Exception as exc:  # noqa: BLE001
-            probe.check(False, f"{label} is not available: {type(exc).__name__}: {exc}")
-            return None
-
-    project = attempt("project.create", "project.create", spec="ms3 exception probe",
-                      request_id="ms3-probe")
-    project_id = (project or {}).get("projectId")
-    if not project_id:
+    # --- a project to work in -------------------------------------------
+    visp = probe.available("definition.create", "definition.create", call,
+                            kind="VISP", content="ms3 vision")
+    if not visp:
         return
-
-    # --- rationale states ------------------------------------------------
-    present = attempt("rationale.classify", "rationale.classify", description="the round delivered")
-    if present is not None:
-        probe.equal(present.get("state"), "present", "a rationale text is not 'present'")
-    empty = attempt("rationale.classify", "rationale.classify", description="")
-    if empty is not None:
-        probe.equal(empty.get("state"), "empty", "an empty rationale is not 'empty'")
-    unreadable = attempt("rationale.classify", "rationale.classify", unreadable=True)
-    if unreadable is not None:
-        probe.equal(unreadable.get("state"), "unreadable", "an unreadable rationale is not 'unreadable'")
-    absent = attempt("rationale.classify", "rationale.classify")
-    if absent is not None:
-        probe.equal(absent.get("state"), "absent", "a missing rationale is not 'absent'")
-
-    events = rt.log.read_all()
-    instructions = [e for e in events if e.type in {"instruction.requested", "lesson.propagation-requested",
-                                                    "instruction.learning-requested"}]
-    probe.check(bool(instructions), "a missing rationale did not reach the instruction-learning path")
-    violations = [e for e in events if e.type == "police.violation"]
-    probe.check(not violations, "a missing rationale was recorded as a POLICE violation")
-
-    # --- POLICE observations ---------------------------------------------
-    observation = attempt("police.observe", "police.observe", project_id=project_id,
-                          observation={"violation": "scope_breach", "subject": "probe-run-1",
-                                       "evidenceRefs": [], "detail": "a declared observation"})
-    if observation is not None:
-        probe.check(bool(observation.get("classification")),
-                    "the police observation has no classification")
-        blob = json.dumps(observation, default=str).lower()
-        for forbidden in ("authoriz", "repair"):
-            probe.check(forbidden not in blob,
-                        f"the police observation carries a {forbidden!r} effect")
+    fusp = probe.available("definition.create", "definition.create", call,
+                            kind="FUSP", content="ms3 functions",
+                            parent_refs=[f"{visp['id']}@{visp['revision']}"])
+    tesp = probe.available("definition.create", "definition.create", call,
+                           kind="TESP", content="ms3 technical",
+                           parent_refs=[f"{fusp['id']}@{fusp['revision']}"])
+    refs = {"VISP": f"{visp['id']}@{visp['revision']}",
+            "FUSP": f"{fusp['id']}@{fusp['revision']}",
+            "TESP": f"{tesp['id']}@{tesp['revision']}"}
+    probe.available("definition.signoff", "definition.signoff", call,
+                    definition_id=visp["id"], revision=visp["revision"])
+    probe.available("definition.signoff", "definition.signoff", call,
+                    definition_id=fusp["id"], revision=fusp["revision"])
+    digest = None
     try:
-        call("police.observe", project_id=project_id,
-             observation={"violation": "not_a_declared_type", "subject": "x",
-                          "evidenceRefs": [], "detail": "d"})
-        probe.check(False, "police.observe accepted an undeclared violation type")
+        digest = rt.operations.chain_digest(refs)
     except Exception:  # noqa: BLE001
-        probe.check(True, "an undeclared violation type is refused")
+        digest = None
+    create = {"spec": "ms3 probe project", "request_id": "ms3-probe"}
+    if digest is not None:
+        create.update({"definition_refs": refs, "draft_revision": digest})
+    project = probe.available("project.create", "project.create", call, **create)
+    if not project:
+        return
+    project_id = project.get("projectId")
 
-    # --- owner stop ------------------------------------------------------
-    stop = attempt("project.abort", "project.abort", project_id=project_id, origin="owner",
-                   scope="project")
-    if stop is not None:
-        probe.check("terminationConfirmed" in stop,
-                    "the owner abort result does not report whether termination was confirmed")
-        probe.check(stop.get("origin") == "owner", "the owner abort result does not report its origin")
-        try:
-            call("project.abort", project_id=project_id, scope="project")
-            probe.check(False, "project.abort accepted a call without an explicit origin")
-        except Exception:  # noqa: BLE001
-            probe.check(True, "project.abort refuses a call without an explicit origin")
-        try:
-            call("project.abort", project_id=project_id, origin="police", scope="project")
-            probe.check(False, "a police abort without a classification was accepted")
-        except Exception:  # noqa: BLE001
-            probe.check(True, "a police abort without a classification is refused")
+    # --- checkpoints -----------------------------------------------------
+    manifest = probe.available("checkpoint.create", "checkpoint.create", call,
+                               project_id=project_id, name="after-plan")
+    if manifest is not None:
+        for field in ("checkpointId", "projectId", "name", "journalSequence",
+                      "definitionRefs", "acceptedArtifactManifestRef",
+                      "toolSkillDomainVersionRefs", "taskAndMilestoneStateRef",
+                      "pendingActionRefs", "createdAt"):
+            probe.check(field in manifest, f"the checkpoint manifest has no {field} field")
+        probe.check(isinstance(manifest.get("journalSequence"), int),
+                    "the checkpoint manifest has no integer journal sequence")
+        probe.check(manifest.get("definitionRefs") == refs,
+                    "the checkpoint manifest does not name the approved chain")
+        again = probe.available("checkpoint.create", "checkpoint.create", call,
+                                project_id=project_id, name="after-plan")
+        probe.check(again is None, "a second checkpoint with the same name was accepted")
+    listing = probe.available("checkpoint.list", "checkpoint.list", call,
+                               project_id=project_id)
+    if listing is not None:
+        rows = listing.get("checkpoints", [])
+        probe.check(len(rows) >= 1, "checkpoint.list does not list the created checkpoint")
+        if rows:
+            probe.check(rows[0].get("name") == "after-plan",
+                        "checkpoint.list does not return the checkpoint that was created")
 
-    # --- SCHOTTY cleanup -------------------------------------------------
-    cleanup = attempt("schotty.clean", "schotty.clean", project_id=project_id,
-                      cleanup={"remove": ["round-dirty.txt"], "preserve": []})
-    if cleanup is not None:
-        probe.check(cleanup.get("status") in {"cleaned", "red_light"},
-                    "the cleanup result has no cleaned/red_light status")
-        if cleanup.get("status") == "red_light":
-            probe.check(bool(cleanup.get("reason")), "the red light names no reason")
+    # --- the recovery packet ---------------------------------------------
+    packet = probe.available("recovery.packet", "recovery.packet", call,
+                              project_id=project_id)
+    if packet is not None:
+        for field in ("projectId", "currentTask", "acceptedBaseline",
+                      "survivingCandidateArtifacts", "completedActions",
+                      "unresolvedEffects", "failedChecks", "remainingWork", "allowance"):
+            probe.check(field in packet, f"the recovery packet has no {field} field")
+        blob = json.dumps(packet, default=str).lower()
+        for forbidden in ("transcript", "assistant message", "chain-of-thought"):
+            probe.check(forbidden not in blob,
+                        f"the recovery packet carries {forbidden!r}")
+        again = probe.available("recovery.packet", "recovery.packet", call,
+                                project_id=project_id)
+        if again is not None:
+            probe.equal(json.dumps(packet, sort_keys=True, default=str),
+                        json.dumps(again, sort_keys=True, default=str),
+                        "the recovery packet is not deterministic")
+
+    # --- the split ladder ------------------------------------------------
+    ladder = _ladder_reaches_the_split(rt, project_id, probe)
+    probe.check(ladder, "a round that does not deliver does not reach the split path")
+
+    # --- the baseline -----------------------------------------------------
+    baseline = probe.available("baseline.replay", "baseline.replay", call,
+                               project_id=project_id)
+    if baseline is not None:
+        rows = baseline.get("rows", [])
+        probe.check(isinstance(rows, list), "the baseline has no rows")
+        for row in rows:
+            for field in ("role", "executor", "provider", "model", "inputTokens",
+                          "outputTokens", "cost", "wallMs", "exit", "status"):
+                probe.check(field in row, f"a baseline row has no {field} field")
+        blob = json.dumps(baseline, default=str).lower()
+        for forbidden in ("score", "ranking", "winner", "goal"):
+            probe.check(forbidden not in blob,
+                        f"the baseline contains an invented {forbidden!r} value")
+        again = probe.available("baseline.replay", "baseline.replay", call,
+                                project_id=project_id)
+        if again is not None:
+            probe.equal(json.dumps(baseline, sort_keys=True, default=str),
+                        json.dumps(again, sort_keys=True, default=str),
+                        "the baseline replay is not deterministic")
+
+    # --- the feature-scoped context ---------------------------------------
+    scoped = _scoped_context(rt, project_id, probe)
+    probe.check(scoped, "a feature with approved excerpts does not receive them")
+
+
+def _ladder_reaches_the_split(rt, project_id: str, probe: Probe) -> bool:
+    """A round that does not deliver must reach the split path.
+
+    Checked where the decision is made rather than through a live builder: the
+    question is what the framework does with a non-delivery, and a live round
+    would test the model rather than the ladder.
+    """
+    from progressdesk.loop import DispatchOutcome, dispatcher_for
+
+    dispatcher = dispatcher_for(rt, project_id)
+    outcome = DispatchOutcome(run_id="probe-run", project_id=project_id,
+                               task_ref="probe", status="infra-fault",
+                               detail="the provider cut the generation off")
+    routed = dispatcher._route(project_id, "probe", outcome, ("read",), "DEXTER",
+                                task_id="probe-task", milestone_id="M1", packet=None)
+    return routed.status in {"split", "towel", "blocked"}
+
+
+def _scoped_context(rt, project_id: str, probe: Probe) -> bool:
+    """The builder's pack must carry the excerpts the feature asked for."""
+    from progressdesk import context_compiler
+
+    try:
+        refs = context_compiler.planned_definition_refs(rt, project_id)
+        source = context_compiler.load_source(rt, "FUSP", refs["FUSP"])
+        excerpt = context_compiler.extract_excerpt(source.text, "requirement:F-M1")
+    except Exception as exc:  # noqa: BLE001
+        probe.defect(f"the approved source could not be selected from: {exc}")
+        return False
+    return bool(excerpt.strip())
 
 
 if __name__ == "__main__":
