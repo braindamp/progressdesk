@@ -338,10 +338,15 @@ class RoundDispatcher:
         split_task: Callable[[str, str, str, str], Any] | None = None,
         police_abort: Callable[[str, str], Any] | None = None,
         research_tools: tuple[str, ...] = (),
+        compile_context: Callable[..., Any] | None = None,
     ) -> None:
         # The only tools in the system, and they exist for one call: the
         # end-of-project run, where SHARPENER is allowed to go outward.
         self._research_tools = research_tools
+        # The context compiler is a preparation step, not an actor: it hands the
+        # builder its own contract and the approved excerpts the feature asked
+        # for, and it fails loudly when it cannot.
+        self._compile_context = compile_context
         self.root = Path(artifacts.root).parent  # store is <root>/artifacts
         self._log = sweep.script.log if sweep is not None else None
         self.spawner = spawner
@@ -455,6 +460,29 @@ class RoundDispatcher:
         if self.sweep is not None:
             # Before each iteration, before a worker is dispatched.
             self.sweep.after_slice(project_id)
+        # The context is compiled before the round exists. A selector that
+        # cannot be resolved is a preparation failure: it must not leave an
+        # orphan round behind, and it must not be charged to the builder.
+        compiled = None
+        if self._compile_context is not None:
+            from .context_compiler import ContextCompilationError
+            try:
+                compiled = self._compile_context(
+                    project_id=project_id, milestone_id=milestone_id,
+                    packet=packet, run_id=run,
+                    lessons_provider=lambda budget: lesson_projection(
+                        "DEXTER", self.root, budget)[0],
+                    role_brief=(
+                        self._read_brief("DEXTER") if self._read_brief is not None else ""
+                    ),
+                )
+            except ContextCompilationError as exc:
+                return DispatchOutcome(
+                    run_id=run, project_id=project_id, task_ref=task_ref,
+                    status="rejected", delivered=False,
+                    detail=f"{exc.code}: {exc.message}",
+                    verdict=json.dumps(exc.to_dict(), sort_keys=True),
+                )
         # A round is not an object. It is two facts: work started, and later,
         # something arrived. The sweep reads the first to find work that never
         # delivered; nothing else has to know a round existed.
@@ -485,6 +513,9 @@ class RoundDispatcher:
                 "milestoneId": milestone_id,
                 "slice": str(getattr(packet, "outcome", ""))[:200],
                 "lessonsProjectionDigest": projection[1],
+                "contextManifestRef": (
+                    compiled.manifest_ref if compiled is not None else None
+                ),
                 "authorization": authorization,
             }).encode("utf-8"),
             project_id=project_id,
@@ -497,7 +528,8 @@ class RoundDispatcher:
         actual_role = role
         try:
             request = self._request(project_id, task_ref, packet, run, tools, budget,
-                                     role, projection)
+                                     role, projection,
+                                     pack=compiled.pack if compiled is not None else None)
             actual_role = request.role
             envelope = self.spawner.spawn(request, kind=adapter)
         except SpawnError as exc:
@@ -1059,13 +1091,15 @@ class RoundDispatcher:
         project_id: str, task_ref: str, packet: Any, run: str,
         tools: tuple[str, ...], budget: Budget | None, role: str = "DEXTER",
         projection: tuple[str, str] | None = None,
+        pack: ContextPack | None = None,
     ) -> SpawnRequest:
         provider, model = self._model(role)
         return SpawnRequest(
             run_id=run,
             task_ref=f"{project_id}:{task_ref}",
             role=role,
-            context_pack=self._pack(packet, run, project_id, projection),
+            context_pack=pack if pack is not None
+            else self._pack(packet, run, project_id, projection),
             tool_allowlist=tools,
             budget=budget or Budget(),
             model_spec=ModelSpec(provider=provider, model=model),
@@ -1178,6 +1212,7 @@ def _text(value: Any) -> str:
 def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
     """Compose the dispatcher using the *same* runtime and event store."""
     harness = getattr(runtime, "harness", None)
+    from . import context_compiler
     return RoundDispatcher(
         runtime.spawner_for(project_id), runtime.broker, runtime.artifacts,
         resolve_role=(harness.for_role if harness is not None else None),
@@ -1191,5 +1226,8 @@ def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
         split_task=getattr(runtime, "split_task", None),
         police_abort=lambda project, reason: runtime.police.stop_workshop(
             reason, source="police",
+        ),
+        compile_context=lambda **kwargs: context_compiler.compile_for_dexter(
+            runtime, **kwargs,
         ),
     )

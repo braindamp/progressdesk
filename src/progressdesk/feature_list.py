@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -19,8 +20,47 @@ _CONTRACT_FIELDS = (
     "title", "outcome", "scope", "interfaces", "acceptance",
     "allowedToolRefs", "skillRefs", "inputArtifactRefs",
     "acceptedExampleRefs", "limits", "parentDefinitionRefs",
+    "contextRefs",
 )
 _DESCRIPTION_FIELDS = ("title", "outcome", "scope", "interfaces", "acceptance")
+
+#: A presentation hint: which approved specification excerpts this feature
+#: wants to be handed. It is not a requirement, a permission or an approval,
+#: and it never appears in the kernel's protected capability fields.
+_CONTEXT_REF_KEYS = frozenset({"kind", "selector"})
+_CONTEXT_KINDS = frozenset({"VISP", "FUSP", "TESP"})
+_SELECTOR_RE = re.compile(r"^(section|requirement):[^\s]+$")
+
+
+def _clean_context_refs(value: Any, label: str) -> list[dict[str, str]]:
+    """Validate the optional excerpt list: exactly kind and selector, in order."""
+    if not isinstance(value, (list, tuple)):
+        raise FeatureListError(f"{label}.contextRefs must be an array")
+    clean: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in value:
+        if not isinstance(entry, dict) or set(entry) != set(_CONTEXT_REF_KEYS):
+            raise FeatureListError(
+                f"{label}.contextRefs entries must have exactly kind and selector"
+            )
+        kind = entry.get("kind")
+        selector = entry.get("selector")
+        if not isinstance(kind, str) or kind not in _CONTEXT_KINDS:
+            raise FeatureListError(
+                f"{label}.contextRefs kind must be one of {sorted(_CONTEXT_KINDS)}"
+            )
+        if not isinstance(selector, str) or not _SELECTOR_RE.match(selector.strip()):
+            raise FeatureListError(
+                f"{label}.contextRefs selector must be 'section:<number>' or 'requirement:<id>'"
+            )
+        selector = selector.strip()
+        if (kind, selector) in seen:
+            raise FeatureListError(
+                f"{label}.contextRefs repeats {kind} {selector}"
+            )
+        seen.add((kind, selector))
+        clean.append({"kind": kind, "selector": selector})
+    return clean
 
 
 class FeatureListError(ValueError):
@@ -104,6 +144,8 @@ def _clean_contract(item: Any, label: str) -> dict[str, Any]:
             ):
                 raise FeatureListError(f"{label}.limits must be an object")
             clean[field] = dict(value)
+        elif field == "contextRefs":
+            clean[field] = _clean_context_refs(value, label)
     for required in ("outcome", "scope", "interfaces", "acceptance"):
         if not clean.get(required):
             raise FeatureListError(f"{label} needs {required}")
@@ -151,13 +193,21 @@ class FeatureList:
 
     @staticmethod
     def inherit_contract(template: dict[str, Any], proposal: dict[str, Any]) -> dict[str, Any]:
-        """Descriptions may change; existing capabilities and limits do not."""
+        """Descriptions may change; existing capabilities and limits do not.
+
+        The excerpt hints may also be refined, because a split narrows the work:
+        a half of a feature wants the source its own half needs. What it may
+        not do is quietly lose the ones the whole needs - an absent list is
+        inherited, a present list replaces.
+        """
         clean = _clean_contract(proposal, "proposal")
-        for key in set(_CONTRACT_FIELDS) - set(_DESCRIPTION_FIELDS):
+        for key in set(_CONTRACT_FIELDS) - set(_DESCRIPTION_FIELDS) - {"contextRefs"}:
             if key in clean and clean[key] != template.get(key):
                 raise FeatureListError(f"proposal changes protected metadata: {key}")
             if key in template:
                 clean[key] = template[key]
+        if "contextRefs" not in clean and "contextRefs" in template:
+            clean["contextRefs"] = list(template["contextRefs"])
         return clean
 
     def task(self, project_id: str, task_id: str, milestone_id: str | None = None) -> dict[str, Any]:
@@ -332,6 +382,10 @@ class FeatureList:
             clean = self.inherit_contract(current[0], raw)
             if set(clean.get("allowedToolRefs", [])) - known_tools:
                 raise FeatureListError("corrective feature requests a capability outside the plan")
+            # A corrective feature is not the feature it corrects: it inherits the
+            # shape, not the evidence. Its own excerpts are its own, and an
+            # absent list means "none", not "the first feature's".
+            clean["contextRefs"] = list(raw.get("contextRefs") or [])
             clean["taskId"] = uuid.uuid4().hex
             clean["taskRevision"] = 1
             added.append(clean)

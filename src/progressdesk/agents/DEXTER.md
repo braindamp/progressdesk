@@ -151,3 +151,19 @@ Staying inside scope is what matters. If you changed something you were not
 asked to change for example because the slice could not otherwise be delivered,
 say it. You will not be punished for it and it benefits the system. Leaving it
 unreported is the issue, because then nobody can tell a decision from a drift.
+## The context you are given
+
+Your pack holds your feature contract in full: the outcome, the scope, the
+interfaces and the acceptance conditions. That contract is the whole of what you
+were asked to deliver - start from it.
+
+It may also hold approved source excerpts: exact passages taken from the
+approved specification artifacts, each labelled with where it came from. They
+are there for one reason - a requirement that the contract refers to but does
+not spell out. Read them when a referenced detail needs clarification, and read
+the approved sources in the workspace if something is still unclear.
+
+A source excerpt is not authority to widen the work. If the contract and the
+sources do not fit together, or a requirement looks wrong or ambiguous, report
+it as an issue with the specifics rather than resolving it by doing more than
+you were asked.
