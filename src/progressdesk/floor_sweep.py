@@ -246,6 +246,14 @@ class FloorSweep:
                 self._record(report, "sweep_debris",
                              f"run {event.runId}: the builder reported; the host accounts for it")
                 continue
+            if self._round_is_live(report.project_id, event.runId):
+                # The round is still running. A round that has not delivered
+                # yet is not debris: a builder that is working has no
+                # candidate either, and sweeping it would move its directory
+                # out from under it.
+                self._record(report, "sweep_debris",
+                             f"run {event.runId}: the round is still running")
+                continue
             detail, captured = self._sweep_round(report.project_id, event.runId)
             self._record(report, "sweep_debris", detail, found=captured)
             # A swept round is finished. Leaving it open blocks every later
