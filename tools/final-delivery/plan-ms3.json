@@ -52,7 +52,8 @@
         "replay performs no model, tool or provider call",
         "a log with a gap in the numbering opens and reads in order",
         "a round that does not deliver is split rather than abandoned",
-        "a successful round that changed nothing is a delivery"
+        "a successful round that changed nothing is a delivery",
+        "the deterministic housekeeping decides whether the room is restartable, and no model is asked"
       ],
       "features": [
         {
@@ -211,6 +212,34 @@
             "a successful round that changed nothing records a candidate and closes as a delivery",
             "the assembly contains the room's state",
             "a round that changed files still delivers only those files"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms3-room-decision",
+          "taskRevision": 1,
+          "title": "The housekeeping decides whether the room is restartable",
+          "outcome": "The deterministic housekeeping decides. It applies what is mechanical, and what it could not clear is named and handed to SCHOTTY. No model is asked whether the room is clean, and no probability stands between a round and the work: a verdict that is stale, unavailable or wrong must not be able to stop a project that has nothing wrong with it.",
+          "scope": "Only src/progressdesk/floor_sweep.py and src/progressdesk/runtime.py.",
+          "interfaces": [
+            "the cleaner decides from the sweep's own result: restartable, or what it could not clear",
+            "the dispatch refuses only when the room has outstanding work, and names it"
+          ],
+          "acceptance": [
+            "a room the sweep cleared is restartable without any other party being asked",
+            "a room the sweep could not clear names what is outstanding and goes to SCHOTTY",
+            "the dispatch refusal names the outstanding work instead of a service",
+            "no decision model is consulted to decide whether the room is clean"
           ],
           "allowedToolRefs": [
             "read",
