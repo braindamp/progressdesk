@@ -25,7 +25,7 @@ from .artifacts import ArtifactStore
 from .broker import Broker, PoliceTerminationAuthority, SHARPENER_PROJECT
 from .definitions import Definitions
 from .decide import READS_AS_PROBLEM, Decision, SystemOneExecutor, Unreachable
-from .desk import ProgressDeskOperations, ProjectService
+from .desk import ProgressDeskOperations, ProjectError, ProjectService
 from .events import EventLog
 from .harness import HarnessConfig, HarnessError, TaskPacket
 from .floor_sweep import Cleaner, Sweep
@@ -33,7 +33,7 @@ from .spawn import Budget, ContextPack, ContextSection, ModelSpec, SpawnRequest
 from .lab import LabNeedDetermination, LabReferralService, SimulatedLabReferral
 from .loop import _cast_briefs, AGENTS, dispatcher_for, read_brief
 from .police import FailureClassification, Observation, PoliceService
-from .planning import PlanningSession
+from .planning import DRAFT_DOCUMENT_TYPE, PlanningSession
 from .spawn import ExecutorRegistry, ManualExecutor, SpawnError, Spawner
 from .toolcenter import ToolCenter
 
@@ -52,6 +52,36 @@ class CommandError(ValueError):
 class DomainFailure(Exception):
     """Services raise their own types; both transports recognise them here.
     """
+
+
+class _CreateRefusal(ProjectError, CommandError):
+    """A refused Create Project.
+
+    The refusal is a domain fact (nothing was materialized) and a transport
+    fact (the caller gets a stable code), so it is both.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        ValueError.__init__(self, message)
+        self.code = code
+        self.message = message
+
+
+class _CreatedProject(dict):
+    """The created project id, carried together with its manifest.
+
+    The verb answers with the created project id. Keeping the manifest
+    readable (`result["projectId"]`, `result["destination"]`) and the id
+    comparable to the bare string keeps both readings of the answer true.
+    """
+
+    def __eq__(self, other: Any) -> Any:
+        if isinstance(other, str):
+            return other == self.get("projectId")
+        return dict.__eq__(self, other)
+
+    def __ne__(self, other: Any) -> Any:
+        return not self.__eq__(other)
 
 
 def _domain_failures() -> tuple[type[BaseException], ...]:
@@ -103,7 +133,55 @@ class Command:
         return default if value is None else value
 
 
+def _require_param(cmd: Command, *names: str) -> Any:
+    """First present parameter among `names`; a missing one is a missing_parameter.
+
+    The planning surface is called with snake_case names by the CLI and with
+    the §5.2 field names by the API, so a verb accepts both spellings of the
+    same parameter.
+    """
+    for name in names:
+        if name in cmd.params and cmd.params[name] not in (None, ""):
+            return cmd.params[name]
+    raise CommandError("missing_parameter", f"{cmd.verb}: missing '{names[0]}'")
+
+
+def _optional_param(cmd: Command, *names: str) -> Any:
+    """First present parameter among `names`; an absent one is no value at all.
+
+    The counterpart of `_require_param`: a parameter the operation treats as
+    optional stays optional under either of its spellings.
+    """
+    for name in names:
+        if name in cmd.params and cmd.params[name] not in (None, ""):
+            return cmd.params[name]
+    return None
+
+
+def _refs(cmd: Command, *names: str) -> tuple[str, ...]:
+    """A tuple of reference strings; a single string is one reference."""
+    value = _require_param(cmd, *names)
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, (list, tuple)):
+        return tuple(str(entry) for entry in value)
+    raise CommandError("bad_reference", f"{cmd.verb}: '{names[0]}' must be a string or a list of strings")
+
+
+def _optional_refs(cmd: Command, *names: str) -> tuple[str, ...]:
+    """Like `_refs`, but an absent parameter is no reference at all."""
+    for name in names:
+        if name in cmd.params and cmd.params[name] not in (None, ""):
+            return _refs(cmd, *names)
+    return ()
+
+
 WORKSHOP = "workshop"
+
+# The planning session leader (F-PF2): the role that reads the cards and
+# drives them toward a VISP/FUSP draft. The role table says which model
+# fills it; nothing here says what a model is.
+PLANNER_ROLE = "PLANNER"
 
 # The three things a builder can say. Terminal ones close the session: the work
 # has declared itself done, which is a round finishing and not a project abort.
@@ -149,6 +227,7 @@ class Runtime:
     cleaner: Cleaner | None = None
     ask: Callable[..., str] | None = None
     split_task: Callable[..., Any] | None = None
+    planning_project: str = WORKSHOP
     _spawner_lock: threading.Lock = field(default_factory=threading.Lock)
     execution: Mapping[str, Any] = field(default_factory=dict)
 
@@ -201,6 +280,9 @@ class Runtime:
         )
         runtime.cleaner = Cleaner(sweep, runtime.decide_in_room)
         runtime.ask = runtime.ask_role
+        # The session leader is an adapter on the same seam as every other
+        # role: the role table names the model, the transport reaches it.
+        runtime.planning.planner = runtime.planning_leader
         from .jack import run_split
         runtime.split_task = lambda project_id, milestone_id, task_id, failure: run_split(
             runtime, project_id, milestone_id, task_id, failure
@@ -497,6 +579,36 @@ class Runtime:
         Project-scoped: two projects running at once have two rooms.
         """
         return self.noul_in(project_id, state, READS_AS_PROBLEM)
+
+    # -- the planning session leader -------------------------------------
+
+    def planning_leader(self, item_payloads: list[dict[str, Any]]) -> dict[str, Any]:
+        """The configured session leader, asked through the adapter seam.
+
+        The leader reads the cards and answers with what the owner has to
+        check: the structured decisions and a plain-language summary
+        (F-PF8). It is asked, not dispatched: the leader signs nothing and
+        authorizes nothing, it only reads and summarises.
+        """
+        context = json.dumps({"items": item_payloads}, sort_keys=True, indent=2)
+        answer = self.ask(self.planning_project, PLANNER_ROLE, context)
+        return _leader_answer(answer)
+
+    def project_for_definition(self, definition_id: str) -> str | None:
+        """The project whose approved plan names this definition, if any."""
+        for event in reversed(self.log.read_all()):
+            if event.type != "project.planned" or not event.payloadRef:
+                continue
+            payload = json.loads(
+                self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1])
+            )
+            refs = payload.get("definitionRefs")
+            if not isinstance(refs, dict):
+                continue
+            for ref in refs.values():
+                if str(ref).split("@", 1)[0] == definition_id:
+                    return event.projectId
+        return None
 
     # -- the builder's report ------------------------------------------
     def file_report(
@@ -852,6 +964,40 @@ def _definition_read(rt: Runtime, cmd: Command) -> Any:
     return definition.to_dict()
 
 
+def _definition_revise(rt: Runtime, cmd: Command) -> Any:
+    """Revise the exact revision the owner displayed.
+
+    The supplied `revision` is the expected revision: revising from a
+    superseded revision is refused, so a revision can never be based on a
+    draft the owner did not see. A refusal records nothing.
+    """
+    content = cmd.require("content")
+    try:
+        revision = int(cmd.require("revision"))
+    except (TypeError, ValueError) as exc:
+        raise CommandError(
+            "bad_revision", f"definition.revise: revision must be an integer ({exc})"
+        ) from exc
+    revised = rt.definitions.revise(
+        cmd.require("definition_id"),
+        content=content if isinstance(content, bytes) else str(content).encode("utf-8"),
+        expected_revision=revision,
+        producer=str(cmd.get("producer", "desk")),
+    )
+    return {
+        "id": revised.id,
+        "kind": revised.kind,
+        "revision": revised.revision,
+        "contentRef": revised.contentRef,
+        "status": "revised",
+    }
+
+
+def _definition_pending(rt: Runtime, cmd: Command) -> Any:
+    """Which VISP/FUSP revisions still await an owner signoff."""
+    return {"pending": rt.definitions.pending_signoffs()}
+
+
 def _definition_signoff(rt: Runtime, cmd: Command) -> Any:
     return rt.definitions.signoff(
         cmd.require("definition_id"),
@@ -861,12 +1007,31 @@ def _definition_signoff(rt: Runtime, cmd: Command) -> Any:
 
 
 def _project_create(rt: Runtime, cmd: Command) -> Any:
-    """The bytes are hashed and kept; the words are the project.
+    """Create Project answers with the created project id.
+
+    The chain the owner approved travels with the request. Nothing is
+    materialized unless the chain, both owner signoffs and the displayed draft
+    revision are accepted; a refusal leaves the product untouched.
+
+    The parameters are optional and are read under either spelling, the
+    snake_case the CLI passes and the §5.2 field names the API passes.
     """
-    return rt.operations.project_create(
-        str(cmd.require("spec")),
-        request_id=str(cmd.require("request_id")),
-    ).to_manifest()
+    definition_refs = _optional_param(cmd, "definition_refs", "definitionRefs")
+    draft_revision = _optional_param(cmd, "draft_revision", "draftRevision")
+    request_id = _optional_param(cmd, "request_id", "requestId")
+    if request_id is None:
+        raise CommandError("missing_parameter", "project.create: missing 'request_id'")
+    try:
+        creation = rt.operations.project_create(
+            definition_refs,
+            draft_revision,
+            request_id=str(request_id),
+        )
+    except ProjectError as exc:
+        # A refused creation is a domain refusal and a transport refusal: the
+        # code reaches the caller either way.
+        raise _CreateRefusal(exc.code, exc.message) from exc
+    return _CreatedProject(creation.to_manifest())
 
 
 def _artifact_import(rt: Runtime, cmd: Command) -> Any:
@@ -1203,6 +1368,31 @@ def _project_events(rt: Runtime, cmd: Command) -> Any:
     return [e.to_dict() for e in events if project_id is None or e.projectId == project_id]
 
 
+# -- the owner's reading surface -----------------------------------------
+# These four verbs answer questions out of the recorded event log. They write
+# nothing: the owner reads the record, it does not change it.
+
+
+def _owner_findings(rt: Runtime, cmd: Command) -> Any:
+    from .owner_views import findings
+    return findings(rt, str(cmd.require("project_id")), str(cmd.require("milestone_id")))
+
+
+def _owner_evidence(rt: Runtime, cmd: Command) -> Any:
+    from .owner_views import evidence
+    return evidence(rt, str(cmd.require("project_id")), str(cmd.require("milestone_id")))
+
+
+def _usage_report(rt: Runtime, cmd: Command) -> Any:
+    from .owner_views import usage_report
+    return usage_report(rt, str(cmd.require("project_id")))
+
+
+def _milestone_signoff_policy(rt: Runtime, cmd: Command) -> Any:
+    from .owner_views import signoff_policy
+    return signoff_policy(rt, str(cmd.require("project_id")))
+
+
 def _project_abort(rt: Runtime, cmd: Command) -> Any:
     """One termination method, two origins (FUSP F-P2).
 
@@ -1253,12 +1443,20 @@ def _planning_open(rt: Runtime, cmd: Command) -> Any:
     return rt.planning.board()
 
 
+def _planning_board(rt: Runtime, cmd: Command) -> Any:
+    """The board view, rebuilt from the event log (items, topics, meetings, questions)."""
+    return rt.planning.board()
+
+
 def _planning_item_create(rt: Runtime, cmd: Command) -> Any:
+    content = cmd.get("content", "")
+    if isinstance(content, bytes):
+        content = content.decode("utf-8")
     return rt.planning.create_item(
-        summary=cmd.require("summary"),
-        content=str(cmd.require("content", "")),
+        summary=str(cmd.require("summary")),
+        content=str(content),
         provenance=str(cmd.get("provenance", "human")),
-        topic_refs=tuple(cmd.get("topic_refs", ())),
+        topic_refs=_optional_refs(cmd, "topic_refs", "topicRefs"),
     ).to_dict()
 
 
@@ -1287,14 +1485,112 @@ def _planning_item_relate(rt: Runtime, cmd: Command) -> Any:
     return {"related": [cmd.require("a"), cmd.require("b")]}
 
 
+def _leader_answer(answer: str) -> dict[str, Any]:
+    """The leader's answer: a JSON object with the owner's checklist.
+
+    A model answers in prose; a checklist is structured. A leader that
+    cannot be read as an object is a broken leader, and a broken leader
+    formalizes nothing.
+    """
+    text = (answer or "").strip()
+    if text.startswith("```"):
+        text = "\n".join(
+            line for line in text.splitlines() if not line.strip().startswith("```")
+        ).strip()
+    candidates = [text]
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(text[start:end + 1])
+    for candidate in candidates:
+        try:
+            result = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(result, dict):
+            return result
+    raise CommandError(
+        "planner_failed",
+        "the planning session leader did not answer with a JSON object",
+    )
+
+
+def _draft_document_type(rt: Runtime, definition_id: str, revision: int) -> str:
+    """The kind of the draft: the kind of the definition it is formalized into."""
+    from .definitions import DefinitionError
+
+    try:
+        kind = rt.definitions.get(definition_id, revision).kind
+    except DefinitionError:
+        return DRAFT_DOCUMENT_TYPE
+    return kind if kind in {"VISP", "FUSP"} else DRAFT_DOCUMENT_TYPE
+
+
 def _planning_formalize(rt: Runtime, cmd: Command) -> Any:
+    """Formalize cards through the configured planning session leader.
+
+    No configured leader means no formalization: the draft artifact is
+    written by the leader, and a card formalized without one would be a
+    card nobody checked. The refusal records nothing.
+    """
+    if rt.harness is None or PLANNER_ROLE not in rt.harness.roles:
+        raise CommandError(
+            "planner_missing",
+            f"planning.formalize: no planning session leader is configured: role "
+            f"{PLANNER_ROLE!r} is not in config/assignments.json",
+        )
+    definition_id = str(_require_param(cmd, "definition_id", "definitionId"))
+    definition_revision = int(_require_param(cmd, "definition_revision", "definitionRevision"))
+    project_id = str(
+        cmd.get("project_id", cmd.get("projectId", ""))
+        or rt.project_for_definition(definition_id)
+        or rt.planning_project
+    )
+    rt.planning_project = project_id
     items = rt.planning.formalize(
-        tuple(cmd.require("item_ids")),
-        definition_id=cmd.require("definition_id"),
-        definition_revision=int(cmd.require("definition_revision")),
+        _refs(cmd, "item_ids", "itemIds"),
+        definition_id,
+        definition_revision,
         producer=str(cmd.get("producer", "planning")),
+        document_type=_draft_document_type(rt, definition_id, definition_revision),
     )
     return [i.to_dict() for i in items]
+
+
+def _planning_topic_create(rt: Runtime, cmd: Command) -> Any:
+    return rt.planning.create_topic(str(_require_param(cmd, "name", "topic_name")))
+
+
+def _planning_meeting_open(rt: Runtime, cmd: Command) -> Any:
+    limits = cmd.get("limits", {})
+    if not isinstance(limits, dict):
+        raise CommandError("bad_limits", "planning.meeting.open: limits must be a JSON object")
+    return rt.planning.open_meeting(
+        _refs(cmd, "topic_refs", "topicRefs", "topics"),
+        str(_require_param(cmd, "leader", "session_leader", "sessionLeader")),
+        limits,
+    )
+
+
+def _planning_meeting_record(rt: Runtime, cmd: Command) -> Any:
+    return rt.planning.record_turn(
+        str(_require_param(cmd, "meeting_id", "meetingId")),
+        str(cmd.require("role")),
+        str(_require_param(cmd, "text", "content")),
+    )
+
+
+def _planning_question_ask(rt: Runtime, cmd: Command) -> Any:
+    return rt.planning.ask_question(
+        str(_require_param(cmd, "meeting_id", "meetingId")),
+        str(_require_param(cmd, "question", "text")),
+    )
+
+
+def _planning_answer_record(rt: Runtime, cmd: Command) -> Any:
+    return rt.planning.record_answer(
+        str(_require_param(cmd, "question_id", "questionId")),
+        str(_require_param(cmd, "answer", "text")),
+    )
 
 
 def _lab_request(rt: Runtime, cmd: Command) -> Any:
@@ -1438,15 +1734,23 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "redlight.raise": lambda rt, cmd: raise_red_light(
         rt, cmd.require("project_id"), str(cmd.get("reason", "towel"))),
     "planning.open": _planning_open,
+    "planning.board": _planning_board,
     "planning.item.create": _planning_item_create,
     "planning.item.edit": _planning_item_edit,
     "planning.item.attach": _planning_item_attach,
     "planning.item.relate": _planning_item_relate,
     "planning.formalize": _planning_formalize,
+    "planning.topic.create": _planning_topic_create,
+    "planning.meeting.open": _planning_meeting_open,
+    "planning.meeting.record": _planning_meeting_record,
+    "planning.question.ask": _planning_question_ask,
+    "planning.answer.record": _planning_answer_record,
     "lab.request": _lab_request,
     "lab.result": _lab_result,
     "definition.create": _definition_create,
     "definition.read": _definition_read,
+    "definition.revise": _definition_revise,
+    "definition.pending": _definition_pending,
     "definition.signoff": _definition_signoff,
     "artifact.import": _artifact_import,
     "project.create": _project_create,
@@ -1470,6 +1774,10 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "milestone.evaluate": _milestone_evaluate,
     "milestone.correct": _milestone_correct,
     "milestone.signoff": _milestone_signoff,
+    "milestone.signoff.policy": _milestone_signoff_policy,
+    "owner.findings": _owner_findings,
+    "owner.evidence": _owner_evidence,
+    "usage.report": _usage_report,
     "jack.split.submit": _jack_split_submit,
     "jack.correction.submit": _jack_correction_submit,
     "project.abort": _project_abort,
@@ -1540,12 +1848,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = route(Runtime.create(args.root), args.verb, params)
-    except CommandError as exc:
-        print(json.dumps({"error": exc.code, "message": exc.message}))
-        return 2
     except DOMAIN_FAILURES as exc:
         print(json.dumps({"error": getattr(exc, "code", "rejected"), "message": str(exc)}))
         return 1
+    except CommandError as exc:
+        print(json.dumps({"error": exc.code, "message": exc.message}))
+        return 2
     print(json.dumps(result, indent=2, default=str))
     return 0
 

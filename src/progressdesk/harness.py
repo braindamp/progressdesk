@@ -39,6 +39,9 @@ ROLES = (
     "CLEANING_LAYA",
     "SHARPENER",
     "POLICE",
+    # The planning session leader: the role that reads the planning cards
+    # and drives them toward a VISP/FUSP draft (F-PF2).
+    "PLANNER",
 )
 
 
