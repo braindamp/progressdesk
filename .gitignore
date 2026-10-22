@@ -29,3 +29,7 @@ __pycache__/
 # self-test artifacts of the acceptance instruments
 tools/final-delivery/*-state/
 tools/final-delivery/*-targets/
+
+# self-test artefacts of the acceptance instruments
+ms*-state/
+ms*-targets/

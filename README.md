@@ -50,8 +50,21 @@ installer leaves artifacts, feature lists, journals and configuration alone.
 The role's context provides an absolute **host action inbox**. SHARPENER writes
 JSON requests into that directory using its already available `write` tool.
 This is processed by the control host while SHARPENER runs, rather than waiting
-for its final response. The exact four request shapes are in `SHARPENER.md`:
-`police`, `lesson`, `instruction`, and `visp`.
+for its final response. The exact request shapes are in `SHARPENER.md`:
+`police`, `lesson`, `instruction`, `fix`, and `visp`.
+
+## Asking SHARPENER directly
+
+The owner can put one fact to the observer without a builder round:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m progressdesk sharpener.observe project_id=PROJECT_ID fact="what was observed"
+```
+
+The answer is what the observer proposed: `action` is `lesson`, `fix`, `visp`
+or `none`, and `proposals` carries every proposal he filed. The observation is
+not a gate: it accepts nothing, rejects nothing, and no round waits for it.
 
 ## VISP owner actions
 
