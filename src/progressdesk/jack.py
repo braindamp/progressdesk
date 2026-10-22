@@ -95,7 +95,8 @@ def _fit_packet(parts: list[tuple[str, str]], limit: int = LAYA_PACKET_LIMIT) ->
     and not about the whole text of it, and the full text stays in the store.
     """
     headers = sum(len(header) + 2 for header, _ in parts)
-    room = max(0, limit - headers)
+    # the joins and the newlines between the parts are part of the packet too
+    room = max(0, limit - headers - 2 * max(0, len(parts) - 1) - 4)
     if not parts:
         return ""
     share = max(120, room // len(parts))
