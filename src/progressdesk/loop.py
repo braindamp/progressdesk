@@ -31,6 +31,7 @@ from . import paths
 from .artifacts import ArtifactStore
 from .broker import Broker
 from .encoding import read_bytes_with_spec
+from .harness import HarnessError
 from .workspace import ProjectWorkspace, WorkspaceError
 from .floor_sweep import Clearance, Cleaner, Sweep
 from .spawn import (
@@ -151,15 +152,231 @@ def _cast_briefs(exclude: str) -> str:
     return "\n\n".join(parts)
 
 
+def _brief_of(role: str) -> str:
+    """One role's brief. A missing brief is stated, not fatal: the observer
+    still has to see the finding that was reported.
+    """
+    from .harness import HarnessError
+
+    try:
+        return read_brief(role)
+    except HarnessError:
+        return f"(no brief for role {role} is on disk)"
+
+
+def involved_briefs(roles: tuple[str, ...], root: Path | None = None) -> str:
+    """The brief and the lessons of the roles a judgement is about, and no others.
+
+    A judgement about one role is made against that role's own instructions:
+    the observer gets the brief the role worked under and the lessons kept
+    for it, not the briefs of every other role in the workshop.
+    """
+    parts = []
+    for name in roles:
+        block = [f"## {name} brief\n{_brief_of(name)}"]
+        lessons, _digest = lesson_projection(name, root)
+        if lessons:
+            block.append(f"## {name} lessons (not tasks)\n{lessons}")
+        parts.append("\n\n".join(block))
+    return "\n\n".join(parts)
+
+
 def ask_role(root: Path, project_id: str, role: str, context: str, *, cast: bool = False,
-             tools: tuple[str, ...] = ()) -> str:
+             with_roles: tuple[str, ...] = (), tools: tuple[str, ...] = ()) -> str:
     """A caller with no Runtime. Delegates to Runtime.ask_role.
     """
     from .runtime import Runtime
 
     return Runtime.create(Path(root)).ask_role(
-        project_id, role, context, cast=cast, tools=tools
+        project_id, role, context, cast=cast, with_roles=with_roles, tools=tools
     )
+
+
+# The proposals the observer can file, and the event each one leaves. An
+# observation reads what he proposed; it proposes nothing itself, and it
+# accepts and rejects nothing.
+OBSERVER_PROPOSALS = (
+    ("lesson", "lesson.taught"),
+    ("visp", "visp.queued"),
+    ("fix", "fix.recorded"),
+)
+
+
+def observer_mark(runtime: Any) -> int:
+    """The log position an observation starts from.
+
+    Every proposal the observer files leaves an event, so the events after
+    this position are exactly what he proposed during the observation.
+    """
+    events = runtime.log.read_all()
+    return events[-1].sequence if events else 0
+
+
+def observer_proposals(runtime: Any, since: int) -> list[dict[str, Any]]:
+    """The proposals filed after `since`, oldest first, with their facts."""
+    proposals: list[dict[str, Any]] = []
+    for event in runtime.log.read_all():
+        if event.sequence <= since:
+            continue
+        for kind, event_type in OBSERVER_PROPOSALS:
+            if event.type == event_type:
+                proposals.append({
+                    "kind": kind,
+                    "eventId": event.id,
+                    "proposal": _payload_of(event, runtime.artifacts),
+                })
+                break
+    return proposals
+
+
+# A dispatch the seam refused is a fact about the framework, not about the
+# work: nothing was built, nothing was accepted and nothing was rejected. It
+# reaches SHARPENER as a finding the observer path can read. The refusal code
+# the seam gave, mapped to the kind of refusal it is.
+REFUSAL_KINDS = {
+    "context_over_budget": "context_pack_unavailable",
+    "context_pack_unavailable": "context_pack_unavailable",
+    "brief_missing": "context_pack_unavailable",
+    "missing_tool": "missing_tool",
+    "tools_denied": "missing_tool",
+    "blocked_capacity": "blocked_capacity",
+}
+
+# The same refusal in words. A reader who has the finding but not the seam's
+# own sentence still knows what kind of refusal it is.
+REFUSAL_SUMMARIES = {
+    "context_pack_unavailable": "unavailable context pack: the dispatch could not be built",
+    "missing_tool": "missing tool: the dispatch was refused a tool it needs",
+    "blocked_capacity": "refused capacity: the provider refused the work",
+    "dispatch_refused": "dispatch refused by the seam",
+}
+
+
+def refusal_kind(code: str, detail: str = "") -> str:
+    """The kind of refusal, named by the code the seam gave."""
+    code = str(code or "")
+    if code in REFUSAL_KINDS:
+        return REFUSAL_KINDS[code]
+    text = str(detail or "").lower()
+    if text.startswith("blocked_capacity:") or "blocked capacity" in text:
+        return "blocked_capacity"
+    if "context" in text and "budget" in text:
+        return "context_pack_unavailable"
+    if "tool" in text:
+        return "missing_tool"
+    return "dispatch_refused"
+
+
+def record_refusal(
+    log: Any,
+    *,
+    project_id: str,
+    run_id: str = "",
+    role: str = "",
+    task_id: str = "",
+    milestone_id: str = "",
+    code: str = "",
+    detail: str = "",
+    source: str = "seam",
+) -> dict[str, Any]:
+    """Record one refused dispatch as a finding the observer path can read.
+
+    The refusal is a fact about the framework, not about the work. It is
+    recorded so the observer can read it; reading it accepts nothing and
+    rejects nothing.
+    """
+    finding = {
+        "schemaVersion": 1,
+        "kind": refusal_kind(code, detail),
+        "code": str(code or "dispatch_refused"),
+        "source": source,
+        "projectId": str(project_id or ""),
+        "runId": str(run_id or ""),
+        "role": str(role or ""),
+        "taskId": str(task_id or ""),
+        "milestoneId": str(milestone_id or ""),
+        "reason": str(detail or "")[:2_000],
+    }
+    finding["summary"] = REFUSAL_SUMMARIES.get(finding["kind"], REFUSAL_SUMMARIES["dispatch_refused"])
+    finding["detail"] = finding["reason"]
+    if log is None:
+        return finding
+    log.record(
+        "dispatch.rejected",
+        producer="manager",
+        project_id=project_id or None,
+        task_ref=task_id or None,
+        run_id=run_id or None,
+        payload=json.dumps({
+            "schemaVersion": 1,
+            "projectId": finding["projectId"],
+            "runId": finding["runId"],
+            "taskId": finding["taskId"],
+            "milestoneId": finding["milestoneId"],
+            "role": finding["role"],
+            "code": finding["code"],
+            "reason": finding["reason"],
+            "finding": finding,
+        }, sort_keys=True).encode("utf-8"),
+    )
+    return finding
+
+
+def refusal_finding(payload: dict[str, Any], event: Any = None) -> dict[str, Any]:
+    """One recorded refusal, projected into the finding the observer reads."""
+    recorded = payload.get("finding")
+    finding: dict[str, Any] = dict(recorded) if isinstance(recorded, dict) else {}
+    code = str(payload.get("code") or finding.get("code") or "")
+    reason = str(payload.get("reason") or payload.get("detail") or finding.get("reason") or "")
+    finding["schemaVersion"] = 1
+    finding["kind"] = str(finding.get("kind") or refusal_kind(code, reason))
+    finding["code"] = code or str(finding.get("code") or "dispatch_refused")
+    finding["reason"] = reason or str(finding.get("reason") or "")
+    finding["detail"] = finding["reason"]
+    finding["summary"] = str(
+        finding.get("summary") or REFUSAL_SUMMARIES.get(finding["kind"], "")
+    )
+    finding.setdefault("projectId", str(payload.get("projectId") or ""))
+    finding.setdefault("runId", str(payload.get("runId") or ""))
+    finding.setdefault("taskId", str(payload.get("taskId") or payload.get("taskRef") or ""))
+    finding.setdefault("milestoneId", str(payload.get("milestoneId") or ""))
+    finding.setdefault("role", str(payload.get("role") or ""))
+    if event is not None:
+        for key, value in (("projectId", event.projectId), ("runId", event.runId),
+                           ("taskId", event.taskRef)):
+            if not finding.get(key):
+                finding[key] = str(value or "")
+        finding.setdefault("eventId", event.id)
+        finding.setdefault("sequence", event.sequence)
+        finding.setdefault("recorded", event.timestamp)
+        finding.setdefault("producer", event.producer)
+    return finding
+
+
+def refusal_findings(runtime: Any, project_id: str = "", run_id: str = "") -> list[dict[str, Any]]:
+    """Every refused dispatch the log holds, as findings the observer can read.
+
+    Reading a finding accepts nothing and rejects nothing: the affected work
+    is left exactly as the refusal left it.
+    """
+    findings: list[dict[str, Any]] = []
+    for event in runtime.log.read_all():
+        if event.type != "dispatch.rejected":
+            continue
+        if project_id and event.projectId != project_id:
+            continue
+        if run_id and event.runId != run_id:
+            continue
+        findings.append(refusal_finding(_payload_of(event, runtime.artifacts), event))
+    return findings
+
+
+def _is_capacity_refusal(outcome: Any, envelope: Any = None) -> bool:
+    """Whether the seam refused because no capacity was available."""
+    watch = getattr(envelope, "watch", None) or {}
+    if isinstance(watch, dict) and watch.get("blockedCapacity"):
+        return True
+    return str(getattr(outcome, "detail", "") or "").startswith("blocked_capacity:")
 
 
 def _chunks(text: str, size: int = CHUNK) -> list[str]:
@@ -234,7 +451,13 @@ def _with(outcome: "DispatchOutcome", **changes: Any) -> "DispatchOutcome":
 #
 # He cannot kill a process or restore a git ref. That is deliberate -- those are
 # named operations, added when he reports he needs one and SHARPENER proposes it.
-LESSON_BUDGET = 600
+# TESP 11.5 names no "lessons" row: the brief row is 1.5 K tokens, which is
+# about 6000 bytes, and it is regenerated per phase rather than appended. The
+# lessons section of the context pack is that brief: a projection of the
+# lesson log, computed to fit, never the log itself (F-M7: lessons are the
+# substrate, not a running log).
+BRIEF_BUDGET = 6_000
+LESSON_BUDGET = BRIEF_BUDGET
 LESSONS_DIR = paths.LESSONS
 
 
@@ -246,6 +469,83 @@ def _lessons_for(role: str, root: Path | None = None) -> str:
         return path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def lesson_entries(role: str, root: Path | None = None) -> list[str]:
+    """The lesson log for a role, oldest first. The substrate: never trimmed."""
+    root = Path(root or os.environ.get("PROGRESSDESK_ROOT", "."))
+    path = root / LESSONS_DIR / f"{role}.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def lesson_projection(
+    role: str, root: Path | None = None, budget: int = BRIEF_BUDGET,
+) -> tuple[str, str]:
+    """A bounded, declared projection of the lesson log (F-M7, TESP 11.5).
+
+    Returns ``(text, digest)``. The text never exceeds ``budget``: it carries
+    the newest lessons that fit and a footer that says how many were left out
+    and where the rest lives. Nothing is silently cut, the log is never
+    trimmed, and two rounds over an unchanged log carry byte-identical briefs.
+    """
+    import hashlib
+
+    root = Path(root or os.environ.get("PROGRESSDESK_ROOT", "."))
+    entries = lesson_entries(role, root)
+    if not entries:
+        return "", ""
+    lessons_path = root / LESSONS_DIR / f"{role}.md"
+    log_path = paths.event_log(root)
+    reserve = 512
+
+    def render(kept: list[str], omitted: int, compact: bool = False) -> str:
+        if compact:
+            footer = (
+                f"Showing {len(kept)} of {len(entries)} lessons (newest first); "
+                f"{omitted} earlier lesson(s) are not shown. Complete list: "
+                f"{LESSONS_DIR}/{role}.md; every lesson taught: "
+                f"{paths.EVENTS}/{paths.EVENT_LOG}."
+            )
+        else:
+            footer = (
+                f"Showing {len(kept)} of {len(entries)} lessons (newest first) within the "
+                f"{budget}-byte brief budget.\n"
+                f"{omitted} earlier lesson(s) are not shown. The complete list is in "
+                f"{lessons_path};\nthe log of every lesson taught is in {log_path}. "
+                "Read them if you need more."
+            )
+        body = "\n".join(kept)
+        return "\n---\n" + (body + "\n" if body else "") + footer + "\n---"
+
+    kept: list[str] = []
+    used = 0
+    for line in reversed(entries):
+        size = len(line.encode("utf-8")) + 1
+        if used + size + reserve > budget:
+            break
+        kept.append(line)
+        used += size
+    kept.reverse()  # newest first
+    omitted = len(entries) - len(kept)
+    text = render(kept, omitted)
+    while len(text.encode("utf-8")) > budget and kept:
+        kept.pop()  # drop the oldest shown lesson
+        omitted += 1
+        text = render(kept, omitted)
+    if len(text.encode("utf-8")) > budget:
+        # The footer alone is larger than the budget: the same statement in
+        # fewer characters, cut to fit. A projection that is over budget fails
+        # the spawn, and a lesson that names itself is worth less than a pack
+        # that can be sent.
+        text = render(kept, omitted, compact=True)
+        encoded = text.encode("utf-8")
+        if len(encoded) > budget:
+            text = encoded[:budget].decode("utf-8", "ignore")
+    return text, "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 JANITOR_TOOLS = ("read", "write", "glob", "grep")
@@ -380,7 +680,19 @@ class RoundDispatcher:
                 ),
             )
         if adapter is None:
-            adapter = self._adapter_for(role)
+            try:
+                adapter = self._adapter_for(role)
+            except (SpawnError, HarnessError) as exc:
+                # The seam named no way to reach the role. That is a refusal of
+                # the dispatch, and it is a finding the observer can read.
+                finding = self._record_refusal(run, project_id, task_id, milestone_id,
+                                               role, exc)
+                self._offer_to_observer(project_id, role, finding)
+                return DispatchOutcome(
+                    run_id=run, project_id=project_id, task_ref=task_ref,
+                    status="infra-fault",
+                    detail=f"seam refused the dispatch: {exc}",
+                )
         # The three-attempt budget in §10.2 bounds the *builder* trying to
         # deliver a task. A review is work on the same task but not another
         # try at delivering it, so it is accounted under its own reference.
@@ -407,6 +719,10 @@ class RoundDispatcher:
         # The run-to-task binding was settled before the adapter was chosen.
         # Recording it here, once the round has actually been dispatched, keeps
         # "dispatched" meaning what it says: this run is going out.
+        # The lessons brief is a projection of the lesson log, derived here and
+        # carried with the round: two rounds over an unchanged log carry
+        # byte-identical briefs (F-M7's hash-pinning, made concrete).
+        projection = lesson_projection("DEXTER", self.root)
         self._log.record(
             "round.dispatched",
             producer="manager",
@@ -414,24 +730,55 @@ class RoundDispatcher:
                 "taskId": task_id,
                 "milestoneId": milestone_id,
                 "slice": str(getattr(packet, "outcome", ""))[:200],
+                "lessonsProjectionDigest": projection[1],
                 "authorization": authorization,
             }).encode("utf-8"),
             project_id=project_id,
             task_ref=task_id,
             run_id=run,
         )
-        request = self._request(project_id, task_ref, packet, run, tools, budget, role)
-        actual_role = request.role
+        # D1: the request is built inside the guarded region. SpawnRequest
+        # renders the context pack, so an over-budget pack raises here; a
+        # framework fault must never leave a round open and unaccounted.
+        actual_role = role
         try:
+            request = self._request(project_id, task_ref, packet, run, tools, budget,
+                                     role, projection)
+            actual_role = request.role
             envelope = self.spawner.spawn(request, kind=adapter)
-        except SpawnError as exc:
-            # The start is already journaled: it must also be closed.
-            refused = DispatchOutcome(
-                run_id=run, project_id=project_id, task_ref=task_ref,
-                status="infra-fault", detail=f"seam refused the dispatch: {exc}",
-            )
-            self._close_round(project_id, refused, task_id, milestone_id)
-            return refused
+        except (SpawnError, HarnessError) as exc:
+            # D2: a section the framework itself generated may not be the
+            # reason a dispatch dies. Re-project once and retry; only then is
+            # it an infra-fault that burns budget and nothing else.
+            if getattr(exc, "code", "") == "context_over_budget":
+                retry_projection = lesson_projection("DEXTER", self.root,
+                                                     max(600, BRIEF_BUDGET // 2))
+                try:
+                    request = self._request(project_id, task_ref, packet, run, tools,
+                                             budget, role, retry_projection)
+                    actual_role = request.role
+                    envelope = self.spawner.spawn(request, kind=adapter)
+                except (SpawnError, HarnessError) as retry_exc:
+                    refused = DispatchOutcome(
+                        run_id=run, project_id=project_id, task_ref=task_ref,
+                        status="infra-fault",
+                        detail=f"seam refused the dispatch: {retry_exc}",
+                    )
+                    finding = self._record_refusal(run, project_id, task_id, milestone_id,
+                                                  actual_role, retry_exc)
+                    self._close_round(project_id, refused, task_id, milestone_id)
+                    self._offer_to_observer(project_id, actual_role, finding)
+                    return refused
+            else:
+                refused = DispatchOutcome(
+                    run_id=run, project_id=project_id, task_ref=task_ref,
+                    status="infra-fault", detail=f"seam refused the dispatch: {exc}",
+                )
+                finding = self._record_refusal(run, project_id, task_id, milestone_id,
+                                              actual_role, exc)
+                self._close_round(project_id, refused, task_id, milestone_id)
+                self._offer_to_observer(project_id, actual_role, finding)
+                return refused
 
         # What the builder said while it worked, read back from the log. It is
         # here, not in the envelope, because he may have said it long before the
@@ -467,6 +814,14 @@ class RoundDispatcher:
             project_id, task_ref, run, envelope, actual_role,
             terminal=terminal, earlier=said_while_working,
         )
+        if outcome.status == "infra-fault" and _is_capacity_refusal(outcome, envelope):
+            # A provider that refused the work is a fact about the workshop,
+            # not about the builder. The observer can read it.
+            finding = self._record_refusal(
+                run, project_id, task_id, milestone_id, actual_role,
+                SpawnError("blocked_capacity", outcome.detail),
+            )
+            self._offer_to_observer(project_id, actual_role, finding)
         if outcome.status == "infra-fault":
             # Missing tools, candidate workspace, or provider capacity are not
             # signs that DEXTER's task should be split or the room scrubbed.
@@ -492,11 +847,18 @@ class RoundDispatcher:
         findings = [r for r in said_while_working
                     if r.get("kind") in {"issue", "suggestion", "lesson"}]
         if findings and self._ask_role is not None:
-            context = "Builder observations (judge lessons or propose a VISP):\n" + json.dumps(
-                findings, ensure_ascii=False)
+            context = (
+                f"Builder observations reported by {actual_role} "
+                "(judge lessons or propose a VISP):\n"
+                + json.dumps(findings, ensure_ascii=False)
+            )
             try:
+                # The observer judges one role's finding here, so he is given
+                # that role's brief and its lessons. The full cast stays with
+                # the boundary observation, where any role may be involved.
                 self._ask_role(project_id, "SHARPENER", context,
-                               cast=True, tools=("read", "write", "glob", "grep"))
+                               with_roles=(actual_role,),
+                               tools=("read", "write", "glob", "grep"))
             except Exception:
                 pass
         if any(e.type == "abort.issued" and e.projectId == "workshop"
@@ -537,6 +899,51 @@ class RoundDispatcher:
             return blocked
         self._close_round(project_id, outcome, task_id, milestone_id)
         return outcome
+
+    def _record_refusal(
+        self, run: str, project_id: str, task_id: str, milestone_id: str,
+        role: str, exc: Exception,
+    ) -> dict[str, Any]:
+        """A refusal the seam gave is a finding the observer path can read.
+
+        The refusal is recorded with its context -- the code the seam gave and
+        what it said -- so the observer reads what happened and not only that
+        something happened.
+        """
+        return record_refusal(
+            self._log,
+            project_id=project_id, run_id=run, role=role, task_id=task_id,
+            milestone_id=milestone_id,
+            code=str(getattr(exc, "code", "") or "dispatch_refused"),
+            detail=str(exc), source="seam",
+        )
+
+    def _offer_to_observer(
+        self, project_id: str, role: str, finding: dict[str, Any],
+    ) -> None:
+        """Hand one finding to the observer, the way a builder's finding is handed.
+
+        A fault the framework caused is visible to the learning path like a
+        fault a model reported. The observation is not a gate: nothing here
+        accepts or rejects the work the refusal left untouched.
+        """
+        if self._ask_role is None or not finding:
+            return
+        context = (
+            f"Framework finding recorded for {role} "
+            "(judge lessons or propose a VISP):\n"
+            + json.dumps(finding, ensure_ascii=False)
+        )
+        try:
+            # The observer judges one role's finding here, so he is given that
+            # role's brief and its lessons, not the whole cast.
+            self._ask_role(project_id, "SHARPENER", context,
+                           with_roles=(role,),
+                           tools=("read", "write", "glob", "grep"))
+        except Exception:
+            # The observer could not be reached. The finding is already
+            # recorded, so it is not lost with the failed hand-off.
+            pass
 
     def _close_round(self, project_id: str, outcome: DispatchOutcome,
                      task_id: str, milestone_id: str) -> None:
@@ -776,7 +1183,7 @@ class RoundDispatcher:
                 wall_ms=envelope.wall_ms, nudges=envelope.nudges,
             )
         try:
-            produced, specs = self._collect(project_id, run)
+            produced, specs, baseline = self._collect(project_id, run)
         except WorkspaceError as exc:
             return DispatchOutcome(
                 run_id=run, project_id=project_id, task_ref=task_ref,
@@ -812,7 +1219,13 @@ class RoundDispatcher:
                          detail=f"builder reported {terminal.get('kind')}: {outcome.detail}")
         if not produced:
             outcome.detail = outcome.detail or (envelope.output.strip() or envelope.detail)[:1_000]
-            return outcome
+            # A successful round that changed no file is still a delivery. The
+            # state of the room is what was delivered, so the round's baseline
+            # is frozen as the candidate: the room as it stands, not a diff.
+            if not baseline:
+                return outcome
+            outcome.files = dict(baseline)
+            outcome.file_specs = {}
         candidate_id = str(uuid.uuid4())
         self._log.record(
             "candidate.submitted", producer="worker",
@@ -825,16 +1238,21 @@ class RoundDispatcher:
         outcome.candidate_id = candidate_id
         return outcome
 
-    def _collect(self, project_id: str, run: str) -> tuple[dict[str, bytes], dict[str, Any]]:
+    def _collect(
+        self, project_id: str, run: str,
+    ) -> tuple[dict[str, bytes], dict[str, Any], dict[str, str]]:
         """Only changed product bytes cross the seam, relative to the frozen seed.
 
         The builder's working directory is not evidence of its own baseline:
         history at round.started gives us the original source and deliveries.
         A changed or missing local baseline file cannot falsify the diff.
+
+        Returns the changed bytes, their encoding specs, and the round's
+        baseline: the room as the round found it.
         """
         directory = paths.projects(self.broker.workspace_root) / project_id / "rounds" / run
         if not directory.is_dir():
-            return {}, {}
+            return {}, {}, {}
         start = next((e for e in self._log.read_all()
                       if e.type == "round.started" and e.runId == run), None)
         if start is None:
@@ -874,7 +1292,7 @@ class RoundDispatcher:
                 "builder deleted tracked files (not yet representable as candidate diffs): "
                 + ", ".join(deleted[:20])
             )
-        return captured, specs
+        return captured, specs, baseline
 
     @staticmethod
     def _digests(files: dict[str, bytes], artifacts: ArtifactStore) -> dict[str, str]:
@@ -884,13 +1302,14 @@ class RoundDispatcher:
         self,
         project_id: str, task_ref: str, packet: Any, run: str,
         tools: tuple[str, ...], budget: Budget | None, role: str = "DEXTER",
+        projection: tuple[str, str] | None = None,
     ) -> SpawnRequest:
         provider, model = self._model(role)
         return SpawnRequest(
             run_id=run,
             task_ref=f"{project_id}:{task_ref}",
             role=role,
-            context_pack=self._pack(packet, run, project_id),
+            context_pack=self._pack(packet, run, project_id, projection),
             tool_allowlist=tools,
             budget=budget or Budget(),
             model_spec=ModelSpec(provider=provider, model=model),
@@ -927,7 +1346,8 @@ class RoundDispatcher:
         except Exception as exc:  # noqa: BLE001 - a bad table is a refusal, not a crash
             raise SpawnError("no_assignment", f"role {role!r} is not configured: {exc}") from exc
 
-    def _pack(self, packet: Any, run: str = "", project_id: str = "") -> ContextPack:
+    def _pack(self, packet: Any, run: str = "", project_id: str = "",
+              projection: tuple[str, str] | None = None) -> ContextPack:
         """Deliver the self-contained task contract, not only its outcome.
 
         This is the actual design-time task data. No checklist/state-machine view,
@@ -940,10 +1360,14 @@ class RoundDispatcher:
             sections.append(ContextSection(
                 "your brief", self._read_brief("DEXTER"), ROLE_BRIEF_BUDGET,
             ))
-        lessons = _lessons_for("DEXTER", self.root)
+        # The lessons section is a bounded, declared projection of the lesson
+        # log, never the log itself (F-M7, TESP 11.5).
+        if projection is None:
+            projection = lesson_projection("DEXTER", self.root)
+        lessons, _digest = projection
         if lessons:
             sections.append(ContextSection(
-                "lessons (not tasks)", "\n---\n" + lessons + "\n---", LESSON_BUDGET,
+                "lessons (not tasks)", lessons, LESSON_BUDGET,
             ))
         sections.append(ContextSection("outcome", _text(getattr(packet, "outcome", "")), TASK_SECTION_BUDGET))
         sections.append(ContextSection("scope", _text(getattr(packet, "scope", "")), TASK_SECTION_BUDGET))

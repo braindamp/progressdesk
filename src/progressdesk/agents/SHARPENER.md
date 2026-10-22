@@ -60,6 +60,15 @@ Propose a VISP (file `visp-1.json`):
 {"kind":"visp","projectId":"PROJECT_ID","title":"Short improvement title","document":"Full proposed VISP with observed problem, proposed change and expected result"}
 ```
 
+Propose a mechanical fix (file `fix-1.json`):
+
+```json
+{"kind":"fix","projectId":"PROJECT_ID","fix":{"fixId":"...","sourceProblemRef":"...","sourceTaskAndOutcomeRefs":["..."],"componentId":"...","previousVersionOrCondition":"...","replacementArtifactRef":"sha256:<64-hex>","applicationOperation":"<componentId>@<version>","applicabilityRule":"*"}}
+```
+
+A fix is an already observed fact, not an approval: the host records it, and
+applying it to a target is a separate operation.
+
 `PROJECT_ID` is the **Source project** named in your context, not your own
 execution directory. The host handles these requests; their effects are not
 established by merely mentioning them in your final response. A VISP is a

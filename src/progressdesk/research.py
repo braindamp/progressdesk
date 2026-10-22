@@ -1,4 +1,4 @@
-"""Sharpener research mode: evidence-backed VISP drafts, never signoff authority."""
+"""RESEARCHER role: evidence-backed VISP drafts, never signoff authority."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from progressdesk.events import Event, EventLog
 
 class ResearchError(ValueError):
     """Research evidence or VISP draft validation failure."""
+
+    code = "research_invalid"
 
 
 def _text(value: Any, field: str) -> str:
@@ -78,6 +80,27 @@ class ResearchResult:
     finding: ResearchFinding
     event: Event
 
+    def to_dict(self) -> dict[str, Any]:
+        """The filed draft record.
+
+        The record states what the draft is and what it is not: unsigned, a
+        human signoff required, no authorization granted and nothing applied.
+        """
+        return {
+            "vispRef": f"{self.visp.id}@{self.visp.revision}",
+            "definition": self.visp.to_dict(),
+            "contentRef": self.visp.contentRef,
+            "signed": False,
+            "humanSignoffRequired": True,
+            "authorizationGranted": False,
+            "applied": False,
+            "finding": self.finding.to_dict(),
+            "provenance": self.finding.provenance,
+            "evidenceRefs": list(self.finding.evidence_refs),
+            "labNeedInstruction": self.finding.lab_need_instruction,
+            "eventId": self.event.id,
+        }
+
 
 class ResearchService:
     """Create a VISP draft in the ordinary definition pipeline."""
@@ -87,12 +110,17 @@ class ResearchService:
         self.artifacts = artifacts
         self.log = log
 
-    def _gone(
+    def submit(
         self,
         finding: ResearchFinding,
         *,
         parent_refs: tuple[str, ...] | list[str] = (),
     ) -> ResearchResult:
+        """File a research finding as an unsigned VISP draft.
+
+        The researcher proposes; the owner ratifies. No signoff is recorded
+        here, nothing is authorized and no change is applied.
+        """
         finding.validate()
         for evidence in finding.evidence_refs:
             if not self.artifacts.exists(evidence.split(":", 1)[1]):
@@ -101,7 +129,9 @@ class ResearchService:
             {
                 **finding.to_dict(),
                 "documentType": "VISP-draft",
+                "signed": False,
                 "humanSignoffRequired": True,
+                "authorizationGranted": False,
                 "planningLlmMustDetermineLabNeed": True,
             },
             sort_keys=True,
@@ -119,9 +149,11 @@ class ResearchService:
             producer="sharpener",
             payload=json.dumps(
                 {
-                            "vispRef": f"{visp.id}@{visp.revision}",
+                    "vispRef": f"{visp.id}@{visp.revision}",
                     "finding": finding.to_dict(),
+                    "signed": False,
                     "humanSignoffRequired": True,
+                    "authorizationGranted": False,
                     "planningLlmMustDetermineLabNeed": True,
                 },
                 sort_keys=True,
