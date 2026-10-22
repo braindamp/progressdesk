@@ -715,7 +715,7 @@ class RoundDispatcher:
             try:
                 compiled = self._compile_context(
                     project_id=project_id, milestone_id=milestone_id,
-                    packet=packet, run_id=run,
+                    task_packet=packet, run_id=run,
                     lessons_provider=lambda budget: lesson_projection(
                         "DEXTER", self.root, budget)[0],
                     role_brief=(
