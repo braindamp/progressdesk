@@ -34,8 +34,12 @@
   "milestones": [
     {
       "milestoneId": "MS4",
-      "evaluators": ["eval-ms4.json"],
-      "inputs": ["ms4-criteria.json"],
+      "evaluators": [
+        "eval-ms4.json"
+      ],
+      "inputs": [
+        "ms4-criteria.json"
+      ],
       "correctionLimit": 3,
       "signoffPolicy": "automatic",
       "acceptanceConditions": [
@@ -44,7 +48,8 @@
         "the taxonomy version travels with every classification, so a later reader can tell which rules were in force",
         "word matching can only narrow an unknown into a known condition; it never changes a known condition and never decides an action",
         "capacity is never nudged, a provider fault is nudged, and a configuration fault is not",
-        "an adapter that cannot report whether the model answered is refused rather than routed"
+        "an adapter that cannot report whether the model answered is refused rather than routed",
+        "the broker writes only the records that have a reader"
       ],
       "features": [
         {
@@ -69,8 +74,17 @@
             "a condition outside the closed vocabulary cannot be produced",
             "the classification carries the taxonomy version and a digest of the evidence it rested on"
           ],
-          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
-          "limits": {"wallTimeSeconds": 900}
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
         },
         {
           "taskId": "ms4-unknown-condition",
@@ -89,8 +103,17 @@
             "an unknown condition is not treated as a delivery and not silently discarded",
             "the recorded condition carries the taxonomy version that was in force"
           ],
-          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
-          "limits": {"wallTimeSeconds": 900}
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
         },
         {
           "taskId": "ms4-adapter-declaration",
@@ -107,8 +130,44 @@
             "an adapter that cannot report whether the model answered is refused at registration",
             "the manual adapter reports the contract by hand and is not refused"
           ],
-          "allowedToolRefs": ["read", "write", "edit", "bash", "glob", "grep"],
-          "limits": {"wallTimeSeconds": 900}
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms4-dead-records",
+          "taskRevision": 1,
+          "title": "The broker writes only the records that something reads",
+          "outcome": "The broker journals the ownership evidence and nothing else: the identity of a process it started, that it finished, and that it was gone and closed. The record of the request itself is not written, because nothing reads it - a cold control host restores ownership from the identity alone.",
+          "scope": "Only src/progressdesk/broker.py and the event vocabulary in src/progressdesk/events.py.",
+          "interfaces": [
+            "the broker writes process.registered, action.completed and action.reconciled, and no other record",
+            "the vocabulary holds no event type that nothing writes"
+          ],
+          "acceptance": [
+            "the broker writes no record of a request",
+            "a cold control host still restores ownership from the recorded identity",
+            "the vocabulary holds no event type that nothing writes"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
         }
       ]
     }

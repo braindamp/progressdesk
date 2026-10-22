@@ -1,0 +1,20 @@
+87b9d2d Stop writing a broker record that nobody reads
+a9d3e23 Journal the verdict and the failures, not the encounters; restart a stopped project
+9898039 A verdict is recorded every time; only findings are deduplicated
+bf83bf6 Record the owner's decision to push back the conceptualisation rung
+3391295 Record the owner's future work: a feature that is too complex, not too big
+f23836c Record the publication target: one repository, the work branch and the product's home
+e66f170 Ignore the self-test artifacts the acceptance instruments leave behind
+0b4311f Rewrite the handover as the full project handover: specs, work, issues, outstanding work
+bd21bdd Any non-delivery enters the split ladder, whatever the cause
+c3a07e0 Keep the delivery driver, the acceptance instruments and the owner-triggered observer
+277222a Hand over the core delivery: state, evidence, decisions and the remaining plan
+56d5d66 Decide adapter outcomes on a contract, not on the provider's wording
+56fc7f7 A provider that ends a generation with an error is an interruption, not a failure
+e27fb48 Remove the em dash check on role briefs
+ee91cdc Record a sweep fact when it changes, not when it repeats
+330148d Give the observer the finding and the brief it needs, not the whole cast
+81bf625 Deliver a round that changed nothing, and leave a reported round to the host
+ba925ba Pass the derived lessons projection into the context pack
+63aa010 Account for a round that housekeeping swept before it delivered
+726d997 Project the lesson log as a bounded brief instead of a spawn-fatal log

@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "milestone": "MS2",
+  "scope": "the self-improvement loop: the lessons brief, round accounting, mechanical fix propagation, the observer's context, the callable researcher, the owner-triggered observer, and the restart of a stopped project",
+  "state": "in progress",
+  "deliveredFeatures": [
+    {
+      "taskId": "ms2-lessons-projection",
+      "candidateId": "25e0b898-31eb-43d2-9620-620639bfe9b4",
+      "runId": "71d1b429-a8ef-47c8-b874-bbb855327bd0",
+      "fileCount": 3,
+      "files": [
+        "src/progressdesk/loop.py",
+        "src/progressdesk/runtime.py",
+        "src/progressdesk/spawn.py"
+      ]
+    },
+    {
+      "taskId": "ms2-round-accounting",
+      "candidateId": "5a59f549-9b8b-4e9f-81a9-0c91e913747a",
+      "runId": "90f74896-65a7-4f5f-b204-5bd772f25d00",
+      "fileCount": 2,
+      "files": [
+        "src/progressdesk/floor_sweep.py",
+        "src/progressdesk/loop.py"
+      ]
+    },
+    {
+      "taskId": "ms2-fix-apply",
+      "candidateId": "45cd01fc-4c4e-45ae-9423-c4f3ad957da3",
+      "runId": "cbaebf4f-72c5-4a48-9a6e-2eb0fed3a456",
+      "fileCount": 2,
+      "files": [
+        "src/progressdesk/runtime.py",
+        "src/progressdesk/sharpener.py"
+      ]
+    },
+    {
+      "taskId": "ms2-fix-supersession",
+      "candidateId": "266196f0-fc1b-49d8-942e-5026c24c0561",
+      "runId": "05202b9f-e9a4-4470-b279-97ae79c30717",
+      "fileCount": 2,
+      "files": [
+        "src/progressdesk/runtime.py",
+        "src/progressdesk/sharpener.py"
+      ]
+    },
+    {
+      "taskId": "ms2-observer-context",
+      "candidateId": "b3337722-dc3e-477a-8f15-b18a94fb84ad",
+      "runId": "bd3e5a1d-5d6b-4629-8791-6d840e3ebafa",
+      "fileCount": 2,
+      "files": [
+        "src/progressdesk/loop.py",
+        "src/progressdesk/runtime.py"
+      ]
+    },
+    {
+      "taskId": "ms2-research-role",
+      "candidateId": "1bd0e93e-d782-403e-97ed-754838bbb775",
+      "runId": "55b1dd24-d138-401c-a5cb-3a05eb394861",
+      "fileCount": 5,
+      "files": [
+        "config/assignments.json",
+        "src/progressdesk/agents/RESEARCHER.md",
+        "src/progressdesk/harness.py",
+        "src/progressdesk/research.py",
+        "src/progressdesk/runtime.py"
+      ]
+    },
+    {
+      "taskId": "ms2-round-accounting",
+      "candidateId": "ced9b200-71e8-464b-94aa-a30f2c5bfc0d",
+      "runId": "4c6d00d2-af22-49c0-831a-3a82da30ee3a",
+      "fileCount": 1,
+      "files": [
+        "src/progressdesk/floor_sweep.py"
+      ]
+    },
+    {
+      "taskId": "ms2-research-run",
+      "candidateId": "52c121fb-918e-4ecd-98f9-3548eb2bd19e",
+      "runId": "b2ad74a4-7e32-448c-8bc4-de6df674980e",
+      "fileCount": 2,
+      "files": [
+        "src/progressdesk/agents/RESEARCHER.md",
+        "src/progressdesk/runtime.py"
+      ]
+    }
+  ],
+  "outstandingFeatures": [
+    "ms2-sharpener-trigger",
+    "7919c70a0ec044f1bfe565e34a8a0a3c",
+    "ms2-clearance-record"
+  ],
+  "gate": "not yet run"
+}
