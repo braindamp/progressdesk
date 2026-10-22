@@ -39,13 +39,28 @@ DEFINITION_KINDS = frozenset(
 
 DEFINITION_FIELDS = ("id", "kind", "revision", "parentRefs", "contentRef")
 
+# The kinds an owner signs off separately (§5.1 "signoffs bind to the displayed
+# VISP and FUSP revisions separately").
+_SIGNABLE_KINDS = frozenset({"VISP", "FUSP"})
+
 _PARENT_REF_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@[1-9][0-9]*$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 _DUMMY_CONTENT_REF = "sha256:" + "0" * 64  # validation probe only; never recorded
 
 
 class DefinitionError(ValueError):
-    """Structural or semantic definition violation."""
+    """Structural or semantic definition violation.
+
+    The refusal carries a stable code so a caller can tell the two owner
+    refusals apart — a revision from a superseded draft and a definition that
+    was never recorded are different facts, not one generic rejection. The
+    message still names the fact; the code names it for machines.
+    """
+
+    def __init__(self, message: str, code: str = "definition_invalid") -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 def _is_hex64(value: str) -> bool:
@@ -192,7 +207,8 @@ class Definitions:
             raise DefinitionError(
                 f"Stale expected_revision {expected_revision!r}; current revision is "
                 f"{current.revision} — must not create a different plan from the one "
-                "the owner approved (§5.3 stale-draft spirit)"
+                "the owner approved (§5.3 stale-draft spirit)",
+                code="stale_revision",
             )
         revised = Definition(
             id=current.id,
@@ -301,7 +317,9 @@ class Definitions:
         """Highest recorded revision of id. Unknown id raises (never fabricate)."""
         revisions = self._recorded_revisions(definition_id)
         if not revisions:
-            raise DefinitionError(f"No recorded definition {definition_id!r}")
+            raise DefinitionError(
+                f"No recorded definition {definition_id!r}", code="unknown_definition"
+            )
         return revisions[max(revisions)]
 
     def get(self, definition_id: str, revision: int) -> Definition:
@@ -309,9 +327,41 @@ class Definitions:
         revisions = self._recorded_revisions(definition_id)
         if revision not in revisions:
             raise DefinitionError(
-                f"No recorded definition {definition_id!r} revision {revision!r}"
+                f"No recorded definition {definition_id!r} revision {revision!r}",
+                code="unknown_definition",
             )
         return revisions[revision]
+
+    def pending_signoffs(self) -> list[dict[str, Any]]:
+        """VISP/FUSP revisions that still await an owner signoff.
+
+        A read-only projection: nothing is recorded. A definition is pending
+        when its LATEST recorded revision has no `definition.signed-off` event
+        for that exact identity. A signoff of an earlier revision does not
+        authorise the later one (§16.1 signoff applies to the displayed exact
+        version), so revising a signed-off definition puts it back here.
+        """
+        signed = {
+            (identity["id"], identity["kind"], identity["revision"])
+            for _event, identity in self._signoff_events()
+        }
+        pending: list[dict[str, Any]] = []
+        for definition in self._latest_definitions().values():
+            if definition.kind not in _SIGNABLE_KINDS:
+                continue
+            key = (definition.id, definition.kind, definition.revision)
+            if key in signed:
+                continue
+            pending.append(
+                {
+                    "id": definition.id,
+                    "kind": definition.kind,
+                    "revision": definition.revision,
+                    "contentRef": definition.contentRef,
+                }
+            )
+        pending.sort(key=lambda item: (item["kind"], item["id"]))
+        return pending
 
     def is_signed_off(self, definition: Definition) -> bool:
         """A later revision is unsigned by construction.
@@ -388,6 +438,21 @@ class Definitions:
             cause_id=cause_id,
         )
         return complete
+
+    def _latest_definitions(self) -> dict[str, Definition]:
+        """Latest recorded revision of every definition id, from the events."""
+        latest: dict[str, Definition] = {}
+        for event in self.log.read_all():
+            if event.type not in ("definition.created", "definition.revised"):
+                continue
+            if event.payloadRef is None:
+                continue
+            payload = self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1])
+            candidate = Definition.from_dict(json.loads(payload))
+            current = latest.get(candidate.id)
+            if current is None or candidate.revision > current.revision:
+                latest[candidate.id] = candidate
+        return latest
 
     def _recorded_revisions(self, definition_id: str) -> dict[int, Definition]:
         """All recorded revisions of id, from definition.created/revised events."""

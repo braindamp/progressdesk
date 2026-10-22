@@ -7,7 +7,7 @@ ones. Two strengths, chosen by the role above it, never by this module.
     strong  after every milestone. The light sweep, plus a note of the
             workspace's git state: what was uncommitted, and which HEAD.
 
-Two rules it obeys without exception.
+Three rules it obeys without exception.
 
 **It reports, it does not decide.** The decision to continue was taken before it
 was called. What comes back is *traces* — what it found — and CLEANING_LAYA acts
@@ -17,6 +17,13 @@ is a judgement and this module does not make judgements.
 **It never destroys evidence.** Debris moves to evidence. A torn journal tail is
 preserved before it is discarded. The only thing it refuses to do is tidy over a
 record.
+
+**It journals the verdict and the failures.** The room's verdict is written
+every time it is reached, and a step the sweep could not complete is written
+when it happens - once, because a finding stays true until it changes. What the sweep cleaned up is recorded by the module that did
+it — a reconciled process, a closed round, the discarded bytes — and what it
+merely encountered is not a fact about anything. The report still lists every
+step: CLEANING_LAYA reads the report, not the journal.
 
 TESP §10.6.
 """
@@ -28,6 +35,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +51,23 @@ LIGHT = "light"
 STRONG = "strong"
 STRENGTHS = (LIGHT, STRONG)
 
+# The room's verdict. It is a moment, not a finding, so it is written every
+# time it is reached.
+VERDICT = "clearance"
+
+# The operations that report a *finding*: something the sweep found, and it
+# stays true until it changes. The verdict is not one of them - the clearance
+# is the state of the room at the moment it was reached, so a repeated
+# measurement of the same probability is still a new moment.
+DEDUPED_OPERATIONS = frozenset({
+    "reconcile_liveness",
+    "sweep_debris",
+    "sweep_escaped",
+    "discard_torn_tail",
+    "reset",
+    "sweep",
+})
+
 # A head younger than this has not accumulated enough history behind it to be
 # worth restoring to, however recent it looks.
 MINIMUM_HEAD_AGE_DAYS = 6
@@ -55,7 +80,8 @@ UNSUPPORTED = "unsupported in this environment"
 
 @dataclass(frozen=True)
 class SweepAction:
-    """One journaled mechanical step."""
+    """One mechanical step. In the report always; in the journal only when it
+    is the verdict or a step that could not be completed."""
 
     operation: str
     detail: str = ""
@@ -147,12 +173,12 @@ class FloorSweep:
         self.log = log
         self.artifacts = artifacts
         self.workspace = Path(workspace)
-        # The briefs sit beside this module, so the check finds them without
-        # being told where the workshop is. They are not in the workspace on
-        # purpose: they are instructions, not a builder's output.
         self._is_alive = is_alive
         self._enumerator = enumerator
         self._git = git or _git
+        # What the journal already says per operation and project, so a
+        # finding is written once, when it changes.
+        self._journal: dict[str, dict[str, str]] | None = None
 
     # -- the entry point --------------------------------------------------
     def run(self, project_id: str, *, strength: str = LIGHT) -> SweepReport:
@@ -167,25 +193,31 @@ class FloorSweep:
             self._sweep_escaped(report)
             if strength == STRONG:
                 self._reset_environment(report)
+        # The summary of the pass is the pass, not a step of it. The report
+        # carries it; the journal carries the verdict and the steps that could
+        # not be completed.
         self._record(
             report, "sweep", f"{strength}: {len(report.traces)} trace(s)",
-            blocked=bool(report.traces), found=bool(report.traces),
+            blocked=bool(report.traces), journal=False,
         )
         return report
 
     # -- the light pass ---------------------------------------------------
     def _reconcile_liveness(self, report: SweepReport) -> None:
         """Close every open spawn that is no longer the process we started."""
+        details: list[str] = []
+        blocked = False
         for event in self._open_spawns(report.project_id):
             identity = self._payload(event)
             pid = identity.get("processId")
             created = identity.get("processCreationTime")
             if not isinstance(pid, int) or not isinstance(created, int):
                 report.traces.append(f"spawn {event.id} carries no usable process identity")
-                self._record(report, "reconcile_liveness", "identity unreadable", blocked=True)
+                details.append(f"spawn {event.id}: identity unreadable")
+                blocked = True
                 continue
             alive, why = self._is_alive(pid, created)
-            self._record(report, "reconcile_liveness", why)
+            details.append(why)
             if not alive:
                 self.log.record(
                     "action.reconciled",
@@ -198,6 +230,8 @@ class FloorSweep:
                     run_id=event.runId,
                     cause_id=event.id,
                 )
+        if details:
+            self._record(report, "reconcile_liveness", "; ".join(details), blocked=blocked)
 
     def _open_spawns(self, project_id: str) -> list[Any]:
         """Registered processes with no completion of any kind recorded."""
@@ -216,7 +250,14 @@ class FloorSweep:
         ]
 
     def _sweep_debris(self, report: SweepReport) -> None:
-        """Round scratch for work that never ticked, moved into evidence."""
+        """Round scratch for work that never ticked, moved into evidence.
+
+        A round that never delivered is retired here: its work is preserved as
+        evidence and the round is closed as killed, so an unaccounted round
+        cannot block the project forever. Two rounds are not retired. A round
+        whose registered process is still alive is not finished, and a round the
+        builder has reported on is the host's to account for.
+        """
         events = self.log.read_all()
         delivered = {
             e.runId for e in events
@@ -226,72 +267,99 @@ class FloorSweep:
             e.runId for e in events
             if e.projectId == report.project_id and e.type == "round.closed"
         }
-        unticked = [
-            e for e in events
-            if e.projectId == report.project_id
-            and e.type == "round.started"
-            and e.runId
-            and e.runId not in delivered
-        ]
-        # A round the builder has reported on is the host's to account for, not
-        # the sweep's. The sweep retires work that never ticked; a round that
-        # reported is still being settled, and sweeping it would destroy the
-        # delivery the host is about to freeze.
         reported = {
             e.runId for e in events
-            if e.projectId == report.project_id and e.type == "builder.reported"
+            if e.projectId == report.project_id and e.type == "builder.reported" and e.runId
         }
-        for event in unticked:
-            if event.runId in reported:
-                self._record(report, "sweep_debris",
-                             f"run {event.runId}: the builder reported; the host accounts for it")
+        live = self._live_runs(report.project_id)
+        findings: list[str] = []
+        for event in events:
+            if event.projectId != report.project_id:
                 continue
-            if self._round_is_live(report.project_id, event.runId):
-                # The round is still running. A round that has not delivered
-                # yet is not debris: a builder that is working has no
-                # candidate either, and sweeping it would move its directory
-                # out from under it.
-                self._record(report, "sweep_debris",
-                             f"run {event.runId}: the round is still running")
+            if event.type != "round.started" or not event.runId:
                 continue
-            detail, captured = self._sweep_round(report.project_id, event.runId)
-            self._record(report, "sweep_debris", detail, found=captured)
-            # A swept round is finished. Leaving it open blocks every later
-            # round of the project: the scheduler refuses to dispatch while a
-            # round is neither closed nor reconciled, so a round that never
-            # delivered would hold the project forever. The work is preserved
-            # as evidence; the round is accounted for.
-            if event.runId not in closed and not self._round_is_live(report.project_id, event.runId):
-                self._close_swept_round(report, event, detail)
+            run_id = event.runId
+            if run_id in delivered:
+                continue
+            if run_id in live:
+                findings.append(f"run {run_id}: process still live; left open")
+                continue
+            if run_id in reported or self._report_filed(report.project_id, run_id):
+                findings.append(f"run {run_id}: builder reported; left to the host")
+                continue
+            if self._evidence_exists(report.project_id, run_id):
+                # The work is already preserved. Nothing changed, so there is
+                # nothing new to say about it; the round is still accounted for.
+                if run_id not in closed:
+                    self._retire(report, run_id,
+                                "the round never delivered; its work was preserved as evidence")
+                continue
+            detail = self._sweep_round(report.project_id, run_id)
+            findings.append(detail)
+            if run_id not in closed:
+                self._retire(report, run_id, detail)
+        # One fact for the pass, so the same room says the same thing at the
+        # next boundary instead of saying it again.
+        if findings:
+            self._record(report, "sweep_debris", "; ".join(findings))
 
-    def _round_is_live(self, project_id: str, run_id: str) -> bool:
-        """True when a registered process of that round is still alive."""
-        for event in self.log.read_all():
-            if event.projectId != project_id or event.runId != run_id:
-                continue
-            if event.type != "process.registered":
-                continue
+    def _live_runs(self, project_id: str) -> set[str]:
+        """Run ids whose registered process is still the process we started."""
+        live: set[str] = set()
+        for event in self._open_spawns(project_id):
             identity = self._payload(event)
             pid = identity.get("processId")
             created = identity.get("processCreationTime")
-            if isinstance(pid, int) and isinstance(created, int):
+            if not isinstance(pid, int) or not isinstance(created, int):
+                # The identity is unreadable, so nothing here can say the
+                # process is gone. A round that might still be running is left
+                # running.
+                live.add(event.runId or "")
+                continue
+            try:
                 alive, _why = self._is_alive(pid, created)
-                if alive:
-                    return True
-        return False
+            except Exception:  # noqa: BLE001 - an unreadable process is not a dead one
+                alive = True
+            if alive:
+                live.add(event.runId or "")
+        return live
 
-    def _close_swept_round(self, report: SweepReport, event: Any, detail: str) -> None:
-        """Close a round that housekeeping retired before it delivered."""
+    def _report_filed(self, project_id: str, run_id: str) -> bool:
+        """Did the builder leave a report in the round directory itself?"""
+        box = self.workspace / "projects" / project_id / "rounds" / run_id / "report"
+        try:
+            return any(box.glob("*.json"))
+        except OSError:
+            return False
+
+    def _evidence_exists(self, project_id: str, run_id: str) -> bool:
+        """Has this round's work already been preserved as evidence?"""
+        return (self.workspace / "projects" / project_id / "rounds"
+                / "evidence" / run_id).is_dir()
+
+    def _binding(self, project_id: str, run_id: str) -> tuple[str, str]:
+        """The task and the milestone this round belonged to."""
         task_id = ""
         milestone_id = ""
-        for other in self.log.read_all():
-            if other.projectId != report.project_id or other.runId != event.runId:
+        for event in self.log.read_all():
+            if event.runId != run_id:
                 continue
-            if other.type != "round.dispatched":
-                continue
-            payload = self._payload(other)
-            task_id = str(payload.get("taskId", "") or "")
-            milestone_id = str(payload.get("milestoneId", "") or "")
+            payload = self._payload(event)
+            if event.type == "round.dispatched":
+                task_id = str(payload.get("taskId") or task_id)
+                milestone_id = str(payload.get("milestoneId") or milestone_id)
+            elif event.type == "round.started" and not task_id:
+                task_id = str(payload.get("taskDefinitionRef") or task_id)
+        return task_id, milestone_id
+
+    def _retire(self, report: SweepReport, run_id: str, detail: str) -> None:
+        """The round ends here: killed, with the reason, and its work kept.
+
+        The closure names the task and the milestone the round belonged to, so
+        the killed round is still accounted for in the project.
+        """
+        task_id, milestone_id = self._binding(report.project_id, run_id)
+        reason = f"the round never delivered; the sweep retired it ({detail})"
         self.log.record(
             "round.closed",
             producer="manager",
@@ -299,26 +367,24 @@ class FloorSweep:
                 "taskId": task_id,
                 "milestoneId": milestone_id,
                 "outcome": "killed",
+                "reason": reason,
                 "candidateHash": None,
                 "files": {},
-                "reason": "round swept by housekeeping before it delivered",
-                "detail": detail,
             }, sort_keys=True).encode("utf-8"),
             project_id=report.project_id,
-            run_id=event.runId,
-            cause_id=event.id,
+            task_ref=task_id or None,
+            run_id=run_id,
         )
-        self._record(report, "round_accounted", f"run {event.runId}: closed as killed after sweep")
 
-    def _sweep_round(self, project_id: str, run_id: str) -> tuple[str, bool]:
+    def _sweep_round(self, project_id: str, run_id: str) -> str:
         """Unaccepted work is never silently promoted; it is preserved."""
         rounds = self.workspace / "projects" / project_id / "rounds"
         source = rounds / run_id
         if not source.is_dir():
-            return f"run {run_id}: nothing on disk", False
+            return f"run {run_id}: nothing on disk"
         evidence = rounds / "evidence" / run_id
         if evidence.exists():
-            return f"run {run_id}: evidence already swept", False
+            return f"run {run_id}: evidence already swept"
         digests: dict[str, str] = {}
         for path in sorted(source.rglob("*")):
             if path.is_file() and path.name not in ("agent.jsonl", "agent.err"):
@@ -328,19 +394,17 @@ class FloorSweep:
             json.dumps(digests, indent=2, sort_keys=True), encoding="utf-8"
         )
         shutil.rmtree(source, ignore_errors=True)
-        return f"run {run_id}: {len(digests)} file(s) captured as evidence", bool(digests)
+        return f"run {run_id}: {len(digests)} file(s) captured as evidence"
 
     def _sweep_escaped(self, report: SweepReport) -> None:
         """Processes outside the job, found by working directory."""
         if self._enumerator is None:
-            self._record(report, "sweep_escaped", f"{UNSUPPORTED}: no host process enumerator",
-                         found=False)
+            self._record(report, "sweep_escaped", f"{UNSUPPORTED}: no host process enumerator")
             return
         escaped = [
             p for p in self._enumerator() if str(self.workspace) in str(p.get("cwd", ""))
         ]
-        self._record(report, "sweep_escaped", f"{len(escaped)} process(es) in the workshop tree",
-                     found=bool(escaped))
+        self._record(report, "sweep_escaped", f"{len(escaped)} process(es) in the workshop tree")
 
     def _discard_torn_tail(self, report: SweepReport) -> None:
         """An incomplete final append leaves the active tail, bytes preserved."""
@@ -351,8 +415,7 @@ class FloorSweep:
             self._record(report, "discard_torn_tail", str(exc), blocked=True)
             return
         removed = result.get("truncatedBytes", result.get("discarded", 0))
-        self._record(report, "discard_torn_tail", f"{removed or 0} byte(s) removed",
-                     found=bool(removed))
+        self._record(report, "discard_torn_tail", f"{removed or 0} byte(s) removed")
 
     # -- the strong pass --------------------------------------------------
     def _reset_environment(self, report: SweepReport) -> None:
@@ -381,7 +444,7 @@ class FloorSweep:
             report.traces.append(f"uncommitted at run start: {names}")
             self._record(report, "reset", f"{head}: dirty: {names}")
         else:
-            self._record(report, "reset", f"{head}: clean", found=False)
+            self._record(report, "reset", f"{head}: clean")
 
     def _head_age_days(self, repo: Path) -> int | None:
         try:
@@ -392,17 +455,31 @@ class FloorSweep:
 
     # -- journal ----------------------------------------------------------
     def _record(self, report: SweepReport, operation: str, detail: str, *,
-                blocked: bool = False, found: bool = True) -> None:
+                blocked: bool = False, journal: bool | None = None) -> None:
         """Put a step in the sweep report, and journal only what matters.
 
         The journal keeps the room's verdict and the steps the sweep could not
-        complete. What it cleaned up is recorded by the module that did it - a
-        reconciled process, a closed round, the discarded bytes - and what it
+        complete. What it cleaned up is recorded by the module that did it — a
+        reconciled process, a closed round, the discarded bytes — and what it
         merely encountered is not a fact about anything.
+
+        The report still lists every step, whatever the journal says: the
+        report is what CLEANING_LAYA reads.
         """
         action = SweepAction(operation=operation, detail=detail, blocked=blocked)
         report.actions.append(action)
-        if operation != "clearance" and not blocked:
+        if journal is None:
+            journal = operation == VERDICT or blocked
+        if not journal:
+            return
+        # A *finding* is recorded when it changes, not when it repeats: the
+        # same finding at the next boundary is not news. A *verdict* is not a
+        # finding - the room's clearance is the state of the room at that
+        # moment, and the dispatch path reads the last one. Suppressing it
+        # left the project reading a stale blocked clearance forever.
+        if operation in DEDUPED_OPERATIONS and self._seen_finding(
+            report.project_id, operation, detail
+        ):
             return
         self.log.record(
             "floor_sweep.action",
@@ -414,9 +491,44 @@ class FloorSweep:
             project_id=report.project_id,
         )
 
+    def _seen_finding(self, project_id: str, operation: str, detail: str) -> bool:
+        """Has this exact finding already been recorded for this project?
+
+        A finding stays true until it changes, so the same finding at the next
+        boundary is written once. The room's verdict never reaches this check.
+        """
+        facts = self._journal_facts(project_id)
+        if facts.get(operation) == detail:
+            return True
+        facts[operation] = detail
+        return False
+
+    def _journal_facts(self, project_id: str) -> dict[str, str]:
+        """What the journal already says, per operation, for this project."""
+        if self._journal is None:
+            self._journal = {}
+        facts = self._journal.get(project_id)
+        if facts is None:
+            facts = {}
+            for event in self.log.read_all():
+                if event.type != "floor_sweep.action" or not event.payloadRef:
+                    continue
+                try:
+                    payload = json.loads(
+                        self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1])
+                    )
+                except (OSError, ValueError, IndexError, UnicodeDecodeError):
+                    continue
+                if str(payload.get("projectId", "")) != project_id:
+                    continue
+                facts[str(payload.get("operation", ""))] = str(payload.get("detail", ""))
+            self._journal[project_id] = facts
+        return facts
+
     def record(self, report: SweepReport, operation: str, detail: str, *, blocked: bool = False) -> None:
-        """Journal one step. Same writer, same vocabulary, no second record."""
-        self._record(report, operation, detail, blocked=blocked)
+        """Journal one step. Same writer, same vocabulary. The room's verdict is
+        written every time it is reached; a finding is written when it changes."""
+        self._record(report, operation, detail, blocked=blocked, journal=True)
 
     def _payload(self, event: Any) -> dict[str, Any]:
         ref = getattr(event, "payloadRef", None)
@@ -525,10 +637,10 @@ def describe(report: SweepReport) -> str:
     reports separate by 0.36. A decision model reads sentences; a JSON dump is
     structure it has no reason to have been trained on.
 
-    A step that could not be run is left out. The sweep says so in the log, and
-    the log is the record. But this text is not the log: it is a description of
-    the room, and "unsupported in this environment: no host process enumerator"
-    reads to a decision model as a problem with the room. It measured a
+    A step that could not be run is left out. The sweep says so in its report,
+    and the report is the record. But this text is not the report: it is a
+    description of the room, and "unsupported in this environment: no host
+    process enumerator" reads to a decision model as a problem with the room. It measured a
     brand-new project that had never been touched at 0.67 -- a problem -- and
     blocked it. A detection control that cannot run is a limitation, not a
     finding about the scene, and the room is not dirtier for having one.
@@ -549,40 +661,52 @@ def describe(report: SweepReport) -> str:
 
 
 class Cleaner:
-    """Runs the sweep, and the sweep's own result decides.
+    """Runs the sweep, then asks CLEANING_LAYA what to make of it.
 
-    The deterministic housekeeping applies what is mechanical and then answers
-    the only question there is: is the scene restartable, or is there something
-    that needs the forensic tier? After it runs the scene is either restartable
-    or it is not, and there is no third answer.
+    She decides; this applies. She is given no tools and can move nothing, so her
+    verdict is what authorises the next round — and it is never a claim that
+    something was already done.
 
-    Nothing here asks a model to re-read a description of the room and produce
-    a probability. A decision model was tried here and it was the wrong shape:
-    a number standing between the build and its work, decided from prose about
-    facts the sweep already holds, and it could be stale, unavailable, or
-    simply wrong - each of which stopped a project that had nothing wrong with
-    it. What the sweep could not clear is named instead, and that is what
-    SCHOTTY is for.
+    She is a decision model, not a language model. She is asked one typed
+    question and answers with a probability, so there is no line of text to
+    parse and no way for a correct judgement to be lost to a keyword. The
+    previous arrangement asked a large model for `decision: restartable` and
+    read that one line back: the one recorded run of this role answered
+    `estimate: restartable`, as its own brief instructed, and was recorded as
+    having said nothing at all.
+
+    A service that does not answer is not a room that is clean. An unreachable
+    decision is `no verdict`, which is not a yes, exactly as before.
     """
 
-    def __init__(self, sweep: Sweep) -> None:
+    def __init__(
+        self,
+        sweep: Sweep,
+        decide: Callable[[str, str], Any] | None = None,
+    ) -> None:
         self.sweep = sweep
+        self._decide = decide
 
     def run(self, project_id: str, *, strength: str = LIGHT) -> Clearance:
         report = self.sweep.script.run(project_id, strength=strength)
-        outstanding = [f"{action.operation}: {action.detail}"
-                        for action in report.actions if action.blocked]
-        outstanding.extend(report.traces)
-        if outstanding:
-            verdict = "needs SCHOTTY"
-            rationale = "; ".join(outstanding)[:400]
+        probability: float | None = None
+        if self._decide is None:
+            verdict, rationale = "no verdict", "no decision seam configured"
         else:
-            verdict = "restartable"
-            rationale = "the sweep cleared everything it found"
-        clearance = Clearance(project_id, strength, verdict, rationale, report, None)
+            try:
+                decision = self._decide(project_id, describe(report))
+                probability = decision.probability
+                if getattr(decision, "truncated", False):
+                    verdict, rationale = "no verdict", "local LAYA truncated the room packet"
+                else:
+                    verdict = "needs SCHOTTY" if decision.above else "restartable"
+                    rationale = decision.detail
+            except Exception as exc:  # noqa: BLE001 - an unasked room is not a clean room
+                verdict, rationale = "no verdict", f"not decided: {exc}"
+        clearance = Clearance(project_id, strength, verdict, rationale, report, probability)
         self.sweep.script.record(
             report,
-            "clearance",
+            VERDICT,
             f"{verdict}: {rationale}".strip(": "),
             blocked=not clearance.restartable,
         )

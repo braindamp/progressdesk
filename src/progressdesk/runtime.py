@@ -25,15 +25,28 @@ from .artifacts import ArtifactStore
 from .broker import Broker, PoliceTerminationAuthority, SHARPENER_PROJECT
 from .definitions import Definitions
 from .decide import READS_AS_PROBLEM, Decision, SystemOneExecutor, Unreachable
-from .desk import ProgressDeskOperations, ProjectService
+from .desk import ProgressDeskOperations, ProjectError, ProjectService
 from .events import EventLog
 from .harness import HarnessConfig, HarnessError, TaskPacket
 from .floor_sweep import Cleaner, Sweep
 from .spawn import Budget, ContextPack, ContextSection, ModelSpec, SpawnRequest
 from .lab import LabNeedDetermination, LabReferralService, SimulatedLabReferral
-from .loop import _cast_briefs, AGENTS, dispatcher_for, read_brief
+from .loop import (
+    _cast_briefs,
+    AGENTS,
+    dispatcher_for,
+    involved_briefs,
+    observer_mark,
+    observer_proposals,
+    read_brief,
+    record_refusal,
+    refusal_finding,
+    refusal_findings as read_refusal_findings,
+)
 from .police import FailureClassification, Observation, PoliceService
-from .planning import PlanningSession
+from .planning import DRAFT_DOCUMENT_TYPE, PlanningSession
+from .research import ResearchError, ResearchFinding, ResearchService
+from .sharpener import FixRecord, FixRepository
 from .spawn import ExecutorRegistry, ManualExecutor, SpawnError, Spawner
 from .toolcenter import ToolCenter
 
@@ -52,6 +65,36 @@ class CommandError(ValueError):
 class DomainFailure(Exception):
     """Services raise their own types; both transports recognise them here.
     """
+
+
+class _CreateRefusal(ProjectError, CommandError):
+    """A refused Create Project.
+
+    The refusal is a domain fact (nothing was materialized) and a transport
+    fact (the caller gets a stable code), so it is both.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        ValueError.__init__(self, message)
+        self.code = code
+        self.message = message
+
+
+class _CreatedProject(dict):
+    """The created project id, carried together with its manifest.
+
+    The verb answers with the created project id. Keeping the manifest
+    readable (`result["projectId"]`, `result["destination"]`) and the id
+    comparable to the bare string keeps both readings of the answer true.
+    """
+
+    def __eq__(self, other: Any) -> Any:
+        if isinstance(other, str):
+            return other == self.get("projectId")
+        return dict.__eq__(self, other)
+
+    def __ne__(self, other: Any) -> Any:
+        return not self.__eq__(other)
 
 
 def _domain_failures() -> tuple[type[BaseException], ...]:
@@ -103,7 +146,55 @@ class Command:
         return default if value is None else value
 
 
+def _require_param(cmd: Command, *names: str) -> Any:
+    """First present parameter among `names`; a missing one is a missing_parameter.
+
+    The planning surface is called with snake_case names by the CLI and with
+    the §5.2 field names by the API, so a verb accepts both spellings of the
+    same parameter.
+    """
+    for name in names:
+        if name in cmd.params and cmd.params[name] not in (None, ""):
+            return cmd.params[name]
+    raise CommandError("missing_parameter", f"{cmd.verb}: missing '{names[0]}'")
+
+
+def _optional_param(cmd: Command, *names: str) -> Any:
+    """First present parameter among `names`; an absent one is no value at all.
+
+    The counterpart of `_require_param`: a parameter the operation treats as
+    optional stays optional under either of its spellings.
+    """
+    for name in names:
+        if name in cmd.params and cmd.params[name] not in (None, ""):
+            return cmd.params[name]
+    return None
+
+
+def _refs(cmd: Command, *names: str) -> tuple[str, ...]:
+    """A tuple of reference strings; a single string is one reference."""
+    value = _require_param(cmd, *names)
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, (list, tuple)):
+        return tuple(str(entry) for entry in value)
+    raise CommandError("bad_reference", f"{cmd.verb}: '{names[0]}' must be a string or a list of strings")
+
+
+def _optional_refs(cmd: Command, *names: str) -> tuple[str, ...]:
+    """Like `_refs`, but an absent parameter is no reference at all."""
+    for name in names:
+        if name in cmd.params and cmd.params[name] not in (None, ""):
+            return _refs(cmd, *names)
+    return ()
+
+
 WORKSHOP = "workshop"
+
+# The planning session leader (F-PF2): the role that reads the cards and
+# drives them toward a VISP/FUSP draft. The role table says which model
+# fills it; nothing here says what a model is.
+PLANNER_ROLE = "PLANNER"
 
 # The three things a builder can say. Terminal ones close the session: the work
 # has declared itself done, which is a round finishing and not a project abort.
@@ -149,6 +240,7 @@ class Runtime:
     cleaner: Cleaner | None = None
     ask: Callable[..., str] | None = None
     split_task: Callable[..., Any] | None = None
+    planning_project: str = WORKSHOP
     _spawner_lock: threading.Lock = field(default_factory=threading.Lock)
     execution: Mapping[str, Any] = field(default_factory=dict)
 
@@ -201,6 +293,9 @@ class Runtime:
         )
         runtime.cleaner = Cleaner(sweep)
         runtime.ask = runtime.ask_role
+        # The session leader is an adapter on the same seam as every other
+        # role: the role table names the model, the transport reaches it.
+        runtime.planning.planner = runtime.planning_leader
         from .jack import run_split
         runtime.split_task = lambda project_id, milestone_id, task_id, failure: run_split(
             runtime, project_id, milestone_id, task_id, failure
@@ -320,6 +415,7 @@ class Runtime:
         state: str,
         expecting: str,
         cast: bool = False,
+        with_roles: tuple[str, ...] = (),
         tools: tuple[str, ...] = (),
         brief_budget: int = 24_000,
         state_budget: int = 8_000,
@@ -358,6 +454,12 @@ class Runtime:
                 ))
         if cast:
             sections.append(ContextSection("the other roles", _cast_briefs(role), 40_000))
+        elif with_roles:
+            # A judgement about one role is made against that role's brief and
+            # its lessons. The cast is for a judgement that may involve any
+            # role, and handing it here drowns the one role that matters.
+            sections.append(ContextSection(
+                "the role this is about", involved_briefs(with_roles, self.root), 24_000))
         sections.append(ContextSection("what you are looking at", state, state_budget))
         if run_id is None:
             run_id = f"ask-{role.lower()}-{uuid.uuid4().hex[:10]}"
@@ -474,6 +576,7 @@ class Runtime:
         context: str,
         *,
         cast: bool = False,
+        with_roles: tuple[str, ...] = (),
         tools: tuple[str, ...] = (),
         run_id: str | None = None,
     ) -> str:
@@ -484,12 +587,14 @@ class Runtime:
         a fresh session.
         """
         if role == "SHARPENER":
-            # The cast of briefs is what a boundary observation needs; a
-            # narrower judgement does not pay for the whole workshop. The
-            # caller decides, and the default is the narrow one.
+            # The observer is given the whole cast when the judgement may
+            # involve any role, and only the role the finding is about when it
+            # is about one.
+            cast = cast or not with_roles
             tools = tools or ("read", "write", "glob", "grep")
         return self._dispatch(
-            project_id, role, state=context, expecting="prose", cast=cast, tools=tools,
+            project_id, role, state=context, expecting="prose", cast=cast,
+            with_roles=with_roles, tools=tools,
             run_id=run_id,
         ).output or ""
 
@@ -499,6 +604,133 @@ class Runtime:
         Project-scoped: two projects running at once have two rooms.
         """
         return self.noul_in(project_id, state, READS_AS_PROBLEM)
+
+    def refusal_findings(self, project_id: str, *, run_id: str = "") -> list[dict[str, Any]]:
+        """Every refused dispatch the log holds, as findings the observer reads.
+
+        A read: it accepts nothing and rejects nothing.
+        """
+        return read_refusal_findings(self, project_id, run_id)
+
+    def offer_refusal_to_observer(
+        self, project_id: str, role: str, finding: dict[str, Any],
+    ) -> None:
+        """Hand one refusal finding to the observer, the way a builder's finding is handed.
+
+        A fault the framework caused is visible to the learning path like a
+        fault a model reported: the round does not close silently. The
+        observation is not a gate -- nothing here accepts or rejects the work
+        the refusal left untouched.
+        """
+        if not finding:
+            return
+        context = (
+            f"Framework finding recorded for {role} "
+            "(judge lessons or propose a VISP):\n"
+            + json.dumps(finding, ensure_ascii=False)
+        )
+        try:
+            # The observer judges one role's finding here, so he is given that
+            # role's brief and its lessons, not the whole cast.
+            ask = self.ask or self.ask_role
+            ask(project_id, "SHARPENER", context,
+                with_roles=(role,),
+                tools=("read", "write", "glob", "grep"))
+        except Exception:
+            # The observer could not be reached. The finding is already
+            # recorded, so it is not lost with the failed hand-off.
+            pass
+
+    def observe_sharpener(
+        self, project_id: str, fact: str, *, run_id: str = ""
+    ) -> dict[str, Any]:
+        """Put one fact to SHARPENER and report what he proposed.
+
+        The observation is not a gate. No candidate is accepted, no candidate
+        is rejected, and no builder round waits for it: the owner asked what
+        the observer would propose, and the answer is what he filed. A role
+        that cannot be reached is an observation that proposed nothing, not a
+        failure of the workshop.
+        """
+        mark = observer_mark(self)
+        # The refusals the seam recorded are findings he is given to read.
+        # They are context, not verdicts: nothing here accepts or rejects the
+        # work a refusal left untouched.
+        findings = self.refusal_findings(project_id, run_id=run_id)
+        lines = [
+            "OBSERVATION. You are asked about one fact.",
+            "This is not a gate: no work is accepted or rejected because of it.",
+            f"FACT:\n{fact}",
+            "Judge the fact. Teach a lesson when the roles should know it,",
+            "propose a mechanical fix when it is already observed and can be",
+            "executed, and queue a VISP when the owner has to decide.",
+        ]
+        if findings:
+            lines.append(
+                "RECORDED REFUSAL FINDINGS (read them; accept nothing, reject nothing):\n"
+                + json.dumps(findings[:10], indent=2, sort_keys=True, ensure_ascii=False)
+            )
+        context = "\n".join(lines)
+        from .kernel import KernelRejection
+        try:
+            envelope = self._dispatch(
+                project_id, "SHARPENER", state=context, expecting="prose",
+                cast=True, tools=("read", "write", "glob", "grep"),
+                run_id=run_id or None,
+            )
+        except KernelRejection:
+            # The kernel refused the dispatch and recorded why.
+            return {"invoked": False, "action": "none", "proposals": []}
+        except (SpawnError, HarnessError, OSError) as exc:
+            # The observer could not be reached. The absence of a proposal is
+            # the answer the owner gets; the reason is recorded, so the
+            # absence is not the same fact as a silence.
+            self.log.record(
+                "dispatch.rejected", producer="manager", project_id=project_id,
+                run_id=run_id or None,
+                payload=json.dumps({
+                    "schemaVersion": 1, "role": "SHARPENER",
+                    "projectId": project_id, "code": "observer_unreachable",
+                    "reason": str(exc),
+                }, sort_keys=True).encode("utf-8"),
+            )
+            return {"invoked": False, "action": "none", "proposals": []}
+        proposals = observer_proposals(self, mark)
+        return {
+            "invoked": envelope.status == "completed" or bool(proposals),
+            "action": proposals[0]["kind"] if proposals else "none",
+            "proposals": proposals,
+        }
+
+    # -- the planning session leader -------------------------------------
+
+    def planning_leader(self, item_payloads: list[dict[str, Any]]) -> dict[str, Any]:
+        """The configured session leader, asked through the adapter seam.
+
+        The leader reads the cards and answers with what the owner has to
+        check: the structured decisions and a plain-language summary
+        (F-PF8). It is asked, not dispatched: the leader signs nothing and
+        authorizes nothing, it only reads and summarises.
+        """
+        context = json.dumps({"items": item_payloads}, sort_keys=True, indent=2)
+        answer = self.ask(self.planning_project, PLANNER_ROLE, context)
+        return _leader_answer(answer)
+
+    def project_for_definition(self, definition_id: str) -> str | None:
+        """The project whose approved plan names this definition, if any."""
+        for event in reversed(self.log.read_all()):
+            if event.type != "project.planned" or not event.payloadRef:
+                continue
+            payload = json.loads(
+                self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1])
+            )
+            refs = payload.get("definitionRefs")
+            if not isinstance(refs, dict):
+                continue
+            for ref in refs.values():
+                if str(ref).split("@", 1)[0] == definition_id:
+                    return event.projectId
+        return None
 
     # -- the builder's report ------------------------------------------
     def file_report(
@@ -778,6 +1010,13 @@ class Runtime:
         if kind == "lesson":
             return self.teach(str(payload.get("role", "")),
                               str(payload.get("description", "")), from_role="SHARPENER")
+        if kind == "fix":
+            facts = payload.get("fix")
+            if not isinstance(facts, Mapping):
+                raise CommandError("bad_fix", "a fix request must carry the fix facts")
+            fix = FixRecord.from_dict(_fix_facts(facts))
+            FixRepository(self.log, self.artifacts, self.tools).record(fix)
+            return {"status": "recorded", "fixId": fix.fix_id}
         if kind == "instruction":
             return self.update_agent_brief(str(payload.get("role", "")),
                                            str(payload.get("document", "")))
@@ -854,6 +1093,40 @@ def _definition_read(rt: Runtime, cmd: Command) -> Any:
     return definition.to_dict()
 
 
+def _definition_revise(rt: Runtime, cmd: Command) -> Any:
+    """Revise the exact revision the owner displayed.
+
+    The supplied `revision` is the expected revision: revising from a
+    superseded revision is refused, so a revision can never be based on a
+    draft the owner did not see. A refusal records nothing.
+    """
+    content = cmd.require("content")
+    try:
+        revision = int(cmd.require("revision"))
+    except (TypeError, ValueError) as exc:
+        raise CommandError(
+            "bad_revision", f"definition.revise: revision must be an integer ({exc})"
+        ) from exc
+    revised = rt.definitions.revise(
+        cmd.require("definition_id"),
+        content=content if isinstance(content, bytes) else str(content).encode("utf-8"),
+        expected_revision=revision,
+        producer=str(cmd.get("producer", "desk")),
+    )
+    return {
+        "id": revised.id,
+        "kind": revised.kind,
+        "revision": revised.revision,
+        "contentRef": revised.contentRef,
+        "status": "revised",
+    }
+
+
+def _definition_pending(rt: Runtime, cmd: Command) -> Any:
+    """Which VISP/FUSP revisions still await an owner signoff."""
+    return {"pending": rt.definitions.pending_signoffs()}
+
+
 def _definition_signoff(rt: Runtime, cmd: Command) -> Any:
     return rt.definitions.signoff(
         cmd.require("definition_id"),
@@ -863,12 +1136,31 @@ def _definition_signoff(rt: Runtime, cmd: Command) -> Any:
 
 
 def _project_create(rt: Runtime, cmd: Command) -> Any:
-    """The bytes are hashed and kept; the words are the project.
+    """Create Project answers with the created project id.
+
+    The chain the owner approved travels with the request. Nothing is
+    materialized unless the chain, both owner signoffs and the displayed draft
+    revision are accepted; a refusal leaves the product untouched.
+
+    The parameters are optional and are read under either spelling, the
+    snake_case the CLI passes and the §5.2 field names the API passes.
     """
-    return rt.operations.project_create(
-        str(cmd.require("spec")),
-        request_id=str(cmd.require("request_id")),
-    ).to_manifest()
+    definition_refs = _optional_param(cmd, "definition_refs", "definitionRefs")
+    draft_revision = _optional_param(cmd, "draft_revision", "draftRevision")
+    request_id = _optional_param(cmd, "request_id", "requestId")
+    if request_id is None:
+        raise CommandError("missing_parameter", "project.create: missing 'request_id'")
+    try:
+        creation = rt.operations.project_create(
+            definition_refs,
+            draft_revision,
+            request_id=str(request_id),
+        )
+    except ProjectError as exc:
+        # A refused creation is a domain refusal and a transport refusal: the
+        # code reaches the caller either way.
+        raise _CreateRefusal(exc.code, exc.message) from exc
+    return _CreatedProject(creation.to_manifest())
 
 
 def _artifact_import(rt: Runtime, cmd: Command) -> Any:
@@ -988,13 +1280,21 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
         return {"projectId": project_id, "taskId": task_id,
                 "milestoneId": milestone_id, "status": "not-dispatched",
                 "delivered": False, "error": "room_not_cleared",
-                "detail": ("the room has outstanding work: "
-                           f"{previous_clearance[-1].get('detail')}. "
-                           "Clear the room before the next round.")}
+                "detail": "Run project.room.clear when the decision service is available"}
     tools = tuple(str(item) for item in cmd.get("tools", ()))
     requires = tuple(str(item) for item in cmd.get("requires", ()))
     refusal = _preflight(project_id, tools, requires)
     if refusal is not None:
+        # A task that declares a tool it was not granted is a refusal of the
+        # dispatch, and it is a finding the observer path can read.
+        finding = record_refusal(
+            rt.log,
+            project_id=project_id, run_id="", role="DEXTER",
+            task_id=task_id, milestone_id=milestone_id,
+            code="missing_tool", detail=str(refusal.get("detail") or ""),
+            source="preflight",
+        )
+        rt.offer_refusal_to_observer(project_id, "DEXTER", finding)
         return refusal
 
     # The feature file is authoritative; the journal records completed work.
@@ -1051,6 +1351,14 @@ def _round_dispatch(rt: Runtime, cmd: Command) -> Any:
             packet=packet, tools=tools,
         )
     except KernelRejection as exc:
+        # The kernel refused and recorded why. The refusal is a finding the
+        # observer path can read, and the observer is handed it.
+        finding = refusal_finding({
+            "schemaVersion": 1, "projectId": project_id, "runId": "",
+            "role": "DEXTER", "milestoneId": milestone_id, "taskId": task_id,
+            "code": exc.code, "reason": str(exc),
+        })
+        rt.offer_refusal_to_observer(project_id, "DEXTER", finding)
         return {"projectId": project_id, "taskId": task_id,
                 "milestoneId": milestone_id,
                 "status": "blocked_capacity" if exc.code == "blocked_capacity" else "rejected",
@@ -1221,6 +1529,31 @@ def _project_events(rt: Runtime, cmd: Command) -> Any:
     return [e.to_dict() for e in events if project_id is None or e.projectId == project_id]
 
 
+# -- the owner's reading surface -----------------------------------------
+# These four verbs answer questions out of the recorded event log. They write
+# nothing: the owner reads the record, it does not change it.
+
+
+def _owner_findings(rt: Runtime, cmd: Command) -> Any:
+    from .owner_views import findings
+    return findings(rt, str(cmd.require("project_id")), str(cmd.require("milestone_id")))
+
+
+def _owner_evidence(rt: Runtime, cmd: Command) -> Any:
+    from .owner_views import evidence
+    return evidence(rt, str(cmd.require("project_id")), str(cmd.require("milestone_id")))
+
+
+def _usage_report(rt: Runtime, cmd: Command) -> Any:
+    from .owner_views import usage_report
+    return usage_report(rt, str(cmd.require("project_id")))
+
+
+def _milestone_signoff_policy(rt: Runtime, cmd: Command) -> Any:
+    from .owner_views import signoff_policy
+    return signoff_policy(rt, str(cmd.require("project_id")))
+
+
 def _project_abort(rt: Runtime, cmd: Command) -> Any:
     """One termination method, two origins (FUSP F-P2).
 
@@ -1272,12 +1605,20 @@ def _planning_open(rt: Runtime, cmd: Command) -> Any:
     return rt.planning.board()
 
 
+def _planning_board(rt: Runtime, cmd: Command) -> Any:
+    """The board view, rebuilt from the event log (items, topics, meetings, questions)."""
+    return rt.planning.board()
+
+
 def _planning_item_create(rt: Runtime, cmd: Command) -> Any:
+    content = cmd.get("content", "")
+    if isinstance(content, bytes):
+        content = content.decode("utf-8")
     return rt.planning.create_item(
-        summary=cmd.require("summary"),
-        content=str(cmd.require("content", "")),
+        summary=str(cmd.require("summary")),
+        content=str(content),
         provenance=str(cmd.get("provenance", "human")),
-        topic_refs=tuple(cmd.get("topic_refs", ())),
+        topic_refs=_optional_refs(cmd, "topic_refs", "topicRefs"),
     ).to_dict()
 
 
@@ -1306,14 +1647,112 @@ def _planning_item_relate(rt: Runtime, cmd: Command) -> Any:
     return {"related": [cmd.require("a"), cmd.require("b")]}
 
 
+def _leader_answer(answer: str) -> dict[str, Any]:
+    """The leader's answer: a JSON object with the owner's checklist.
+
+    A model answers in prose; a checklist is structured. A leader that
+    cannot be read as an object is a broken leader, and a broken leader
+    formalizes nothing.
+    """
+    text = (answer or "").strip()
+    if text.startswith("```"):
+        text = "\n".join(
+            line for line in text.splitlines() if not line.strip().startswith("```")
+        ).strip()
+    candidates = [text]
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(text[start:end + 1])
+    for candidate in candidates:
+        try:
+            result = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(result, dict):
+            return result
+    raise CommandError(
+        "planner_failed",
+        "the planning session leader did not answer with a JSON object",
+    )
+
+
+def _draft_document_type(rt: Runtime, definition_id: str, revision: int) -> str:
+    """The kind of the draft: the kind of the definition it is formalized into."""
+    from .definitions import DefinitionError
+
+    try:
+        kind = rt.definitions.get(definition_id, revision).kind
+    except DefinitionError:
+        return DRAFT_DOCUMENT_TYPE
+    return kind if kind in {"VISP", "FUSP"} else DRAFT_DOCUMENT_TYPE
+
+
 def _planning_formalize(rt: Runtime, cmd: Command) -> Any:
+    """Formalize cards through the configured planning session leader.
+
+    No configured leader means no formalization: the draft artifact is
+    written by the leader, and a card formalized without one would be a
+    card nobody checked. The refusal records nothing.
+    """
+    if rt.harness is None or PLANNER_ROLE not in rt.harness.roles:
+        raise CommandError(
+            "planner_missing",
+            f"planning.formalize: no planning session leader is configured: role "
+            f"{PLANNER_ROLE!r} is not in config/assignments.json",
+        )
+    definition_id = str(_require_param(cmd, "definition_id", "definitionId"))
+    definition_revision = int(_require_param(cmd, "definition_revision", "definitionRevision"))
+    project_id = str(
+        cmd.get("project_id", cmd.get("projectId", ""))
+        or rt.project_for_definition(definition_id)
+        or rt.planning_project
+    )
+    rt.planning_project = project_id
     items = rt.planning.formalize(
-        tuple(cmd.require("item_ids")),
-        definition_id=cmd.require("definition_id"),
-        definition_revision=int(cmd.require("definition_revision")),
+        _refs(cmd, "item_ids", "itemIds"),
+        definition_id,
+        definition_revision,
         producer=str(cmd.get("producer", "planning")),
+        document_type=_draft_document_type(rt, definition_id, definition_revision),
     )
     return [i.to_dict() for i in items]
+
+
+def _planning_topic_create(rt: Runtime, cmd: Command) -> Any:
+    return rt.planning.create_topic(str(_require_param(cmd, "name", "topic_name")))
+
+
+def _planning_meeting_open(rt: Runtime, cmd: Command) -> Any:
+    limits = cmd.get("limits", {})
+    if not isinstance(limits, dict):
+        raise CommandError("bad_limits", "planning.meeting.open: limits must be a JSON object")
+    return rt.planning.open_meeting(
+        _refs(cmd, "topic_refs", "topicRefs", "topics"),
+        str(_require_param(cmd, "leader", "session_leader", "sessionLeader")),
+        limits,
+    )
+
+
+def _planning_meeting_record(rt: Runtime, cmd: Command) -> Any:
+    return rt.planning.record_turn(
+        str(_require_param(cmd, "meeting_id", "meetingId")),
+        str(cmd.require("role")),
+        str(_require_param(cmd, "text", "content")),
+    )
+
+
+def _planning_question_ask(rt: Runtime, cmd: Command) -> Any:
+    return rt.planning.ask_question(
+        str(_require_param(cmd, "meeting_id", "meetingId")),
+        str(_require_param(cmd, "question", "text")),
+    )
+
+
+def _planning_answer_record(rt: Runtime, cmd: Command) -> Any:
+    return rt.planning.record_answer(
+        str(_require_param(cmd, "question_id", "questionId")),
+        str(_require_param(cmd, "answer", "text")),
+    )
 
 
 def _lab_request(rt: Runtime, cmd: Command) -> Any:
@@ -1453,19 +1892,549 @@ def _project_run(rt: Runtime, cmd: Command) -> Any:
                         "completedSteps": outcomes}
 
 
+def _fix_ref_list(value: Any) -> list[str]:
+    """One reference or a list of them, as a list."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [str(entry) for entry in value]
+    raise CommandError("bad_reference", "a reference list must be a string or a list of strings")
+
+
+# --------------------------------------------------------------------------
+# the research path
+# --------------------------------------------------------------------------
+
+# The role the owner calls directly. It proposes; it never signs off, it
+# applies nothing, and no decision model is asked about its proposals.
+RESEARCH_ROLE = "RESEARCHER"
+
+# The tools the researcher is granted. Declared once, so the run and the role
+# brief say the same thing.
+RESEARCH_TOOLS = ("read", "write", "glob", "grep")
+
+# The line the researcher ends its answer with when the question is answered
+# and nothing more is worth filing. It ends the run early; the requested
+# number of rounds stays the upper bound either way.
+RESEARCH_COMPLETE = "RESEARCH COMPLETE"
+
+# How many recorded evidence references one research run carries into its
+# context. A run is bounded; an unbounded context is not a run.
+RESEARCH_EVIDENCE_LIMIT = 24
+
+
+def _event_payload(rt: Runtime, event: Any) -> dict[str, Any]:
+    """One event's body, read back from where it was stored."""
+    ref = getattr(event, "payloadRef", None)
+    if not ref:
+        return {}
+    try:
+        value = json.loads(rt.artifacts.get_bytes(ref.split(":", 1)[1]).decode("utf-8"))
+    except (OSError, ValueError, IndexError, UnicodeDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _artifact_text(rt: Runtime, ref: str, limit: int) -> str:
+    """The readable head of one stored artifact."""
+    try:
+        data = rt.artifacts.get_bytes(ref.split(":", 1)[1])
+    except (OSError, ValueError, IndexError):
+        return ""
+    return data.decode("utf-8", "replace")[:limit]
+
+
+def _research_rounds(cmd: Command) -> int:
+    """The bound the owner asked for: a whole number of rounds, at least one."""
+    raw = cmd.get("rounds", 1)
+    if isinstance(raw, bool):
+        raise CommandError("bad_rounds", "research.run: rounds must be a whole number")
+    try:
+        rounds = int(raw)
+        exact = float(raw) == rounds
+    except (TypeError, ValueError) as exc:
+        raise CommandError(
+            "bad_rounds", f"research.run: rounds must be a whole number ({exc})"
+        ) from exc
+    if not exact:
+        raise CommandError("bad_rounds", "research.run: rounds must be a whole number")
+    if rounds < 1:
+        raise CommandError("bad_rounds", "research.run: rounds must be at least 1")
+    return rounds
+
+
+def _research_tools(rt: Runtime, cmd: Command) -> tuple[str, ...]:
+    """The declared research tools: the caller's, else the configured, else the default."""
+    declared = cmd.get("tools")
+    if declared is None:
+        declared = rt.execution.get("researchTools")
+    if declared is None:
+        return RESEARCH_TOOLS
+    if isinstance(declared, str):
+        declared = [declared]
+    if not isinstance(declared, (list, tuple)) or not declared:
+        raise CommandError(
+            "bad_tools", "research.run: tools must be a non-empty list of tool names"
+        )
+    names: list[str] = []
+    for item in declared:
+        if not isinstance(item, str) or not item.strip():
+            raise CommandError(
+                "bad_tools", "research.run: tools must be a non-empty list of tool names"
+            )
+        names.append(item.strip())
+    return tuple(names)
+
+
+def _research_architecture(
+    rt: Runtime, project_id: str
+) -> tuple[str, dict[str, str], list[tuple[str, str]]]:
+    """The framework's own shape, and the chain this project was built on.
+
+    The architecture is given as files the researcher may read and as a summary
+    it reads now. It is never another role's transcript: the researcher reads
+    the framework itself, not what somebody else said about it.
+
+    Returns the summary, the files to stage for it, and the references it may
+    cite.
+    """
+    package = Path(rt.root) / "src" / "progressdesk"
+    product: dict[str, str] = {}
+    citable: list[tuple[str, str]] = []
+    lines: list[str] = []
+    if package.is_dir():
+        for path in sorted(package.rglob("*")):
+            if path.suffix not in {".py", ".md"} or "__pycache__" in path.parts:
+                continue
+            relative = path.relative_to(rt.root).as_posix()
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            ref = "sha256:" + rt.artifacts.put(data)
+            product[relative] = ref
+            citable.append((ref, f"source {relative}"))
+            head = data.decode("utf-8", "replace").lstrip().splitlines()
+            summary = next(
+                (line.strip() for line in head[1:] if line.strip()), ""
+            )
+            lines.append(f"{relative} -- {summary[:160]}")
+    chain: list[str] = []
+    for event in rt.log.read_all():
+        if event.type != "project.planned" or event.projectId != project_id:
+            continue
+        payload = _event_payload(rt, event)
+        refs = payload.get("definitionRefs")
+        if not isinstance(refs, dict):
+            continue
+        for kind, ref in refs.items():
+            identifier, _, revision = str(ref).partition("@")
+            try:
+                definition = rt.definitions.get(identifier, int(revision))
+            except (ValueError, KeyError):
+                continue
+            name = f"architecture/{kind}-{definition.id}@{definition.revision}.md"
+            product[name] = definition.contentRef
+            citable.append((definition.contentRef, f"{kind} {definition.id}@{definition.revision}"))
+            chain.append(
+                f"## {kind} {definition.id}@{definition.revision}\n"
+                + _artifact_text(rt, definition.contentRef, 4_000)
+            )
+    summary = "\n".join(lines)
+    text = "\n\n".join(
+        [
+            "The framework's modules (the staged copies hold the source):\n" + summary,
+            "The chain this project was built on:\n" + "\n\n".join(chain),
+        ]
+    )
+    return text, product, citable
+
+
+def _research_evidence(rt: Runtime, project_id: str) -> list[str]:
+    """The evidence this project has recorded, in the order it was recorded."""
+    refs: list[str] = []
+    for event in rt.log.read_all():
+        if event.projectId != project_id:
+            continue
+        payload = _event_payload(rt, event)
+        for key in ("evidenceRefs", "evidenceRef"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                value = [value]
+            if not isinstance(value, (list, tuple)):
+                continue
+            for item in value:
+                ref = str(item)
+                if ref.startswith("sha256:") and ref not in refs:
+                    refs.append(ref)
+    return refs[:RESEARCH_EVIDENCE_LIMIT]
+
+
+def _research_state(
+    *,
+    question: str,
+    architecture: str,
+    evidence_refs: list[str],
+    citable: list[tuple[str, str]],
+    findings_dir: Path,
+    tools: tuple[str, ...],
+    number: int,
+    rounds: int,
+    filed: list[dict[str, Any]],
+) -> str:
+    """What the researcher is given: the architecture, the evidence, the tools."""
+    references = "\n".join(f"{ref}  ({label})" for ref, label in citable)
+    evidence = "\n".join(evidence_refs) or "(nothing recorded for this project yet)"
+    already = "\n".join(
+        f"{entry.get('vispRef')}  {entry.get('finding', {}).get('decisionQuestion', '')}"
+        for entry in filed
+        if entry.get("status") == "filed"
+    ) or "(nothing filed yet)"
+    return "\n\n".join(
+        [
+            "THE QUESTION\n" + question,
+            "THE ARCHITECTURE\n" + architecture,
+            "THE RECORDED EVIDENCE\n"
+            + evidence
+            + "\n(The bytes of each are staged in the evidence folder of your working directory.)",
+            "THE REFERENCES YOU MAY CITE\n"
+            + references
+            + "\n(Cite these sha256 references, not file paths. A finding whose evidence is "
+            "not in the artifact store is refused.)",
+            "THE RESEARCH TOOLS YOU ARE GRANTED\n" + ", ".join(tools),
+            "HOW TO FILE WHAT YOU FIND\n"
+            + f"Write one JSON file per finding into: {findings_dir}\n"
+            + '{"source_problem_ref": "...", "decision_question": "...", '
+            '"evidence_refs": ["sha256:<64 hex>"], "provenance": "...", '
+            '"confidence_estimate": 0.6, "rationale": "...", "lab_need_instruction": "..."}\n'
+            + "The host routes every file through research.submit and files it as an "
+            "unsigned draft. File only what you actually read: a finding you did not "
+            "read is not a finding.",
+            "WHAT HAPPENS TO WHAT YOU FILE\n"
+            + "The draft reaches the owner, unsigned, and nothing is applied. No decision "
+            "model is asked whether your proposal is real. You propose; the owner disposes.",
+            f"ROUND {number} OF {rounds}\n"
+            + "Already filed:\n" + already
+            + "\nEnd your answer with the line "
+            + RESEARCH_COMPLETE
+            + " when the question is answered and nothing more is worth filing.",
+        ]
+    )
+
+
+def _research_file_findings(
+    rt: Runtime, findings_dir: Path, seen: set[str]
+) -> list[dict[str, Any]]:
+    """File every finding the researcher left, through the research.submit verb.
+
+    The role writes a file; the host routes it through the gateway verb, so a
+    filed draft is the same record a direct research.submit produces.
+    """
+    filed: list[dict[str, Any]] = []
+    if not findings_dir.is_dir():
+        return filed
+    for path in sorted(findings_dir.glob("*.json")):
+        if path.name in seen:
+            continue
+        seen.add(path.name)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            filed.append({
+                "status": "rejected",
+                "reason": f"{path.name} is not readable as a finding: {exc}",
+            })
+            continue
+        if not isinstance(payload, dict):
+            filed.append({
+                "status": "rejected",
+                "reason": f"{path.name} is not a JSON object",
+            })
+            continue
+        try:
+            result = _VERBS["research.submit"](
+                rt, Command("research.submit", dict(payload))
+            )
+        except (CommandError, ResearchError) as exc:
+            filed.append({
+                "status": "rejected",
+                "reason": str(exc),
+                "finding": payload,
+            })
+            continue
+        filed.append({
+            "status": "filed",
+            "vispRef": result["vispRef"],
+            "eventId": result["eventId"],
+            "finding": result["finding"],
+        })
+    return filed
+
+
+def _research_run(rt: Runtime, cmd: Command) -> Any:
+    """Run the researcher, bounded by the owner's number of rounds.
+
+    The owner calls this directly, before or after a project has completed. The
+    run carries the architecture, the recorded evidence and the declared
+    research tools into the role; it never carries another role's transcript,
+    and no step of it asks the decision service about a proposal.
+    """
+    from .kernel import KernelRejection
+
+    project_id = str(_require_param(cmd, "project_id", "projectId"))
+    question = str(_require_param(cmd, "question"))
+    rounds = _research_rounds(cmd)
+    tools = _research_tools(rt, cmd)
+    if not any(event.projectId == project_id for event in rt.log.read_all()):
+        raise CommandError(
+            "not_found", f"research.run: no project {project_id!r} is in the record"
+        )
+    architecture, product_files, citable = _research_architecture(rt, project_id)
+    evidence_refs = _research_evidence(rt, project_id)
+    run_id = f"research-{uuid.uuid4().hex[:12]}"
+    findings_dir = paths.projects(rt.root) / project_id / "rounds" / run_id / "findings"
+    findings_dir.mkdir(parents=True, exist_ok=True)
+    evidence_files = {
+        f"{index:02d}-{ref.split(':', 1)[1]}.artifact": ref
+        for index, ref in enumerate(evidence_refs)
+        if rt.artifacts.exists(ref.split(":", 1)[1])
+    }
+    filed: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    status = "completed"
+    detail = ""
+    used = 0
+    for number in range(1, rounds + 1):
+        used = number
+        state = _research_state(
+            question=question,
+            architecture=architecture,
+            evidence_refs=evidence_refs,
+            citable=citable,
+            findings_dir=findings_dir,
+            tools=tools,
+            number=number,
+            rounds=rounds,
+            filed=filed,
+        )
+        try:
+            envelope = rt._dispatch(
+                project_id,
+                RESEARCH_ROLE,
+                state=state,
+                expecting="prose",
+                tools=tools,
+                run_id=run_id,
+                state_budget=24_000,
+                wall_seconds=300,
+                input_files=product_files,
+                evidence_files=evidence_files,
+            )
+        except KernelRejection as exc:
+            status, detail = "blocked", str(exc)
+            break
+        except SpawnError as exc:
+            status, detail = "infra-fault", str(exc)
+            break
+        except Exception as exc:  # noqa: BLE001 - a seam fault is not an answer
+            status, detail = "infra-fault", f"the research run could not continue: {exc}"
+            break
+        if envelope.status != "completed":
+            status = "infra-fault"
+            detail = envelope.detail or f"the researcher run ended {envelope.status!r}"
+            break
+        filed.extend(_research_file_findings(rt, findings_dir, seen))
+        if RESEARCH_COMPLETE in (envelope.output or "").upper():
+            break
+    visp_ref = next(
+        (entry.get("vispRef") for entry in filed if entry.get("status") == "filed"), None
+    )
+    answer: dict[str, Any] = {
+        "status": status,
+        "rounds": used,
+        "vispRef": visp_ref,
+        "findings": filed,
+    }
+    if detail:
+        answer["detail"] = detail
+    return answer
+
+
+def _research_submit(rt: Runtime, cmd: Command) -> Any:
+    """File a research finding as an unsigned VISP draft.
+
+    The researcher proposes; the owner ratifies. The draft carries its
+    provenance, its evidence references and the lab-need instruction, it is
+    unsigned, it requires a human signoff, and it authorizes nothing.
+    """
+    raw_confidence = _require_param(cmd, "confidence_estimate", "confidenceEstimate")
+    if isinstance(raw_confidence, bool):
+        raise CommandError(
+            "bad_confidence", "research.submit: confidence_estimate must be a number"
+        )
+    try:
+        confidence = float(raw_confidence)
+    except (TypeError, ValueError) as exc:
+        raise CommandError(
+            "bad_confidence",
+            f"research.submit: confidence_estimate must be a number ({exc})",
+        )
+    finding = ResearchFinding(
+        source_problem_ref=str(
+            _require_param(cmd, "source_problem_ref", "sourceProblemRef")
+        ),
+        decision_question=str(
+            _require_param(cmd, "decision_question", "decisionQuestion")
+        ),
+        evidence_refs=_refs(cmd, "evidence_refs", "evidenceRefs"),
+        provenance=str(_require_param(cmd, "provenance")),
+        confidence_estimate=confidence,
+        rationale=str(_require_param(cmd, "rationale")),
+        lab_need_instruction=str(
+            _require_param(cmd, "lab_need_instruction", "labNeedInstruction")
+        ),
+    )
+    service = ResearchService(rt.definitions, rt.artifacts, rt.log)
+    return service.submit(finding).to_dict()
+
+
+def _fix_facts(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The fix facts of a request, in either spelling, in the record's shape."""
+    def pick(*names: str) -> Any:
+        for name in names:
+            if name in payload and payload[name] not in (None, ""):
+                return payload[name]
+        return None
+
+    return {
+        "schemaVersion": 1,
+        "fixId": pick("fixId", "fix_id"),
+        "sourceProblemRef": pick("sourceProblemRef", "source_problem_ref"),
+        "sourceTaskAndOutcomeRefs": pick(
+            "sourceTaskAndOutcomeRefs", "source_task_and_outcome_refs"
+        ),
+        "componentId": pick("componentId", "component_id"),
+        "previousVersionOrCondition": pick(
+            "previousVersionOrCondition", "previous_version_or_condition"
+        ),
+        "replacementArtifactRef": pick("replacementArtifactRef", "replacement_artifact_ref"),
+        "applicationOperation": pick("applicationOperation", "application_operation"),
+        "applicabilityRule": pick("applicabilityRule", "applicability_rule"),
+        "supersedesFixRefs": pick("supersedesFixRefs", "supersedes_fix_refs") or [],
+    }
+
+
+def _sharpener_observe(rt: Runtime, cmd: Command) -> Any:
+    """Put one fact to SHARPENER and report what he proposed.
+
+    The observation is not a builder gate: it accepts nothing and rejects
+    nothing, and no round waits for it.
+    """
+    project_id = str(_require_param(cmd, "project_id", "projectId"))
+    fact = _require_param(cmd, "fact")
+    if not isinstance(fact, str):
+        fact = json.dumps(fact, ensure_ascii=False, sort_keys=True, default=str)
+    if not fact.strip():
+        raise CommandError("bad_fact", "sharpener.observe: the fact must not be empty")
+    run_id = str(cmd.get("run_id", cmd.get("runId", "")) or "")
+    return rt.observe_sharpener(project_id, fact, run_id=run_id)
+
+
+def _sharpener_findings(rt: Runtime, cmd: Command) -> Any:
+    """Read the refusal findings the observer path can see.
+
+    A read: it writes nothing, it accepts nothing and it rejects nothing. The
+    work a refusal left untouched stays untouched.
+    """
+    project_id = str(_require_param(cmd, "project_id", "projectId"))
+    run_id = str(cmd.get("run_id", cmd.get("runId", "")) or "")
+    findings = rt.refusal_findings(project_id, run_id=run_id)
+    return {
+        "projectId": project_id,
+        "runId": run_id,
+        "count": len(findings),
+        "findings": findings,
+    }
+
+
+def _sharpener_record(rt: Runtime, cmd: Command) -> Any:
+    """Record an already observed fix. Recording is not approval (TESP §14.1)."""
+    facts = {
+        "schemaVersion": 1,
+        "fixId": _require_param(cmd, "fix_id", "fixId"),
+        "sourceProblemRef": _require_param(cmd, "source_problem_ref", "sourceProblemRef"),
+        "sourceTaskAndOutcomeRefs": _fix_ref_list(
+            _require_param(cmd, "source_task_and_outcome_refs", "sourceTaskAndOutcomeRefs")
+        ),
+        "componentId": _require_param(cmd, "component_id", "componentId"),
+        "previousVersionOrCondition": _require_param(
+            cmd, "previous_version_or_condition", "previousVersionOrCondition"
+        ),
+        "replacementArtifactRef": _require_param(
+            cmd, "replacement_artifact_ref", "replacementArtifactRef"
+        ),
+        "applicationOperation": _require_param(cmd, "application_operation", "applicationOperation"),
+        "applicabilityRule": _require_param(cmd, "applicability_rule", "applicabilityRule"),
+        "supersedesFixRefs": _fix_ref_list(
+            cmd.get("supersedes_fix_refs", cmd.get("supersedesFixRefs", []))
+        ),
+    }
+    fix = FixRecord.from_dict(facts)
+    FixRepository(rt.log, rt.artifacts, rt.tools).record(fix)
+    return fix.to_dict()
+
+
+def _sharpener_apply(rt: Runtime, cmd: Command) -> Any:
+    """Apply a recorded fix to the targets it matches. No per-project approval."""
+    repository = FixRepository(rt.log, rt.artifacts, rt.tools)
+    fix = repository.get(str(_require_param(cmd, "fix_id", "fixId")))
+    return repository.apply(fix, cmd.require("targets"))
+
+
+def _sharpener_supersede(rt: Runtime, cmd: Command) -> Any:
+    """Record that a recorded fix supersedes an earlier recorded fix.
+
+    The targets carrying the superseded fix count as not yet adopted and
+    receive the superseding fix; a target that never carried either fix is not
+    touched (TESP §14.1, F-S7).
+    """
+    repository = FixRepository(rt.log, rt.artifacts, rt.tools)
+    return repository.supersede(
+        str(_require_param(cmd, "fix_id", "fixId")),
+        str(_require_param(cmd, "superseding_fix_id", "supersedingFixId")),
+    )
+
+
 _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "redlight.raise": lambda rt, cmd: raise_red_light(
         rt, cmd.require("project_id"), str(cmd.get("reason", "towel"))),
+    "research.run": _research_run,
+    "research.submit": _research_submit,
+    "sharpener.record": _sharpener_record,
+    "sharpener.apply": _sharpener_apply,
+    "sharpener.supersede": _sharpener_supersede,
+    "sharpener.observe": _sharpener_observe,
+    "sharpener.findings": _sharpener_findings,
     "planning.open": _planning_open,
+    "planning.board": _planning_board,
     "planning.item.create": _planning_item_create,
     "planning.item.edit": _planning_item_edit,
     "planning.item.attach": _planning_item_attach,
     "planning.item.relate": _planning_item_relate,
     "planning.formalize": _planning_formalize,
+    "planning.topic.create": _planning_topic_create,
+    "planning.meeting.open": _planning_meeting_open,
+    "planning.meeting.record": _planning_meeting_record,
+    "planning.question.ask": _planning_question_ask,
+    "planning.answer.record": _planning_answer_record,
     "lab.request": _lab_request,
     "lab.result": _lab_result,
     "definition.create": _definition_create,
     "definition.read": _definition_read,
+    "definition.revise": _definition_revise,
+    "definition.pending": _definition_pending,
     "definition.signoff": _definition_signoff,
     "artifact.import": _artifact_import,
     "project.create": _project_create,
@@ -1489,6 +2458,10 @@ _VERBS: dict[str, Callable[[Runtime, Command], Any]] = {
     "milestone.evaluate": _milestone_evaluate,
     "milestone.correct": _milestone_correct,
     "milestone.signoff": _milestone_signoff,
+    "milestone.signoff.policy": _milestone_signoff_policy,
+    "owner.findings": _owner_findings,
+    "owner.evidence": _owner_evidence,
+    "usage.report": _usage_report,
     "jack.split.submit": _jack_split_submit,
     "jack.correction.submit": _jack_correction_submit,
     "project.abort": _project_abort,
@@ -1559,12 +2532,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = route(Runtime.create(args.root), args.verb, params)
-    except CommandError as exc:
-        print(json.dumps({"error": exc.code, "message": exc.message}))
-        return 2
     except DOMAIN_FAILURES as exc:
         print(json.dumps({"error": getattr(exc, "code", "rejected"), "message": str(exc)}))
         return 1
+    except CommandError as exc:
+        print(json.dumps({"error": exc.code, "message": exc.message}))
+        return 2
     print(json.dumps(result, indent=2, default=str))
     return 0
 

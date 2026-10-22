@@ -5,9 +5,10 @@ remain in ``Definitions``; this module adds the deterministic operations that
 consume those immutable revisions:
 
 * ``definition.create/revise/read/signoff`` through ``ProgressDeskOperations``.
-* ``project.create`` validates the exact current definition chain, stages all
-  files, appends ``project.created``, and atomically presents the completed
-  project directory (§5.3).
+* ``project.create`` validates the exact current definition chain and both owner
+  signoffs, refuses a stale displayed draft revision, stages all files, appends
+  ``project.created``, and atomically presents the completed project directory
+  (§5.3).
 * ``project.start`` records the first start as a distinct ``milestone.go-issued``
   operation. Later recovery starts are deliberately not invented here (§5.4;
   recovery lands with §9).
@@ -66,7 +67,7 @@ import re
 import shutil
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -161,6 +162,12 @@ _PORT_FIELDS = frozenset(
     {"portId", "question", "questionKind", "blocksCreation", "resolved"}
 )
 
+# The chained definitions of one project, in authority order (§5.3 step 1).
+CHAIN_KINDS = ("VISP", "FUSP", "TESP")
+# The two revisions the owner signs off separately (F-G8). TESP derives its
+# authority from the accepted chain and is not gated again.
+SIGNED_CHAIN_KINDS = ("VISP", "FUSP")
+
 _REF_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@[1-9][0-9]*$"
 )
@@ -186,6 +193,7 @@ class ProjectCreation:
     draftRevision: str
     destination: Path
     event: Event
+    definitionRefs: dict[str, str] = field(default_factory=dict)
 
     def to_manifest(self) -> dict[str, Any]:
         return {
@@ -194,6 +202,7 @@ class ProjectCreation:
             "draftRevision": self.draftRevision,
             "destination": str(self.destination),
             "createdEventId": self.event.id,
+            "definitionRefs": dict(self.definitionRefs),
         }
 
 
@@ -238,12 +247,14 @@ class _ValidatedPlan:
 
     name: str
     draft_ref: str
+    definition_refs: dict[str, str] = field(default_factory=dict)
 
     def to_manifest(self) -> dict[str, Any]:
         return {
             "schemaVersion": PROJECT_PLAN_SCHEMA_VERSION,
             "name": self.name,
             "specRef": self.draft_ref,
+            "definitionRefs": dict(self.definition_refs),
         }
 
 def _canonical_json(value: Any) -> bytes:
@@ -277,13 +288,86 @@ def _nonempty_string(value: Any, context: str) -> str:
     return value
 
 
-def _exact_ref(value: Any, context: str) -> str:
+def _exact_ref(value: Any, context: str, *, code: str = "draft_invalid") -> str:
     if not isinstance(value, str) or not _REF_RE.fullmatch(value):
         raise ProjectError(
-            "draft_invalid",
+            code,
             f"{context} must be an exact '<uuid>@<positive-revision>' reference",
         )
     return value
+
+
+def _chain_refs(definitions: Definitions, definition_refs: Any) -> dict[str, str]:
+    """The exact '<id>@<revision>' refs of the VISP, FUSP and TESP revisions.
+
+    A bare definition id pins its current revision; an exact ref pins that
+    revision. Nothing else is accepted: the chain is three exact revisions.
+
+    A chain arrives as a string on transports that carry every parameter as
+    text, so the string is read as the JSON object it names. It is parsed
+    here, once, so the displayed digest and the creation agree on what the
+    same submitted chain means.
+    """
+    if isinstance(definition_refs, str):
+        text = definition_refs.strip()
+        if not text:
+            definition_refs = None
+        else:
+            try:
+                definition_refs = json.loads(text)
+            except ValueError as exc:
+                raise ProjectError(
+                    "invalid_chain", f"definition_refs is not JSON: {exc}"
+                ) from exc
+    if definition_refs is None:
+        raise ProjectError(
+            "invalid_chain",
+            "project.create needs the definition chain (VISP, FUSP and TESP)",
+        )
+    if not isinstance(definition_refs, dict):
+        raise ProjectError("invalid_chain", "definition_refs must be a JSON object")
+    missing = sorted(set(CHAIN_KINDS) - set(definition_refs))
+    unknown = sorted(set(definition_refs) - set(CHAIN_KINDS))
+    if missing:
+        raise ProjectError("invalid_chain", f"definition_refs is missing {missing}")
+    if unknown:
+        raise ProjectError("invalid_chain", f"definition_refs has unknown kinds {unknown}")
+    refs: dict[str, str] = {}
+    for kind in CHAIN_KINDS:
+        value = definition_refs[kind]
+        if not isinstance(value, str) or not value.strip():
+            raise ProjectError("invalid_chain", f"definition_refs.{kind} must be a reference")
+        value = value.strip()
+        if "@" in value:
+            refs[kind] = _exact_ref(value, f"definition_refs.{kind}", code="invalid_chain")
+            continue
+        if not _UUID_RE.fullmatch(value):
+            raise ProjectError(
+                "invalid_chain",
+                f"definition_refs.{kind} must be a '<uuid>' or '<uuid>@<revision>' reference",
+            )
+        try:
+            current = definitions.latest(value)
+        except DefinitionError as exc:
+            raise ProjectError(
+                "invalid_chain", f"definition_refs.{kind} is not readable: {exc}"
+            ) from exc
+        refs[kind] = f"{current.id}@{current.revision}"
+    return refs
+
+
+def _chain_digest(refs: dict[str, str]) -> str:
+    """One digest over the exact VISP, FUSP and TESP revisions.
+
+    The owner displays this digest; Create Project recomputes it from the
+    submitted chain and refuses anything else, so a project is never
+    materialized from a chain the owner did not display.
+    """
+    return "sha256:" + hashlib.sha256(_canonical_json({
+        "schemaVersion": PROJECT_PLAN_SCHEMA_VERSION,
+        "chain": "VISP>FUSP>TESP",
+        "refs": {kind: refs[kind] for kind in CHAIN_KINDS},
+    })).hexdigest()
 
 
 def _request_id(value: Any) -> str:
@@ -357,17 +441,18 @@ class ProjectService:
                 self._project_locks[project_id] = lock
             return lock
 
-    def create(self, spec: str, *, request_id: str) -> ProjectCreation:
-        """The request id is the idempotency key.
+    def create(
+        self, definition_refs: Any, draft_revision: Any = None, *, request_id: str
+    ) -> ProjectCreation:
+        """The request id is the idempotency key; the chain digest is the draft.
 
         The exact request id is the idempotency key. A retry returns the original
         project.created event and repairs a crash between that durable append and
         directory publication; it never appends a duplicate project.
         """
         request_id = _request_id(request_id)
-        if not spec.strip():
-            raise ProjectError("draft_invalid", "a project needs a spec")
-        draft_ref = f"sha256:{self.artifacts.put(spec.encode('utf-8'))}"
+        refs = _chain_refs(self.definitions, definition_refs)
+        draft_ref = _chain_digest(refs)
         project_id = str(
             uuid.uuid5(
                 uuid.NAMESPACE_URL,
@@ -375,10 +460,11 @@ class ProjectService:
             )
         )
         with self._project_lock(project_id):
-            return self._create_locked(request_id, draft_ref, project_id)
+            return self._create_locked(request_id, draft_ref, refs, project_id, draft_revision)
 
     def _create_locked(
-        self, request_id: str, draft_ref: str, project_id: str
+        self, request_id: str, draft_ref: str, refs: dict[str, str],
+        project_id: str, draft_revision: Any,
     ) -> ProjectCreation:
         destination = self.projects_root / project_id
 
@@ -394,17 +480,29 @@ class ProjectService:
                 draftRevision=draft_ref,
                 destination=destination,
                 event=original,
+                definitionRefs=dict(refs),
             )
 
-        plan = _ValidatedPlan(name=f"project-{request_id[:8]}", draft_ref=draft_ref)
+        # Nothing is materialized before the chain, both owner signoffs and the
+        # displayed draft revision are accepted (§5.3 steps 1-2).
+        self._validate_chain(refs)
+        self._check_draft_revision(draft_revision, draft_ref)
+
+        plan = _ValidatedPlan(
+            name=f"project-{request_id[:8]}",
+            draft_ref=draft_ref,
+            definition_refs=dict(refs),
+        )
         created: Event | None = None
         request_owner: tuple[str, str] | None = None
         for event in self.log.read_all():
             if event.type == "project.created":
                 payload = _event_payload(self.artifacts, event, _CREATED_FIELDS)
-                if payload["requestId"] == request_id:
+                # A project.created event whose payload cannot be read is not
+                # this request's: a missing key must not crash the creation.
+                if payload.get("requestId") == request_id:
                     request_owner = (project_id, event.id)
-                    if event.projectId != project_id or payload["projectId"] != project_id:
+                    if event.projectId != project_id or payload.get("projectId") != project_id:
                         raise ProjectError(
                             "request_conflict",
                             "project.create requestId is already bound to another project",
@@ -424,6 +522,7 @@ class ProjectService:
                     draftRevision=plan.draft_ref,
                     destination=destination,
                     event=created,
+                    definitionRefs=dict(refs),
                 )
             raise ProjectError(
                 "destination_conflict",
@@ -444,6 +543,7 @@ class ProjectService:
                 "projectId": project_id,
                 "requestId": request_id,
                 "specRef": plan.draft_ref,
+                "definitionRefs": dict(plan.definition_refs),
             }
             try:
                 created = self.log.record(
@@ -471,7 +571,70 @@ class ProjectService:
             draftRevision=plan.draft_ref,
             destination=destination,
             event=created,
+            definitionRefs=dict(plan.definition_refs),
         )
+
+    def _validate_chain(self, refs: dict[str, str]) -> dict[str, Definition]:
+        """The exact chain, both signoffs, and a chain that is still current.
+
+        Nothing is materialized before this passes: an unreadable revision, a
+        wrong kind, a missing owner signoff, a broken parent link or a
+        superseded revision refuses the operation.
+        """
+        chain: dict[str, Definition] = {}
+        for kind in CHAIN_KINDS:
+            definition_id, revision = refs[kind].split("@", 1)
+            try:
+                definition = self.definitions.get(definition_id, int(revision))
+            except DefinitionError as exc:
+                raise ProjectError(
+                    "invalid_chain", f"{kind} revision is not readable: {exc}"
+                ) from exc
+            if definition.kind != kind:
+                raise ProjectError(
+                    "invalid_chain",
+                    f"{kind} reference points at a {definition.kind} definition",
+                )
+            chain[kind] = definition
+        for kind in SIGNED_CHAIN_KINDS:
+            if not self.definitions.is_signed_off(chain[kind]):
+                raise ProjectError(
+                    "unsigned_definition",
+                    f"{kind} revision {chain[kind].revision} is not signed off",
+                )
+        if refs["VISP"] not in chain["FUSP"].parentRefs:
+            raise ProjectError(
+                "invalid_chain",
+                "FUSP does not name the pinned VISP revision as parent",
+            )
+        if refs["FUSP"] not in chain["TESP"].parentRefs:
+            raise ProjectError(
+                "invalid_chain",
+                "TESP does not name the pinned FUSP revision as parent",
+            )
+        for kind in CHAIN_KINDS:
+            current = self.definitions.latest(chain[kind].id)
+            if current.revision != chain[kind].revision:
+                raise ProjectError(
+                    "draft_invalid",
+                    f"{kind} revision {chain[kind].revision} is superseded by revision "
+                    f"{current.revision}; the displayed draft revision is stale",
+                )
+        return chain
+
+    def _check_draft_revision(self, draft_revision: Any, digest: str) -> None:
+        """The displayed draft revision must be this chain's digest."""
+        if not isinstance(draft_revision, str) or not draft_revision.strip():
+            raise ProjectError(
+                "draft_invalid",
+                "project.create needs the draft revision the owner displayed",
+            )
+        if draft_revision.strip() != digest:
+            raise ProjectError(
+                "draft_invalid",
+                f"stale draft revision {draft_revision.strip()!r}; the current "
+                f"definition chain digest is {digest}",
+            )
 
     def _events_for(self, project_id: str, event_type: str) -> list[Event]:
         return [
@@ -1085,10 +1248,20 @@ class ProgressDeskOperations:
         self.definitions = definitions
         self.projects = projects
 
+    def chain_digest(self, definition_refs: Any) -> str:
+        """The digest of the exact VISP, FUSP and TESP revisions.
+
+        This is the draft revision the owner displays; Create Project accepts
+        the chain only when the submitted draft revision is this digest.
+        """
+        return _chain_digest(_chain_refs(self.definitions, definition_refs))
+
     def project_create(
-        self, draft_revision: str, *, request_id: str
+        self, definition_refs: Any, draft_revision: Any = None, *, request_id: str
     ) -> ProjectCreation:
-        return self.projects.create(draft_revision, request_id=request_id)
+        return self.projects.create(
+            definition_refs, draft_revision, request_id=request_id
+        )
 
     def project_plan(
         self, project_id: str, plan: Any, *, request_id: str

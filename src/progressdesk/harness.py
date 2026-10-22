@@ -39,6 +39,12 @@ ROLES = (
     "CLEANING_LAYA",
     "SHARPENER",
     "POLICE",
+    # The planning session leader: the role that reads the planning cards
+    # and drives them toward a VISP/FUSP draft (F-PF2).
+    "PLANNER",
+    # The researcher: the role that files evidence-backed VISP drafts for the
+    # owner to ratify. It proposes; it never signs off and it applies nothing.
+    "RESEARCHER",
 )
 
 

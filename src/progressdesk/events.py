@@ -124,6 +124,34 @@ _EVENT_REGISTRY: dict[str, dict[str, Any]] = {
         "payload_required": True,
         "project_scoped": False,
     },
+    # §5.2 planning surface: topics, bounded meetings with a session leader,
+    # the questions asked in them and the answers given. Same family rules:
+    # any participant may contribute, the board is rebuilt from these events.
+    "planning.topic.created": {
+        "producers": frozenset({"desk", "planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "planning.meeting.opened": {
+        "producers": frozenset({"desk", "planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "planning.meeting.recorded": {
+        "producers": frozenset({"desk", "planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "planning.question.asked": {
+        "producers": frozenset({"desk", "planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
+    "planning.answer.recorded": {
+        "producers": frozenset({"desk", "planning"}),
+        "payload_required": True,
+        "project_scoped": False,
+    },
     # Project formation/GO family (§4.5). These are the implemented uses for
     # M1.4: Create Project records one durable project.created fact, while the
     # first start records a request, the owner's milestone GO confirmation, and

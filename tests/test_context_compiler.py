@@ -154,8 +154,6 @@ class ContextCompilerTests(unittest.TestCase):
         return feature
 
     def _project(self, request_id: str, feature: dict) -> str:
-        project = route(self.rt, "project.create",
-                        {"spec": "context probe", "request_id": request_id})
         # The owner-surface chain digest exists in the delivered product; the
         # factory source predates it. Create the project either way.
         try:
