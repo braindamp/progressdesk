@@ -32,7 +32,7 @@ _CONTEXT_KINDS = frozenset({"VISP", "FUSP", "TESP"})
 _SELECTOR_RE = re.compile(r"^(section|requirement):[^\s]+$")
 
 
-def _clean_context_refs(value: Any, label: str) -> list[dict[str, str]]:
+def clean_context_refs(value: Any, label: str) -> list[dict[str, str]]:
     """Validate the optional excerpt list: exactly kind and selector, in order."""
     if not isinstance(value, (list, tuple)):
         raise FeatureListError(f"{label}.contextRefs must be an array")
@@ -145,7 +145,7 @@ def _clean_contract(item: Any, label: str) -> dict[str, Any]:
                 raise FeatureListError(f"{label}.limits must be an object")
             clean[field] = dict(value)
         elif field == "contextRefs":
-            clean[field] = _clean_context_refs(value, label)
+            clean[field] = clean_context_refs(value, label)
     for required in ("outcome", "scope", "interfaces", "acceptance"):
         if not clean.get(required):
             raise FeatureListError(f"{label} needs {required}")

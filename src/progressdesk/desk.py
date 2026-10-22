@@ -1161,6 +1161,10 @@ def _validate_project_plan(
             for ref in clean.get("inputArtifactRefs", []):
                 if not _REF.fullmatch(ref) or not artifacts.exists(ref[7:]):
                     raise ProjectError("plan_invalid", f"{task_id} input artifact is absent: {ref}")
+            if "contextRefs" in feature:
+                from .feature_list import clean_context_refs
+                clean["contextRefs"] = clean_context_refs(
+                    feature["contextRefs"], f"{task_id}.contextRefs")
             if "limits" in feature:
                 limits = _require_object(feature["limits"], f"{task_id}.limits")
                 if any(isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0
