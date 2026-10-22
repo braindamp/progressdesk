@@ -1243,9 +1243,10 @@ def _project_abort(rt: Runtime, cmd: Command) -> Any:
     project_id = str(cmd.require("project_id"))
     ownership_error = None
     try:
-        held = rt.broker.runs.active_all() if project_id == WORKSHOP else rt.broker.runs.active(project_id)
-        if not held:
-            rt.broker.restore_registered(project_id)
+        # Every job the journal knows about is reconciled before anything is
+        # terminated. A job a previous control host started is still ours, and
+        # a partially recovered workshop must not leave one of ours running.
+        rt.broker.restore_registered(project_id)
     except Exception as exc:
         # Still terminate every locally held job, even if cold restoration fails.
         ownership_error = str(exc)
