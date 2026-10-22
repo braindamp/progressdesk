@@ -622,11 +622,16 @@ class ProjectRun:
         process: ctypes.c_void_p,
         identity: ProcessIdentity,
         candidate_dir: Path,
+        registered_event_id: str | None = None,
     ):
         self._job = job
         self._process = process
         self.identity = identity
         self.candidate_dir = Path(candidate_dir)
+        # The event that registered this process. The completion record names it
+        # as its cause, so a finished process is settled rather than found
+        # again and reconciled as if it had vanished.
+        self.registered_event_id = registered_event_id
         self._closed = False
 
     def wait(self, timeout_ms: int = 0xFFFFFFFF) -> int:
@@ -921,12 +926,15 @@ class Broker:
     ) -> ProjectRun:
         """Create suspended, assign to the job, record identity, then resume."""
         job = WindowsJob(project_id, run_id)
+        registered_event: dict[str, str] = {}
+
         def registered(identity: ProcessIdentity) -> None:
             if self.event_log is not None:
-                self.event_log.record(
+                event = self.event_log.record(
                     "process.registered", producer="broker", project_id=project_id,
                     run_id=run_id, payload=json.dumps(identity.to_dict()).encode("utf-8"),
                 )
+                registered_event["id"] = event.id
         try:
             identity, process = job.spawn(
                 argv,
@@ -951,7 +959,8 @@ class Broker:
                     run_id=run_id,
                 )
             raise
-        run = ProjectRun(job, process, identity, candidate_dir)
+        run = ProjectRun(job, process, identity, candidate_dir,
+                        registered_event.get("id"))
         self.runs.register(project_id, run)
         return run
 
