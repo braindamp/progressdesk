@@ -1,5 +1,10 @@
 # Requirement coverage
 
+The build's working list: every FUSP requirement and acceptance condition, mapped
+to what the product does and which module does it. It is how the remaining work
+is found, and it is regenerated from the code - it is not a receipt and it is not
+a deliverable.
+
 Every FUSP requirement and acceptance condition, mapped to what the product
 actually does, with the module that does it. Updated as the delivery lands.
 
