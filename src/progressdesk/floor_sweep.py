@@ -53,6 +53,20 @@ MINIMUM_HEAD_AGE_DAYS = 6
 UNSUPPORTED = "unsupported in this environment"
 
 
+#: The operations that report a *finding*: something the sweep found, which
+#: stays true until it changes. A verdict - the room's clearance - is not in
+#: this set: it is the state of the room at the moment it was reached.
+DEDUPED_OPERATIONS = frozenset({
+    "reconcile_liveness",
+    "sweep_debris",
+    "sweep_escaped",
+    "discard_torn_tail",
+    "reset",
+    "round_accounted",
+    "sweep",
+})
+
+
 @dataclass(frozen=True)
 class SweepAction:
     """One journaled mechanical step."""
@@ -406,11 +420,16 @@ class FloorSweep:
     def _record(self, report: SweepReport, operation: str, detail: str, *, blocked: bool = False) -> None:
         action = SweepAction(operation=operation, detail=detail, blocked=blocked)
         report.actions.append(action)
-        # A fact is recorded when it changes, not when it repeats. The same
+        # A *finding* is recorded when it changes, not when it repeats. The same
         # sweep finding written once per boundary turns the journal into noise:
         # 258 sweep events for 45 distinct facts, each one an artifact write and
         # an fsync, in a log that exists to be read when something went wrong.
-        if self._seen_fact(report.project_id, operation, detail):
+        #
+        # A *verdict* is not a finding: the room's clearance is the state of the
+        # room at that moment, and the dispatch path reads the last one. A
+        # repeated measurement is still a new moment, and suppressing it left
+        # the project reading a stale blocked clearance forever.
+        if operation in DEDUPED_OPERATIONS and self._seen_fact(report.project_id, operation, detail):
             return
         self.log.record(
             "floor_sweep.action",
