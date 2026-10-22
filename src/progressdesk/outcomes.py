@@ -196,6 +196,7 @@ class AdapterReport:
     stop_reason: str | None = None
     raw_stop_reason: str | None = None
     answered: bool = False
+    completed_turns: int = 0
     http_status: int | None = None
     provider_code: str | int | None = None
     provider_error_name: str | None = None
@@ -265,6 +266,7 @@ def _evidence(report: AdapterReport) -> dict[str, Any]:
         "stopReason": report.stop_reason,
         "rawStopReason": report.raw_stop_reason,
         "answered": report.answered,
+        "completedTurns": report.completed_turns,
         "httpStatus": report.http_status,
         "providerCode": report.provider_code,
         "providerErrorName": report.provider_error_name,
@@ -345,8 +347,12 @@ def classify(report: AdapterReport) -> Outcome:
 
     # 2. A harness that failed on its own terms failed whatever the model said:
     #    its exit is evidence, and an answer inside a failed harness is not a
-    #    delivery. An empty answer is the exception - that is the empty
-    #    response, which is a transport fault and not a builder failure.
+    #    delivery. The exception is a session that never finished a turn: the
+    #    provider cut it off, so the model did not answer and the session
+    #    survives - that is a nudge, not a dead worker.
+    answered = report.answered or report.completed_turns > 0
+    if not answered and report.harness_fault:
+        return outcome("provider_error")
     if report.harness_fault == "no_output":
         return outcome("provider_error")
     if report.harness_fault:
@@ -354,7 +360,7 @@ def classify(report: AdapterReport) -> Outcome:
 
     # 3. Did the model answer? Then what happens to the work is the builder's
     #    report and the gate's business, not the transport's.
-    if report.answered or reason in ANSWER_STOP_REASONS:
+    if answered or reason in ANSWER_STOP_REASONS:
         return outcome("answered")
 
     # 4. The harness says the generation did not finish. A provider that ended
