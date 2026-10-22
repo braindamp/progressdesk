@@ -195,7 +195,13 @@ def setup(root: Path, plan_path: Path) -> int:
     log("the exact revisions awaiting the owner's signoff:")
     for row in pending:
         log(f"  {row['kind']} {row['ref']} {row['bytes']} bytes {row['contentDigest']}")
-    project = call(rt, "project.create", spec=plan["spec"], request_id=plan["requestId"])
+    draft = None
+    try:
+        draft = rt.operations.chain_digest(refs)
+    except Exception as exc:  # noqa: BLE001 - an older product may not have it
+        log(f"no chain digest available: {exc}")
+    project = call(rt, "project.create", spec=plan["spec"], request_id=plan["requestId"],
+                   definition_refs=refs, draft_revision=draft)
     project_id = project["projectId"]
     state["projectId"] = project_id
     save_state(root, state, request_id)

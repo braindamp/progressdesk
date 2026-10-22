@@ -1030,6 +1030,7 @@ _FEATURE_FIELDS = frozenset({
     "taskId", "taskRevision", "title", "outcome", "scope", "interfaces",
     "acceptance", "parentDefinitionRefs", "inputArtifactRefs",
     "allowedToolRefs", "skillRefs", "acceptedExampleRefs", "limits",
+    "contextRefs",
 })
 _LIST_METADATA = (
     "interfaces", "acceptance", "parentDefinitionRefs", "inputArtifactRefs",
