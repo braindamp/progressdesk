@@ -80,12 +80,22 @@ def _payload(rt: Any, event: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _proposal_text(feature: dict[str, Any]) -> str:
+#: The decision service reads a compact packet, not the contract. The question
+#: is whether a proposal looks like the kind of work it claims to be, and that
+#: needs a line per part - not the whole contract. The full text stays in the
+#: store and in the recorded proposal digest.
+PACKET_ITEM_LIMIT = 480
+
+
+def _proposal_text(feature: dict[str, Any], limit: int = PACKET_ITEM_LIMIT) -> str:
     title = str(feature.get("title") or "").strip()
     outcome = str(feature.get("outcome") or "").strip()
     scope = str(feature.get("scope") or "").strip()
     prefix = f"{title}: " if title else ""
-    return f"{prefix}{outcome}. Scope: {scope}"
+    text = f"{prefix}{outcome}. Scope: {scope}"
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + " ..."
 
 
 class JackGateway:

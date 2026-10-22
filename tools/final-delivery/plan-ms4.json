@@ -74,7 +74,8 @@
             "a harness that exited non-zero, or produced no output at all, is a harness condition",
             "a condition outside the closed vocabulary cannot be produced",
             "the classification carries the taxonomy version and a digest of the evidence it rested on",
-            "a session that never finished a turn is an interruption and is nudged, not a harness failure"
+            "a session that never finished a turn is an interruption and is nudged, not a harness failure",
+            "the packet a decision service receives is a summary of the proposal that fits the service's input capability, and the full proposal stays in the store"
           ],
           "allowedToolRefs": [
             "read",
