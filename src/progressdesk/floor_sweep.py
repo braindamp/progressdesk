@@ -53,20 +53,6 @@ MINIMUM_HEAD_AGE_DAYS = 6
 UNSUPPORTED = "unsupported in this environment"
 
 
-#: The operations that report a *finding*: something the sweep found, which
-#: stays true until it changes. A verdict - the room's clearance - is not in
-#: this set: it is the state of the room at the moment it was reached.
-DEDUPED_OPERATIONS = frozenset({
-    "reconcile_liveness",
-    "sweep_debris",
-    "sweep_escaped",
-    "discard_torn_tail",
-    "reset",
-    "round_accounted",
-    "sweep",
-})
-
-
 @dataclass(frozen=True)
 class SweepAction:
     """One journaled mechanical step."""
@@ -183,7 +169,7 @@ class FloorSweep:
                 self._reset_environment(report)
         self._record(
             report, "sweep", f"{strength}: {len(report.traces)} trace(s)",
-            blocked=bool(report.traces),
+            blocked=bool(report.traces), found=bool(report.traces),
         )
         return report
 
@@ -260,8 +246,8 @@ class FloorSweep:
                 self._record(report, "sweep_debris",
                              f"run {event.runId}: the builder reported; the host accounts for it")
                 continue
-            detail = self._sweep_round(report.project_id, event.runId)
-            self._record(report, "sweep_debris", detail)
+            detail, captured = self._sweep_round(report.project_id, event.runId)
+            self._record(report, "sweep_debris", detail, found=captured)
             # A swept round is finished. Leaving it open blocks every later
             # round of the project: the scheduler refuses to dispatch while a
             # round is neither closed nor reconciled, so a round that never
@@ -316,15 +302,15 @@ class FloorSweep:
         )
         self._record(report, "round_accounted", f"run {event.runId}: closed as killed after sweep")
 
-    def _sweep_round(self, project_id: str, run_id: str) -> str:
+    def _sweep_round(self, project_id: str, run_id: str) -> tuple[str, bool]:
         """Unaccepted work is never silently promoted; it is preserved."""
         rounds = self.workspace / "projects" / project_id / "rounds"
         source = rounds / run_id
         if not source.is_dir():
-            return f"run {run_id}: nothing on disk"
+            return f"run {run_id}: nothing on disk", False
         evidence = rounds / "evidence" / run_id
         if evidence.exists():
-            return f"run {run_id}: evidence already swept"
+            return f"run {run_id}: evidence already swept", False
         digests: dict[str, str] = {}
         for path in sorted(source.rglob("*")):
             if path.is_file() and path.name not in ("agent.jsonl", "agent.err"):
@@ -334,17 +320,19 @@ class FloorSweep:
             json.dumps(digests, indent=2, sort_keys=True), encoding="utf-8"
         )
         shutil.rmtree(source, ignore_errors=True)
-        return f"run {run_id}: {len(digests)} file(s) captured as evidence"
+        return f"run {run_id}: {len(digests)} file(s) captured as evidence", bool(digests)
 
     def _sweep_escaped(self, report: SweepReport) -> None:
         """Processes outside the job, found by working directory."""
         if self._enumerator is None:
-            self._record(report, "sweep_escaped", f"{UNSUPPORTED}: no host process enumerator")
+            self._record(report, "sweep_escaped", f"{UNSUPPORTED}: no host process enumerator",
+                         found=False)
             return
         escaped = [
             p for p in self._enumerator() if str(self.workspace) in str(p.get("cwd", ""))
         ]
-        self._record(report, "sweep_escaped", f"{len(escaped)} process(es) in the workshop tree")
+        self._record(report, "sweep_escaped", f"{len(escaped)} process(es) in the workshop tree",
+                     found=bool(escaped))
 
     def _discard_torn_tail(self, report: SweepReport) -> None:
         """An incomplete final append leaves the active tail, bytes preserved."""
@@ -355,7 +343,8 @@ class FloorSweep:
             self._record(report, "discard_torn_tail", str(exc), blocked=True)
             return
         removed = result.get("truncatedBytes", result.get("discarded", 0))
-        self._record(report, "discard_torn_tail", f"{removed or 0} byte(s) removed")
+        self._record(report, "discard_torn_tail", f"{removed or 0} byte(s) removed",
+                     found=bool(removed))
 
     # -- the strong pass --------------------------------------------------
     def _reset_environment(self, report: SweepReport) -> None:
@@ -384,7 +373,7 @@ class FloorSweep:
             report.traces.append(f"uncommitted at run start: {names}")
             self._record(report, "reset", f"{head}: dirty: {names}")
         else:
-            self._record(report, "reset", f"{head}: clean")
+            self._record(report, "reset", f"{head}: clean", found=False)
 
     def _head_age_days(self, repo: Path) -> int | None:
         try:
@@ -394,42 +383,18 @@ class FloorSweep:
             return None
 
     # -- journal ----------------------------------------------------------
-    def _seen_fact(self, project_id: str, operation: str, detail: str) -> bool:
-        """Has this exact fact already been recorded for this project?"""
-        key = (project_id, operation, detail)
-        cache = getattr(self, "_fact_cache", None)
-        if cache is None:
-            cache = set()
-            for event in self.log.read_all():
-                if event.type != "floor_sweep.action" or not event.payloadRef:
-                    continue
-                try:
-                    payload = json.loads(
-                        self.artifacts.get_bytes(event.payloadRef.split(":", 1)[1])
-                    )
-                except (OSError, ValueError, IndexError, UnicodeDecodeError):
-                    continue
-                cache.add((str(payload.get("projectId", "")), str(payload.get("operation", "")),
-                           str(payload.get("detail", ""))))
-            self._fact_cache = cache
-        if key in cache:
-            return True
-        cache.add(key)
-        return False
+    def _record(self, report: SweepReport, operation: str, detail: str, *,
+                blocked: bool = False, found: bool = True) -> None:
+        """Put a step in the sweep report, and journal only what matters.
 
-    def _record(self, report: SweepReport, operation: str, detail: str, *, blocked: bool = False) -> None:
+        The journal keeps the room's verdict and the steps the sweep could not
+        complete. What it cleaned up is recorded by the module that did it - a
+        reconciled process, a closed round, the discarded bytes - and what it
+        merely encountered is not a fact about anything.
+        """
         action = SweepAction(operation=operation, detail=detail, blocked=blocked)
         report.actions.append(action)
-        # A *finding* is recorded when it changes, not when it repeats. The same
-        # sweep finding written once per boundary turns the journal into noise:
-        # 258 sweep events for 45 distinct facts, each one an artifact write and
-        # an fsync, in a log that exists to be read when something went wrong.
-        #
-        # A *verdict* is not a finding: the room's clearance is the state of the
-        # room at that moment, and the dispatch path reads the last one. A
-        # repeated measurement is still a new moment, and suppressing it left
-        # the project reading a stale blocked clearance forever.
-        if operation in DEDUPED_OPERATIONS and self._seen_fact(report.project_id, operation, detail):
+        if operation != "clearance" and not blocked:
             return
         self.log.record(
             "floor_sweep.action",

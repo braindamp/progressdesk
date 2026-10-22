@@ -900,6 +900,20 @@ def _project_start(rt: Runtime, cmd: Command) -> Any:
     clearance = None
     if rt.cleaner is not None:
         clearance = rt.cleaner.run(project_id, strength="light")
+    # The start is the recovery (F-R3, C9): a clean boundary is recorded, and
+    # the project's dispatch is reopened - a stop closed the execution, not the
+    # work.
+    if clearance is not None and clearance.restartable:
+        rt.log.record(
+            "recovery.ready",
+            producer="manager",
+            payload=json.dumps({
+                "schemaVersion": 1, "projectId": project_id,
+                "decision": clearance.decision, "rationale": clearance.rationale,
+            }, sort_keys=True).encode("utf-8"),
+            project_id=project_id,
+        )
+        rt.police.reopen_after_recovery(project_id)
     return {**result, "room": clearance.to_dict() if clearance is not None else None}
 
 

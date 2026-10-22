@@ -350,8 +350,6 @@ class TaskScheduler:
     def _stop(self, project_id: str) -> str | None:
         events = [e for e in self.rt.log.read_all()
                   if e.projectId in {project_id, "workshop"}]
-        if any(e.type in {"abort.issued", "termination.unresolved"} for e in events):
-            return "project terminated"
         submissions: dict[tuple[str, int], str] = {}
         for event in events:
             if event.type == "jack.submission" and event.projectId == project_id:
@@ -359,11 +357,15 @@ class TaskScheduler:
                 submissions[(data.get("invocationId"), data.get("attempt"))] = data.get("status")
         if "approved" in submissions.values():
             return "JACK proposal approval has no completed host-application receipt"
+        # The latest lifecycle fact decides. A stop closed the execution; a
+        # recovery that found a clean boundary reopened it (F-R3, C9).
         for event in reversed(events):
             if event.type in {"recovery.ready", "dispatch.reopened"}:
                 return None
             if event.type == "recovery.blocked":
                 return "project is blocked"
+            if event.type in {"abort.issued", "termination.unresolved"}:
+                return "project terminated"
         return None
 
     def next(self, project_id: str) -> dict[str, Any]:

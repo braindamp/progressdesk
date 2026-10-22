@@ -78,12 +78,21 @@ class Kernel:
                 "project dispatch is closed")
         events = self.rt.log.read_all()
         scoped = [event for event in events if event.projectId in {project_id, "workshop"}]
-        stopped = [event for event in scoped if event.type in {"abort.issued", "termination.unresolved"}]
+        # The latest lifecycle fact decides, not the first stop ever recorded:
+        # a stop closes the execution, and a recovery that established a clean
+        # boundary reopens it (F-R3, C9).
+        lifecycle = {"abort.issued", "dispatch.reopened", "recovery.ready"}
+        stopped = [event for event in scoped if event.type in lifecycle]
         if role == "SHARPENER":
-            stopped = [event for event in stopped if self._payload(event).get("source") == "owner"
-                       or self._payload(event).get("includesSharpener")]
-        require(not stopped,
-                "dispatch_closed", "a recorded stop prevents execution")
+            stopped = [event for event in stopped
+                       if event.type == "abort.issued"
+                       and (self._payload(event).get("source") == "owner"
+                            or self._payload(event).get("includesSharpener"))]
+        # The room assessment is not project execution: it changes nothing, and
+        # it is how a stopped project finds out whether it is clean again.
+        if role != "CLEANING_LAYA":
+            require(not stopped or stopped[-1].type == "dispatch.reopened",
+                    "dispatch_closed", "a recorded stop prevents execution")
         plans = [event for event in events if event.projectId == project_id
                  and event.type == "project.planned"]
         require(bool(plans), "plan_missing", "project has no owner-submitted plan")
