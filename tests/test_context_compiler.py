@@ -326,6 +326,13 @@ class ContextCompilerTests(unittest.TestCase):
                 "just a paragraph of prose with no structure at all\n", "section:1.1")
         self.assertEqual(caught.exception.code, "context_source_unsupported")
 
+    def test_09c_a_requirement_with_a_title_is_found(self) -> None:
+        # The real FUSP writes "- F-R16 (splitter contract): ..." - the
+        # selector must find a requirement that carries a short title.
+        source = "- F-R16 (splitter contract): a splitter receives the parent task.\n"
+        excerpt = context_compiler.extract_excerpt(source, "requirement:F-R16")
+        self.assertIn("a splitter receives the parent task", excerpt)
+
     def test_10_an_oversized_excerpt_reports_sizes(self) -> None:
         self._set_refs([{"kind": "TESP", "selector": "section:14"}])
         with self.assertRaises(ContextCompilationError) as caught:

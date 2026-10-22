@@ -47,8 +47,14 @@ SELECTOR_RE = re.compile(r"^(section|requirement):([^\s]+)$")
 _HEADING_RE = re.compile(r"^(?P<hashes>#{1,6})\s+(?:(?P<number>\d+(?:\.\d+)*)\.?[ \t]+)?(?P<title>.*)$")
 
 #: A requirement line: the identifier first, after any list marker or emphasis.
+# A requirement line: the identifier first, after any list marker or emphasis,
+# optionally followed by a short title in brackets, and then the colon.
+#   - F-M1: named, immutable checkpoints.
+#   - **F-M1**: named, immutable checkpoints.
+#   - F-R16 (splitter contract): a splitter receives the parent task ...
 _REQUIREMENT_START_RE = re.compile(
-    r"^(?:[-*+]\s+)?(?:\*\*|__)?(?P<id>[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)(?:\*\*|__)?\s*[:\-–—]"
+    r"^(?:[-*+]\s+)?(?:\*\*|__)?(?P<id>[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)(?:\*\*|__)?"
+    r"(?:\s*\([^)]*\))?\s*[:\-–—]"
 )
 
 _TASK_SECTION_BUDGET = 8_192
