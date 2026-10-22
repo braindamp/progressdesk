@@ -1456,6 +1456,7 @@ def _text(value: Any) -> str:
 def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
     """Compose the dispatcher using the *same* runtime and event store."""
     harness = getattr(runtime, "harness", None)
+    from . import context_compiler
     return RoundDispatcher(
         runtime.spawner_for(project_id), runtime.broker, runtime.artifacts,
         resolve_role=(harness.for_role if harness is not None else None),
@@ -1469,5 +1470,8 @@ def dispatcher_for(runtime: Any, project_id: str) -> RoundDispatcher:
         split_task=getattr(runtime, "split_task", None),
         police_abort=lambda project, reason: runtime.police.stop_workshop(
             reason, source="police",
+        ),
+        compile_context=lambda **kwargs: context_compiler.compile_for_dexter(
+            runtime, **kwargs,
         ),
     )
