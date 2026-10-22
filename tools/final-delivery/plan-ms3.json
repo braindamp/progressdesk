@@ -53,7 +53,8 @@
         "a log with a gap in the numbering opens and reads in order",
         "a round that does not deliver is split rather than abandoned",
         "a successful round that changed nothing is a delivery",
-        "the deterministic housekeeping decides whether the room is restartable, and no model is asked"
+        "the deterministic housekeeping decides whether the room is restartable, and no model is asked",
+        "a completed phase replays into a deterministic baseline with no invented value"
       ],
       "features": [
         {
@@ -240,6 +241,34 @@
             "a room the sweep could not clear names what is outstanding and goes to SCHOTTY",
             "the dispatch refusal names the outstanding work instead of a service",
             "no decision model is consulted to decide whether the room is clean"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms3-baseline-replay",
+          "taskRevision": 1,
+          "title": "A completed phase replays into a deterministic baseline",
+          "outcome": "A completed phase can be replayed into a baseline: the recorded usage of every actual execution, with only measured values and unknown ones left unknown. Replaying the same phase twice gives the same baseline, and the baseline names no score, no ranking and no goal - a target is the owner's to set, and only after a baseline exists.",
+          "scope": "Only a new read-only module src/progressdesk/baseline.py and the route table in src/progressdesk/runtime.py.",
+          "interfaces": [
+            "route verb 'baseline.replay' with params project_id -> {'phase': str, 'rows': [...], 'totals': {...}}",
+            "one row per recorded execution of the phase"
+          ],
+          "acceptance": [
+            "the baseline holds one row per recorded usage event of the phase",
+            "an unmeasured value stays null and is never a zero",
+            "replaying the same phase twice gives the same baseline",
+            "the baseline contains no score, ranking or goal value"
           ],
           "allowedToolRefs": [
             "read",
