@@ -920,14 +920,6 @@ class Broker:
         env: dict[str, str] | None = None,
     ) -> ProjectRun:
         """Create suspended, assign to the job, record identity, then resume."""
-        if self.event_log is not None:
-            self.event_log.record(
-                "action.requested",
-                producer="broker",
-                payload=json.dumps(detail, sort_keys=True).encode("utf-8"),
-                project_id=project_id,
-                run_id=run_id,
-            )
         job = WindowsJob(project_id, run_id)
         def registered(identity: ProcessIdentity) -> None:
             if self.event_log is not None:
