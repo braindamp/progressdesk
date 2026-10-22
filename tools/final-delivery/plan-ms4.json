@@ -49,7 +49,9 @@
         "word matching can only narrow an unknown into a known condition; it never changes a known condition and never decides an action",
         "capacity is never nudged, a provider fault is nudged, and a configuration fault is not",
         "an adapter that cannot report whether the model answered is refused rather than routed",
-        "the broker writes only the records that have a reader"
+        "the broker writes only the records that have a reader",
+        "the broker's completion record correlates with the registration it answers, and the broker holds no product bytes",
+        "a stop reconciles every journaled job before it terminates anything"
       ],
       "features": [
         {
@@ -159,6 +161,60 @@
             "the broker writes no record of a request",
             "a cold control host still restores ownership from the recorded identity",
             "the vocabulary holds no event type that nothing writes"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms4-process-records",
+          "taskRevision": 1,
+          "title": "The broker's records correlate, and it owns no product bytes",
+          "outcome": "The completion record names the registration it answers, so a finished process is settled rather than found again and reconciled as if it had vanished. The broker records the exit facts - the process, the code, the registration - and not the product's bytes: the delivery layer owns the candidate, and the broker accounts for the execution.",
+          "scope": "Only src/progressdesk/broker.py.",
+          "interfaces": [
+            "the completion event carries the cause of the registration it answers",
+            "the broker writes no file digests of the candidate directory"
+          ],
+          "acceptance": [
+            "a process that exited normally is settled by its completion record",
+            "the completion record holds the exit facts and no artifact snapshot",
+            "the candidate is still captured and delivered by the delivery layer"
+          ],
+          "allowedToolRefs": [
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "glob",
+            "grep"
+          ],
+          "limits": {
+            "wallTimeSeconds": 900
+          }
+        },
+        {
+          "taskId": "ms4-stop-reconciliation",
+          "taskRevision": 1,
+          "title": "A stop reconciles every job the journal knows about",
+          "outcome": "Before anything is terminated, every job the journal knows about is reconciled into the local registry, including a job a previous control host started. A partially recovered workshop must not leave one of our own processes running.",
+          "scope": "Only src/progressdesk/runtime.py and src/progressdesk/broker.py.",
+          "interfaces": [
+            "the stop path restores the journaled jobs whether or not the local registry is empty",
+            "a job already in the registry is not restored twice"
+          ],
+          "acceptance": [
+            "a stop reconciles a journaled job even when other jobs are already known locally",
+            "a job already in the registry is left alone",
+            "the termination still reports what it could not confirm"
           ],
           "allowedToolRefs": [
             "read",
