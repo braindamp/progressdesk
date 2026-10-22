@@ -273,6 +273,23 @@ def _extract_requirement(text: str, identifier: str) -> str:
     return "\n".join(lines[start:end]).rstrip() + "\n"
 
 
+def _supports_selectors(text: str) -> bool:
+    """Can this source be selected from at all?
+
+    A v1 source is UTF-8 Markdown with numbered headings or requirement
+    identifiers. A source with neither cannot be selected from, and asking for
+    an excerpt of it is a request for something this version cannot do - not
+    a missing clause.
+    """
+    lines = _normalise(text).split("\n")
+    for line in lines:
+        if _HEADING_RE.match(line) and (_HEADING_RE.match(line).group("number") or ""):
+            return True
+        if _requirement_start(line):
+            return True
+    return False
+
+
 def extract_excerpt(text: str, selector: str) -> str:
     """Extract one location from a source document, verbatim."""
     match = SELECTOR_RE.match(selector.strip())
@@ -284,6 +301,13 @@ def extract_excerpt(text: str, selector: str) -> str:
         )
     kind = match.group(1)
     target = match.group(2)
+    if not _supports_selectors(text):
+        raise ContextCompilationError(
+            "context_source_unsupported",
+            "this source has no numbered headings and no requirement identifiers, "
+            "so it cannot be selected from in this version",
+            selector=selector,
+        )
     if kind == "section":
         return _extract_section(text, target)
     return _extract_requirement(text, target)

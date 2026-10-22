@@ -322,6 +322,12 @@ class ContextCompilerTests(unittest.TestCase):
         # the repository's own Markdown was not used as a replacement
         self.assertNotIn("ProgressDesk TESP", caught.exception.message)
 
+    def test_09b_a_source_that_cannot_be_selected_from_is_refused(self) -> None:
+        with self.assertRaises(ContextCompilationError) as caught:
+            context_compiler.extract_excerpt(
+                "just a paragraph of prose with no structure at all\n", "section:1.1")
+        self.assertEqual(caught.exception.code, "context_source_unsupported")
+
     def test_10_an_oversized_excerpt_reports_sizes(self) -> None:
         self._set_refs([{"kind": "TESP", "selector": "section:14"}])
         with self.assertRaises(ContextCompilationError) as caught:
